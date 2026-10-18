@@ -6675,11 +6675,11 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        // Kick is an independent, read-only Developer API integration. A
-        // successful poll confirms metadata access, NOT video viewing/rewards.
+        // Separate authenticated viewer presence, actual HLS traffic and
+        // independently sampled point balances; do not confuse signals.
         ui.add_space(9.0);
-        ui.collapsing(if pt_br() { "Kick · monitoramento nativo" }
-                     else { "Kick · native live monitor" }, |ui| {
+        ui.collapsing(if pt_br() { "Kick · transmissões nativas" }
+                     else { "Kick · native streaming" }, |ui| {
             ui.label(RichText::new(if pt_br() {
                 "Canais da Kick (separados por vírgula)"
             } else {
@@ -6691,9 +6691,9 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             let monitoring = app.kick_monitors[index].is_some();
             if !monitoring {
                 ui.label(RichText::new(if pt_br() {
-                    "Token de acesso da API de desenvolvedores da Kick"
+                    "Bearer token da sua conta Kick (não é token Developer API)"
                 } else {
-                    "Kick Developer API access token"
+                    "Kick account Bearer token (not Developer API token)"
                 }).size(10.0).color(MUTED));
                 ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[index])
                     .password(true).desired_width(ui.available_width()));
@@ -6708,11 +6708,11 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                     }
                 }
                 if monitoring {
-                    if ui.small_button(if pt_br() { "Parar Kick" } else { "Stop Kick" }).clicked() {
+                    if ui.small_button(if pt_br() { "Parar transmissões" } else { "Stop streams" }).clicked() {
                         app.kick_monitors[index].take();
                     }
-                } else if ui.small_button(if pt_br() { "Monitorar Kick" }
-                                          else { "Monitor Kick" }).clicked() {
+                } else if ui.small_button(if pt_br() { "Iniciar transmissões" }
+                                          else { "Start streaming" }).clicked() {
                     let token = std::mem::take(&mut app.kick_api_token_input[index]);
                     match KickMonitor::start(token, &app.kick_channels_input[index]) {
                         Ok(monitor) => {
@@ -6720,8 +6720,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                             if let Err(error) = Config::save_kick_channels(&app.kick_channels_input) {
                                 app.set_status(error, true);
                             } else {
-                                app.set_status(if pt_br() { "Monitor Kick iniciado" }
-                                               else { "Kick monitor started" }.into(), false);
+                                app.set_status(if pt_br() { "Kick iniciado: conectando aos canais" }
+                                               else { "Kick started: connecting to channels" }.into(), false);
                             }
                         }
                         Err(error) => app.set_status(error, true),
@@ -6740,7 +6740,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             });
             if let Some(monitor) = app.kick_monitors[index].as_ref() {
                 let snapshot = monitor.snapshot();
-                ui.label(RichText::new(format!("Kick API: {}", snapshot.phase))
+                ui.label(RichText::new(format!("Kick: {}", snapshot.phase))
                     .size(10.0).color(if snapshot.phase == "Online" { GOOD } else { WARN }));
                 for channel in &snapshot.channels {
                     let state = match channel.live {
@@ -6752,15 +6752,48 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                         .unwrap_or_default();
                     ui.label(RichText::new(format!("{}: {}{}", channel.slug, state, count))
                         .size(10.0).color(if channel.live == Some(true) { GOOD } else { MUTED }));
+                    let watch = &channel.watch;
+                    let media_active = watch.media.last_segment
+                        .is_some_and(|instant| instant.elapsed() < Duration::from_secs(25));
+                    let ws_status = if watch.ws_connected {
+                        if watch.handshake_received { "WS OK" } else { "WS conectando" }
+                    } else { "WS offline" };
+                    let media_status = if media_active { if pt_br() { "recebendo mídia" } else { "media flowing" } }
+                        else { if pt_br() { "mídia inativa" } else { "media inactive" } };
+                    ui.label(RichText::new(format!(
+                        "{} · {} · {} {} · {:.1} MiB",
+                        ws_status, media_status, watch.media.segments,
+                        if pt_br() { "segmentos" } else { "segments" },
+                        watch.media.bytes as f64 / 1_048_576.0
+                    )).size(10.0)
+                        .color(if media_active && watch.ws_connected { GOOD } else { MUTED }));
+                    if let Some(balance) = watch.points {
+                        ui.label(RichText::new(format!(
+                            "{}: {} · {}: +{}",
+                            if pt_br() { "Pontos atuais" } else { "Current points" },
+                            balance,
+                            if pt_br() { "Ganho observado" } else { "Observed gain" },
+                            watch.points_gained
+                        )).size(11.0).strong()
+                            .color(if watch.points_gained > 0 { GOOD } else { MUTED }));
+                    } else {
+                        ui.label(RichText::new(if pt_br() {
+                            "Pontos ainda não disponíveis — sem ganho confirmado"
+                        } else { "Points not yet available — no gain confirmed" })
+                            .size(10.0).color(MUTED));
+                    }
+                    if let Some(error) = watch.error.as_ref().or(watch.media.error.as_ref()) {
+                        ui.label(RichText::new(error).size(9.0).color(WARN));
+                    }
                 }
                 if let Some(error) = snapshot.error {
                     ui.label(RichText::new(error).size(10.0).color(WARN));
                 }
             }
             ui.label(RichText::new(if pt_br() {
-                "A API informa se o canal está ao vivo. Não reproduz vídeo nem confirma pontos."
+                "HLS transfere mídia sem abrir player. Ganhos só são confirmados por aumento do saldo real."
             } else {
-                "API status is not video playback or confirmation of channel points."
+                "HLS downloads media without opening a player. Gains require a real balance increase."
             }).size(9.0).color(DIM));
         });
 
