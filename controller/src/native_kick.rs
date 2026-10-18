@@ -187,7 +187,7 @@ impl KickMonitor {
                         }
                         for slug in &current {
                             if stop_worker.load(Ordering::Relaxed) { break; }
-                            let outcome = native_kick_viewer::point_balance(&client, slug);
+                            let outcome = native_kick_viewer::point_balance(&client, slug, &token);
                             if let Ok(mut results) = balances_worker.lock() {
                                 let info = results.entry(slug.clone()).or_default();
                                 match outcome {
@@ -306,7 +306,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     }
                     // Check a real balance even if a channel is offline, so
                     // previously earned points are not misrepresented as zero.
-                    let balance_result = native_kick_viewer::point_balance(&client, &slug);
+                    let balance_result = native_kick_viewer::point_balance(&client, &slug, &token);
                     if let Ok(mut state) = telemetry.lock() {
                         match balance_result {
                             Ok(balance) => native_kick_viewer::observe_points(&mut state, balance),
@@ -317,12 +317,16 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     continue;
                 }
                 let result = native_kick_viewer::run_viewer(
-                    &client, &slug, &meta, &telemetry, Arc::clone(&stop));
+                    &client, &slug, &meta, &telemetry, Arc::clone(&stop), &token);
                 if let Ok(mut state) = telemetry.lock() {
                     state.ws_connected = false;
                     state.handshake_received = false;
                     if let Err(error) = &result {
                         state.error = Some(error.clone());
+                        // These errors have sanitized fixed text. Never log
+                        // URLs containing signed viewer tokens or HTTP bodies.
+                        crate::logging::warn(&format!(
+                            "Kick viewer transport failed for {slug}: {error}"));
                     }
                 }
                 if result.is_err() {
@@ -336,6 +340,8 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 pause(&stop, Duration::from_secs(delay));
             },
             Err(error) => {
+                crate::logging::warn(&format!(
+                    "Kick channel metadata lookup failed for {slug}: {error}"));
                 // Public metadata requests cannot prove that an account's
                 // saved login has expired. A 401/403 can also be a network
                 // challenge, so retain errors and retry with backoff.

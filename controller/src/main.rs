@@ -8,6 +8,7 @@ mod native_kick;
 mod native_kick_login;
 mod native_kick_hls;
 mod native_kick_viewer;
+mod native_kick_http;
 mod firefox;
 mod monitor;
 mod native_auth;

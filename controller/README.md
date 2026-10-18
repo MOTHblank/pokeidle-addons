@@ -64,9 +64,11 @@ duplicar toda a configuração.
    PokéIdle**, quantos já receberam **resposta da API da Kick**, e quantos
    estão **recebendo mídia**. Erros do servidor ou bloqueios da API são
    mostrados diretamente no painel, nunca ocultos apenas em detalhes. O
-   monitor usa uma única conexão HTTP pública compartilhada para consultar
-   os metadados dos canais; a sessão autenticada é reservada às operações
-   privadas e aos saldos individuais. Não considera um cookie salvo como
+   monitor usa o curl do sistema em chamadas curtas aos endpoints
+   internos da Kick; isso contorna diferenças de TLS observadas com alguns
+   clientes HTTP Rust, sem iniciar outro navegador permanente. O token da
+   conta é enviado pelo stdin do subprocesso, nunca nos argumentos ou logs.
+   Se curl estiver indisponível, existe um fallback HTTP Rust. Não considera um cookie salvo como
    garantia de que a API da Kick aceitou a autenticação.
    A lista compacta mostra **uma linha por canal**, incluindo
    os streamers oficiais que estejam **offline**. Exibe o nome, **AO VIVO /
