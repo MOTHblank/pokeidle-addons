@@ -148,7 +148,7 @@ fn private_get(client: &Client, url: &str, bearer: &str,
         Err(error) if error == "curl unavailable" => {
             let mut request = client.get(url);
             for (name, value) in extra_headers {
-                request = request.header(*name, value);
+                request = request.header(*name, value.as_str());
             }
             let response = request.send().map_err(|_| "Kick API request failed".to_owned())?;
             let code = response.status().as_u16();
