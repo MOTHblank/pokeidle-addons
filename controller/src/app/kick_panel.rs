@@ -389,6 +389,16 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let desired = desired_kick_channels(app, i);
     let discovered = app.kick_discovered_live[i].clone();
     let auto_available = app.kick_discovery_available[i];
+    let official_roster = app.games[i].native.as_ref()
+        .and_then(|game| game.official_kick_roster())
+        .unwrap_or_else(|| discovered.iter().map(|slug|
+            crate::native_kick::OfficialKickChannel {
+                slug: slug.clone(), live: true,
+            }).collect());
+    let offline_balances = app.kick_monitors[i].as_ref()
+        .map(|session| session.offline_point_balances()).unwrap_or_default();
+    let channel_list = channel_rows(&desired, &official_roster,
+        monitor.as_ref(), &offline_balances);
     let online = monitor.as_ref().map(|snapshot|
         snapshot.channels.iter().filter(|c| c.live == Some(true)).count()).unwrap_or(0);
     let receiving = monitor.as_ref().map(|snapshot|
@@ -580,42 +590,28 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
 
     ui.add_space(12.0);
-    ui.label(RichText::new(kick_label(br, "Channel activity", "Atividade dos canais"))
+    ui.label(RichText::new(kick_label(br, "Channel activity", "Canais Kick"))
         .size(15.0).strong().color(TEXT));
     ui.label(RichText::new(kick_label(br,
-        "* Gains require a real point-balance increase. A connection alone is not proof of earning.",
-        "* Ganhos exigem aumento real do saldo. Uma conexão ativa não confirma pontos."))
+        "Each channel shows its status and your verified point balance; — means unavailable.",
+        "Cada canal mostra seu status e saldo de pontos verificado; — indica saldo indisponível."))
         .size(10.0).color(MUTED));
     ui.add_space(8.0);
     ui.vertical(|ui| {
-        if let Some(snapshot) = &monitor {
-            let cols = if ui.available_width() >= 850.0 { 2 } else { 1 };
-            let gap = 12.0;
-            let width = if cols == 2 {
-                (ui.available_width() - gap) / 2.0
-            } else { ui.available_width() };
-            for row in snapshot.channels.chunks(cols) {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for channel in row {
-                        ui.allocate_ui_with_layout(egui::vec2(width, 0.0),
-                            Layout::top_down(Align::Min), |ui| {
-                            kick_stream_card(ui, channel, width);
-                        });
-                    }
-                });
-                ui.add_space(10.0);
+        if channel_list.is_empty() {
+            ui.label(RichText::new(kick_label(br,
+                "Start PokéIdle to discover official streamers, or add a manual channel.",
+                "Inicie o PokéIdle para descobrir streamers oficiais ou adicione um canal manual."))
+                .size(11.0).color(MUTED));
+        }
+        for channel in &channel_list {
+            if kick_channel_line(ui, channel) {
+                if let Err(error) = open_kick_channels_in_regular_browser(
+                    &[channel.slug.clone()]) {
+                    app.set_status(error, true);
+                }
             }
-        } else if !desired.is_empty() || auto_available {
-            ui.label(RichText::new(kick_label(br,
-                "Start streams to display connection health and point balances.",
-                "Inicie as transmissões para ver conexões e saldos de pontos."))
-                .size(11.0).color(MUTED));
-        } else {
-            ui.label(RichText::new(kick_label(br,
-                "Start PokéIdle to discover streamers or add a manual channel.",
-                "Inicie o PokéIdle para descobrir streamers ou adicione um canal manual."))
-                .size(11.0).color(MUTED));
+            ui.add_space(5.0);
         }
     });
     });
