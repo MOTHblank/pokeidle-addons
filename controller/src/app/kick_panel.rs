@@ -152,8 +152,8 @@ impl ControllerApp {
         self.kick_monitors[index] = Some(monitor);
         self.kick_api_token_input[index].clear();
         let mut message = kick_label(pt_br(),
-            "Kick sessions started. Waiting for channel data.",
-            "Sessões Kick iniciadas. Aguardando dados dos canais.").to_owned();
+            "Checking the Kick API. Your saved login has not been verified yet.",
+            "Consultando a API Kick. A credencial salva ainda não foi verificada.").to_owned();
         let mut error = false;
         if !entered.is_empty() && self.kick_remember_login[index] {
             match native_auth::save_kick_token(profile, &token) {
@@ -320,6 +320,11 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
                 open = ui.small_button(kick_label(br, "Open ↗", "Abrir ↗")).clicked();
             });
         });
+        if let Some(error) = &channel.error {
+            // Actionable failures belong on the row, not behind a collapsed
+            // inspector. Never show an unknown balance as zero.
+            ui.label(RichText::new(error).size(10.0).color(WARN));
+        }
         if channel.error.is_some() || channel.details.is_some() {
             ui.collapsing(kick_label(br, "Details", "Detalhes"), |ui| {
                 if channel.official {
@@ -401,8 +406,12 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .map(|session| session.offline_point_balances()).unwrap_or_default();
     let channel_list = channel_rows(&desired, &official_roster,
         monitor.as_ref(), &offline_balances);
-    let online = monitor.as_ref().map(|snapshot|
-        snapshot.channels.iter().filter(|c| c.live == Some(true)).count()).unwrap_or(0);
+    // Game-reported live channels are not the same thing as native Kick
+    // connections. Keep these measures separate instead of showing 0/N
+    // whenever the Kick API rejects or delays its first response.
+    let online = channel_list.iter().filter(|c| c.live == Some(true)).count();
+    let checked = monitor.as_ref().map(|snapshot|
+        snapshot.channels.iter().filter(|c| c.live.is_some()).count()).unwrap_or(0);
     let receiving = monitor.as_ref().map(|snapshot|
         snapshot.channels.iter().filter(|c|
             c.watch.media.last_segment.is_some_and(|t| t.elapsed() < Duration::from_secs(25)))
@@ -421,14 +430,38 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
         ui.add_space(8.0);
         ui.columns(3, |cols| {
-            kick_metric(&mut cols[0], kick_label(br, "Live", "Ao vivo"),
+            kick_metric(&mut cols[0], kick_label(br,
+                "Live (PokéIdle)", "Ao vivo (PokéIdle)"),
                 format!("{online}/{}", desired.len()), if online > 0 { GOOD } else { TEXT });
-            kick_metric(&mut cols[1], kick_label(br, "Receiving media", "Recebendo mídia"),
-                receiving.to_string(), if receiving > 0 { GOOD } else { TEXT });
-            kick_metric(&mut cols[2], kick_label(br, "Points gained*", "Pontos ganhos*"),
-                format!("+{earned}"), if earned > 0 { GOOD } else { TEXT });
+            kick_metric(&mut cols[1], kick_label(br, "Kick API verified", "Verificados na Kick"),
+                format!("{checked}/{}", desired.len()),
+                if checked > 0 { GOOD } else { WARN });
+            kick_metric(&mut cols[2], kick_label(br, "Receiving media", "Recebendo mídia"),
+                receiving.to_string(), if receiving > 0 { GOOD } else { MUTED });
         });
+        ui.label(RichText::new(format!("{}: +{earned}",
+            kick_label(br, "Observed point gains", "Ganhos de pontos observados")))
+            .size(10.0).color(if earned > 0 { GOOD } else { MUTED }));
     });
+
+    if let Some(snapshot) = monitor.as_ref() {
+        if let Some(error) = snapshot.error.as_ref()
+            .or_else(|| snapshot.channels.iter().find_map(|channel| {
+                channel.error.as_ref().or(channel.watch.error.as_ref())
+            }))
+        {
+            ui.add_space(6.0);
+            ui.label(RichText::new(format!("{}: {error}",
+                kick_label(br, "Kick connection problem", "Falha na conexão Kick")))
+                .size(11.0).color(WARN));
+        } else if !snapshot.channels.is_empty() && checked == 0 {
+            ui.add_space(6.0);
+            ui.label(RichText::new(kick_label(br,
+                "Checking first Kick channel responses. Saved login does not confirm API access.",
+                "Consultando os canais na Kick. Ter uma sessão salva não confirma acesso à API."))
+                .size(10.0).color(MUTED));
+        }
+    }
 
     ui.add_space(12.0);
     egui::Frame::new().fill(PANEL_ALT).stroke(Stroke::new(1.0, BORDER))
@@ -437,8 +470,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .strong().size(14.0).color(TEXT));
         if app.kick_saved_login[i] {
             ui.label(RichText::new(kick_label(br,
-                "● Kick login saved securely in your operating system.",
-                "● Login Kick salvo com proteção do sistema."))
+                "● Kick session stored in OS vault; API access is verified separately.",
+                "● Sessão Kick salva no cofre do sistema; acesso à API verificado separadamente."))
                 .size(11.0).color(GOOD));
         } else {
             ui.label(RichText::new(kick_label(br,
