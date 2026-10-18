@@ -33,7 +33,9 @@ duplicar toda a configuração.
    A reabertura para a Kick é **normal, sem Remote Agent,
    `--remote-debugging-port`, BiDi ou scripts injetados**. O Moth não altera
    as preferências já existentes no perfil. Depois de entrar na Kick,
-   **feche a janela do Firefox**. Só então o Moth lê o cookie
+   o Moth tenta aproveitar um login Kick já existente. Se for necessário
+   abrir o Firefox, importa a sessão automaticamente, ainda com a janela
+   aberta, e depois fecha somente essa janela. Para isso, lê o cookie
    `session_token` de `kick.com` no banco `cookies.sqlite` do mesmo
    perfil, valida seu formato e guarda o token no cofre seguro do SO
    (DPAPI / Secret Service). Nenhuma senha ou token precisa ser copiado.

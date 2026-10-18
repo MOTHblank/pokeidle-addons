@@ -452,8 +452,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     crate::native_kick_login::LoginStatus::Running);
                 if busy {
                     ui.label(RichText::new(kick_label(br,
-                        "● Sign in to Kick, then CLOSE Firefox to import.",
-                        "● Entre na Kick e FECHE o Firefox para importar."))
+                        "● Finish signing in; importing automatically…",
+                        "● Faça login na Kick; importação automática…"))
                         .color(WARN));
                     if ui.button(kick_label(br, "Cancel", "Cancelar")).clicked() {
                         crate::native_kick_login::cancel(profile);
@@ -475,8 +475,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new(message).size(10.0).color(WARN));
             }
             ui.label(RichText::new(kick_label(br,
-                "Reopens this account's PokéIdle Firefox profile without Remote Agent. Your existing Google login remains available. Finish the game's native handoff first; close Firefox after Kick login to import the session.",
-                "Reabre o mesmo perfil Firefox do PokéIdle, sem Remote Agent, aproveitando o login Google já existente. Conclua a conexão nativa do jogo antes; após entrar na Kick, feche o Firefox para importar a sessão."))
+                "Tries the existing Kick session first. If needed, opens normal Firefox using this account's PokéIdle profile without Remote Agent. The session is imported and the login window closes automatically.",
+                "Tenta primeiro importar a sessão Kick já existente. Se necessário, abre o Firefox normal usando o mesmo perfil do PokéIdle, sem Remote Agent. A sessão é importada e a janela fecha automaticamente."))
                 .size(10.0).color(DIM));
             ui.collapsing(kick_label(br, "Advanced · Manual token",
                 "Avançado · Token manual"), |ui| {
