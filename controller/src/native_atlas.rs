@@ -212,7 +212,7 @@ pub fn load() -> Result<Reference, String> {
     crate::native_tls::ensure()?;
     let client=reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(18))
+        .timeout(Duration::from_secs(6))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() > 2 || attempt.url().host_str()!=Some(HOST) {
                 attempt.stop()
