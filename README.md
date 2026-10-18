@@ -15,7 +15,7 @@ Acompanhe suas caçadas, configure automações e mantenha as sessões funcionan
 - **Hunt Atlas:** compare caçadas, estimativas de experiência, chances de captura e níveis de Outland.
 - **Automações:** configure captura automática, reposição de Poké Bolas, poções e revives, além de regras de compra no mercado.
 - **Contas:** organize até quatro perfis e acompanhe suas conexões com o PokéIdle e a Twitch.
-- **Kick:** monitor de canais ao vivo pela API oficial, com configuração independente por conta (não reproduz vídeo nem simula espectadores).
+- **Kick:** sessões nativas independentes por conta, com tráfego HLS de baixo bitrate, presença via WebSocket da Kick e leitura do saldo real de pontos (ganho mostrado apenas quando confirmado por aumento de saldo).
 
 ## Como começar
 
