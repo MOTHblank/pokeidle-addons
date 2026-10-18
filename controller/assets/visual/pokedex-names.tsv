@@ -1,5 +1,5 @@
-# PokéIdle species -> game looktype -> name, from pokeidle-upstream/assets/creatures-sprites-lab.json.
-# This is a compact identity index, not bundled sprite artwork.
+# PokéIdle species -> canonical looktype -> name; upstream v1.314.2.
+# Compact identity index only; artwork is loaded on demand.
 # pokeId\tlooktype\tname
 1	60001	Bulbasaur
 2	60002	Ivysaur
@@ -376,10 +376,13 @@
 377	60377	Regirock
 378	60378	Regice
 379	60379	Registeel
+380	60380	Latias
+381	60381	Latios
 382	60382	Kyogre
 383	60383	Groudon
 384	60384	Rayquaza
 385	60385	Jirachi
+386	60386	Deoxys
 387	60387	Turtwig
 388	60388	Grotle
 389	60389	Torterra
@@ -431,7 +434,9 @@
 435	60435	Skuntank
 436	60436	Bronzor
 437	60437	Bronzong
+438	60438	Bonsly
 439	60439	Mime Jr.
+440	60440	Happiny
 441	60441	Chatot
 442	60442	Spiritomb
 443	60443	Gible
@@ -483,6 +488,8 @@
 489	60489	Phione
 490	60490	Manaphy
 491	60491	Darkrai
+492	60492	Shaymin
+493	60493	Arceus
 494	60494	Victini
 495	60495	Snivy
 496	60496	Servine
@@ -496,7 +503,9 @@
 504	60504	Patrat
 505	60505	Watchog
 506	60506	Lillipup
+507	60507	Herdier
 508	60508	Stoutland
+509	60509	Purrloin
 510	60510	Liepard
 511	60511	Pansage
 512	60512	Simisage
@@ -516,6 +525,7 @@
 526	60526	Gigalith
 527	60527	Woobat
 528	60528	Swoobat
+529	60529	Drilbur
 530	60530	Excadrill
 531	60531	Audino
 532	60532	Timburr
@@ -536,6 +546,7 @@
 547	60547	Whimsicott
 548	60548	Petilil
 549	60549	Lilligant
+550	60550	Basculin
 551	60551	Sandile
 552	60552	Krokorok
 553	60553	Krookodile
@@ -543,6 +554,7 @@
 556	60556	Maractus
 557	60557	Dwebble
 558	60558	Crustle
+559	60559	Scraggy
 560	60560	Scrafty
 561	60561	Sigilyph
 562	60562	Yamask
@@ -566,6 +578,7 @@
 580	60580	Ducklett
 581	60581	Swanna
 582	60582	Vanillite
+583	60583	Vanillish
 584	60584	Vanilluxe
 585	60585	Deerling
 586	60586	Sawsbuck
@@ -576,16 +589,19 @@
 591	60591	Amoonguss
 592	60592	Frillish
 593	60593	Jellicent
+594	60594	Alomomola
 595	60595	Joltik
 596	60596	Galvantula
 597	60597	Ferroseed
 598	60598	Ferrothorn
 599	60599	Klink
+600	60600	Klang
 601	60601	Klinklang
 602	60602	Tynamo
 603	60603	Eelektrik
 604	60604	Eelektross
 605	60605	Elgyem
+606	60606	Beheeyem
 607	60607	Litwick
 608	60608	Lampent
 609	60609	Chandelure
@@ -611,6 +627,7 @@
 629	60629	Vullaby
 630	60630	Mandibuzz
 631	60631	Heatmor
+632	60632	Durant
 633	60633	Deino
 634	60634	Zweilous
 635	60635	Hydreigon
@@ -619,13 +636,23 @@
 638	60638	Cobalion
 639	60639	Terrakion
 640	60640	Virizion
+641	60641	Tornadus
+642	60642	Thundurus
 643	60643	Reshiram
 644	60644	Zekrom
+645	60645	Landorus
 646	60646	Kyurem
+647	60647	Keldeo
 648	60648	Meloetta
 649	60649	Genesect
+650	60650	Chespin
+651	60651	Quilladin
 652	60652	Chesnaught
+653	60653	Fennekin
+654	60654	Braixen
 655	60655	Delphox
+656	60656	Froakie
+657	60657	Frogadier
 658	60658	Greninja
 659	60659	Bunnelby
 660	60660	Diggersby
@@ -639,8 +666,11 @@
 668	60668	Pyroar
 669	60669	Flabebe
 671	60671	Florges
+672	60672	Skiddo
+673	60673	Gogoat
 674	60674	Pancham
 675	60675	Pangoro
+676	60676	Furfrou
 677	60677	Espurr
 678	60678	Meowstic
 679	60679	Honedge
@@ -661,6 +691,7 @@
 694	60694	Helioptile
 695	60695	Heliolisk
 696	60696	Tyrunt
+697	60697	Tyrantrum
 698	60698	Amaura
 699	60699	Aurorus
 700	60700	Sylveon
@@ -673,11 +704,20 @@
 707	60707	Klefki
 708	60708	Phantump
 709	60709	Trevenant
+710	60710	Pumpkaboo
+711	60711	Gourgeist
 712	60712	Bergmite
 713	60713	Avalugg
 714	60714	Noibat
 715	60715	Noivern
+716	60716	Xerneas
+717	60717	Yveltal
+718	60718	Zygarde
+719	60719	Diancie
+721	60721	Volcanion
+722	60722	Rowlet
 723	60723	Dartrix
+724	60724	Decidueye
 725	60725	Litten
 726	60726	Torracat
 727	60727	Incineroar
@@ -692,15 +732,22 @@
 736	60736	Grubbin
 737	60737	Charjabug
 738	60738	Vikavolt
+739	60739	Crabrawler
+740	60740	Crabominable
+741	60741	Oricorio
 742	60742	Cutiefly
 743	60743	Ribombee
 744	60744	Rockruff
+745	60745	Lycanroc
+746	60746	Wishiwashi
 747	60747	Mareanie
 748	60748	Toxapex
 749	60749	Mudbray
 750	60750	Mudsdale
 751	60751	Dewpider
 752	60752	Araquanid
+753	60753	Fomantis
+754	60754	Lurantis
 755	60755	Morelull
 756	60756	Shiinotic
 757	60757	Salandit
@@ -710,9 +757,17 @@
 761	60761	Bounsweet
 762	60762	Steenee
 763	60763	Tsareena
+764	60764	Comfey
 766	60766	Passimian
 767	60767	Wimpod
 768	60768	Golisopod
+769	60769	Sandygast
+770	60770	Palossand
+771	60771	Pyukumuku
+772	60772	Type: Null
+773	60773	Silvally
+774	60774	Minior
+776	60776	Turtonator
 777	60777	Togedemaru
 778	60778	Mimikyu
 779	60779	Bruxish
@@ -721,49 +776,242 @@
 782	60782	Jangmo-o
 783	60783	Hakamo-o
 784	60784	Kommo-o
+785	60785	Tapu Koko
+786	60786	Tapu Lele
+787	60787	Tapu Bulu
+788	60788	Tapu Fini
+789	60789	Cosmog
+790	60790	Cosmoem
+791	60791	Solgaleo
+792	60792	Lunala
+793	60793	Nihilego
+794	60794	Buzzwole
+795	60795	Pheromosa
+796	60796	Xurkitree
+797	60797	Celesteela
 798	60798	Kartana
 799	60799	Guzzlord
+800	60800	Necrozma
+801	60801	Magearna
+802	60802	Marshadow
 803	60803	Poipole
 804	60804	Naganadel
+805	60805	Stakataka
+806	60806	Blacephalon
+807	60807	Zeraora
+808	60808	Meltan
+809	60809	Melmetal
+810	60810	Grookey
+811	60811	Thwackey
+812	60812	Rillaboom
 813	60813	Scorbunny
 814	60814	Raboot
 815	60815	Cinderace
+816	60816	Sobble
+817	60817	Drizzile
+818	60818	Inteleon
+819	60819	Skwovet
+820	60820	Greedent
+821	60821	Rookidee
+822	60822	Corvisquire
+823	60823	Corviknight
+824	60824	Blipbug
+825	60825	Dottler
+826	60826	Orbeetle
+827	60827	Nickit
+828	60828	Thievul
+829	60829	Gossifleur
+830	60830	Eldegoss
+831	60831	Wooloo
+832	60832	Dubwool
+833	60833	Chewtle
+834	60834	Drednaw
+835	60835	Yamper
+836	60836	Boltund
+837	60837	Rolycoly
+838	60838	Carkol
+839	60839	Coalossal
+840	60840	Applin
+841	60841	Flapple
+842	60842	Appletun
+843	60843	Silicobra
+844	60844	Sandaconda
+845	60845	Cramorant
+846	60846	Arrokuda
+847	60847	Barraskewda
+848	60848	Toxel
+849	60849	Toxtricity
+850	60850	Sizzlipede
+851	60851	Centiskorch
+852	60852	Clobbopus
+853	60853	Grapploct
+856	60856	Hatenna
+857	60857	Hattrem
+858	60858	Hatterene
+859	60859	Impidimp
+860	60860	Morgrem
+861	60861	Grimmsnarl
+862	60862	Obstagoon
+863	60863	Perrserker
+864	60864	Cursola
+865	60865	Sirfetch'd
+866	60866	Mr. Rime
+867	60867	Runerigus
 868	60868	Milcery
 869	60869	Alcremie
+870	60870	Falinks
+871	60871	Pincurchin
+872	60872	Snom
+873	60873	Frosmoth
+875	60875	Eiscue
+876	60876	Indeedee
+877	60877	Morpeko
+878	60878	Cufant
+879	60879	Copperajah
+880	60880	Dracozolt
+881	60881	Arctozolt
+882	60882	Dracovish
+883	60883	Arctovish
+884	60884	Duraludon
 885	60885	Dreepy
+886	60886	Drakloak
+887	60887	Dragapult
+888	60888	Zacian
+889	60889	Zamazenta
+890	60890	Eternatus
+891	60891	Kubfu
+892	60892	Urshifu
+893	60893	Zarude
+894	60894	Regieleki
+895	60895	Regidrago
+896	60896	Glastrier
+897	60897	Spectrier
+898	60898	Calyrex
+899	60899	Wyrdeer
+900	60900	Kleavor
 901	60901	Ursaluna
+902	60902	Basculegion
+903	60903	Sneasler
+904	60904	Overqwil
+906	60906	Sprigatito
+907	60907	Floragato
+908	60908	Meowscarada
+909	60909	Fuecoco
+910	60910	Crocalor
+911	60911	Skeledirge
+912	60912	Quaxly
+913	60913	Quaxwell
+914	60914	Quaquaval
+915	60915	Lechonk
+916	60916	Oinkologne
+917	60917	Tarountula
+918	60918	Spidops
+919	60919	Nymble
+920	60920	Lokix
+921	60921	Pawmi
+922	60922	Pawmo
+923	60923	Pawmot
+924	60924	Tandemaus
+925	60925	Maushold
+926	60926	Fidough
+927	60927	Dachsbun
+928	60928	Smoliv
+929	60929	Dolliv
+930	60930	Arboliva
+931	60931	Squawkabilly
+932	60932	Nacli
+933	60933	Naclstack
+934	60934	Garganacl
 935	60935	Charcadet
 936	60936	Armarouge
+938	60938	Tadbulb
+939	60939	Bellibolt
+940	60940	Wattrel
+941	60941	Kilowattrel
+942	60942	Maschiff
+943	60943	Mabosstiff
+944	60944	Shroodle
+945	60945	Grafaiai
+946	60946	Bramblin
+947	60947	Brambleghast
+948	60948	Toedscool
+949	60949	Toedscruel
+950	60950	Klawf
+951	60951	Capsakid
+952	60952	Scovillain
+953	60953	Rellor
+954	60954	Rabsca
+955	60955	Flittle
+956	60956	Espathra
 957	60957	Tinkatink
 958	60958	Tinkatuff
 959	60959	Tinkaton
+960	60960	Wiglett
+961	60961	Wugtrio
+962	60962	Bombirdier
+963	60963	Finizen
+965	60965	Varoom
+966	60966	Revavroom
+967	60967	Cyclizar
+968	60968	Orthworm
+969	60969	Glimmet
+970	60970	Glimmora
+971	60971	Greavard
+972	60972	Houndstone
+973	60973	Flamigo
+974	60974	Cetoddle
+975	60975	Cetitan
+976	60976	Veluza
+977	60977	Dondozo
+978	60978	Tatsugiri
 979	60979	Annihilape
+980	60980	Clodsire
+981	60981	Farigiraf
+982	60982	Dudunsparce
+983	60983	Kingambit
+984	60984	Great Tusk
+985	60985	Scream Tail
+986	60986	Brute Bonnet
+987	60987	Flutter Mane
+988	60988	Slither Wing
 989	60989	Sandy Shocks
-1001	60001	Wo-Chien
-1002	60002	Chien-Pao
-1003	60003	Ting-Lu
-1004	60004	Chi-Yu
-1005	60005	Roaring Moon
-1006	60006	Iron Valiant
-1007	60007	Koraidon
-1008	60008	Miraidon
-1009	60009	Walking Wake
-1010	60010	Iron Leaves
-1011	60011	Dipplin
-1012	60012	Poltchageist
-1013	60013	Sinistcha
-1014	60014	Okidogi
-1015	60015	Munkidori
-1016	60016	Fezandipiti
-1017	60017	Ogerpon
-1018	60018	Archaludon
-1019	60019	Hydrapple
-1020	60020	Gouging Fire
-1021	60021	Raging Bolt
-1022	60022	Iron Boulder
-1023	60023	Iron Crown
-1024	60024	Terapagos
-1025	60025	Pecharunt
+990	60990	Iron Treads
+991	60991	Iron Bundle
+992	60992	Iron Hands
+993	60993	Iron Jugulis
+994	60994	Iron Moth
+995	60995	Iron Thorns
+996	60996	Frigibax
+997	60997	Arctibax
+998	60998	Baxcalibur
+999	60999	Gimmighoul
+1000	61000	Gholdengo
+1001	61001	Wo-Chien
+1002	61002	Chien-Pao
+1003	61003	Ting-Lu
+1004	61004	Chi-Yu
+1005	61005	Roaring Moon
+1006	61006	Iron Valiant
+1007	61007	Koraidon
+1008	61008	Miraidon
+1009	61009	Walking Wake
+1010	61010	Iron Leaves
+1011	61011	Dipplin
+1012	61012	Poltchageist
+1013	61013	Sinistcha
+1014	61014	Okidogi
+1015	61015	Munkidori
+1016	61016	Fezandipiti
+1017	61017	Ogerpon
+1018	61018	Archaludon
+1019	61019	Hydrapple
+1020	61020	Gouging Fire
+1021	61021	Raging Bolt
+1022	61022	Iron Boulder
+1023	61023	Iron Crown
+1024	61024	Terapagos
+1025	61025	Pecharunt
+1479	61479	Mow Rotom
 2001	60009	Brave Blastoise
 2002	60160	Tribal Feraligatr
 2003	60154	Ancient Meganium
@@ -810,6 +1058,180 @@
 2045	60164	Brave Noctowl
 2046	60018	Furious Pidgeot
 2047	60105	Ancient Marowak
+3003	80003	Mega Venusaur
+3006	80006	Mega Charizard Y
+3009	80009	Mega Blastoise
+3015	80015	Mega Beedrill
+3018	80018	Mega Pidgeot
+3026	80026	Mega Raichu Y
+3036	80036	Mega Clefable
+3065	80065	Mega Alakazam
+3071	80071	Mega Victreebel
+3080	80080	Mega Slowbro
+3094	80094	Mega Gengar
+3115	80115	Mega Kangaskhan
+3121	80121	Mega Starmie
+3127	80127	Mega Pinsir
+3130	80130	Mega Gyarados
+3142	80142	Mega Aerodactyl
+3149	80149	Mega Dragonite
+3150	80150	Mega Mewtwo Y
+3154	80154	Mega Meganium
+3160	80160	Mega Feraligatr
+3181	80181	Mega Ampharos
+3208	80208	Mega Steelix
+3212	80212	Mega Scizor
+3214	80214	Mega Heracross
+3227	80227	Mega Skarmory
+3229	80229	Mega Houndoom
+3248	80248	Mega Tyranitar
+3254	80254	Mega Sceptile
+3257	80257	Mega Blaziken
+3260	80260	Mega Swampert
+3282	80282	Mega Gardevoir
+3302	80302	Mega Sableye
+3303	80303	Mega Mawile
+3306	80306	Mega Aggron
+3308	80308	Mega Medicham
+3310	80310	Mega Manectric
+3319	80319	Mega Sharpedo
+3323	80323	Mega Camerupt
+3334	80334	Mega Altaria
+3354	80354	Mega Banette
+3358	80358	Mega Chimecho
+3359	80359	Mega Absol
+3362	80362	Mega Glalie
+3376	80376	Mega Metagross
+3380	80380	Mega Latias
+3381	80381	Mega Latios
+3382	80382	Primal Kyogre
+3383	80383	Primal Groudon
+3384	80384	Mega Rayquaza
+3398	80398	Mega Staraptor
+3428	80428	Mega Lopunny
+3445	80445	Mega Garchomp
+3448	80448	Mega Lucario
+3460	80460	Mega Abomasnow
+3475	80475	Mega Gallade
+3478	80478	Mega Froslass
+3485	80485	Mega Heatran
+3491	80491	Mega Darkrai
+3530	80530	Mega Excadrill
+3545	80545	Mega Scolipede
+3560	80560	Mega Scrafty
+3604	80604	Mega Eelektross
+3609	80609	Mega Chandelure
+3623	80623	Mega Golurk
+3652	80652	Mega Chesnaught
+3655	80655	Mega Delphox
+3658	80658	Mega Greninja
+3668	80668	Mega Pyroar
+3670	80670	Mega Floette
+3678	80678	Mega Meowstic
+3687	80687	Mega Malamar
+3689	80689	Mega Barbaracle
+3691	80691	Mega Dragalge
+3701	80701	Mega Hawlucha
+3718	80718	Mega Zygarde
+3719	80719	Mega Diancie
+3740	80740	Mega Crabominable
+3768	80768	Mega Golisopod
+3780	80780	Mega Drampa
+3801	80801	Mega Magearna
+3807	80807	Mega Zeraora
+3870	80870	Mega Falinks
+3978	80978	Mega Tatsugiri
+3998	80998	Mega Baxcalibur
+4019	64019	Alolan Rattata
+4020	64020	Alolan Raticate
+4026	64026	Alolan Raichu
+4027	64027	Alolan Sandshrew
+4028	64028	Alolan Sandslash
+4037	64037	Alolan Vulpix
+4038	64038	Alolan Ninetales
+4050	64050	Alolan Diglett
+4051	64051	Alolan Dugtrio
+4052	64052	Alolan Meowth
+4074	64074	Alolan Geodude
+4075	64075	Alolan Graveler
+4088	64088	Alolan Grimer
+4089	64089	Alolan Muk
+4103	64103	Alolan Exeggutor
+4105	64105	Alolan Marowak
+5052	65052	Galarian Meowth
+5077	65077	Galarian Ponyta
+5078	65078	Galarian Rapidash
+5079	65079	Galarian Slowpoke
+5080	65080	Galarian Slowbro
+5083	65083	Galarian Farfetch'd
+5110	65110	Galarian Weezing
+5122	65122	Galarian Mr. Mime
+5144	65144	Galarian Articuno
+5145	65145	Galarian Zapdos
+5146	65146	Galarian Moltres
+5199	65199	Galarian Slowking
+5222	65222	Galarian Corsola
+5263	65263	Galarian Zigzagoon
+5264	65264	Galarian Linoone
+5554	65554	Galarian Darumaka
+5555	65555	Galarian Darmanitan
+5562	65562	Galarian Yamask
+5618	65618	Galarian Stunfisk
+6058	66058	Hisuian Growlithe
+6059	66059	Hisuian Arcanine
+6100	66100	Hisuian Voltorb
+6101	66101	Hisuian Electrode
+6157	66157	Hisuian Typhlosion
+6211	66211	Hisuian Qwilfish
+6215	66215	Hisuian Sneasel
+6503	66503	Hisuian Samurott
+6549	66549	Hisuian Lilligant
+6570	66570	Hisuian Zorua
+6571	66571	Hisuian Zoroark
+6628	66628	Hisuian Braviary
+6705	66705	Hisuian Sliggoo
+6706	66706	Hisuian Goodra
+6713	66713	Hisuian Avalugg
+6724	66724	Hisuian Decidueye
+7128	67128	Paldean Tauros
+7194	67194	Paldean Wooper
+8128	68128	Paldean Tauros Blaze
+8351	68351	Castform Rainy
+8386	68386	Deoxys Attack
+8479	68479	Heat Rotom
+8641	68641	Tornadus Therian
+8642	68642	Thundurus Therian
+8645	68645	Landorus Therian
+8646	68646	White Kyurem
+8647	68647	Keldeo Resolute
+8681	68681	Aegislash Blade
+8718	68718	Zygarde 10%
+8720	68720	Hoopa Unbound
+8741	68741	Oricorio Pom-Pom
+8745	68745	Lycanroc Midnight
+8746	68746	Wishiwashi School
+8774	68774	Minior Core
+8888	68888	Zacian Crowned
+8889	68889	Zamazenta Crowned
+8901	68901	Bloodmoon Ursaluna
+8902	68902	Basculegion Female
+8905	68905	Enamorus Therian
+8964	68964	Palafin Hero
+9006	83006	Mega Charizard X
+9128	69128	Paldean Tauros Aqua
+9150	83150	Mega Mewtwo X
+9351	69351	Castform Snowy
+9386	69386	Deoxys Defense
+9448	83448	Mega Lucario Z
+9479	69479	Wash Rotom
+9718	69718	Zygarde Complete
+9741	69741	Oricorio Pa'u
+9745	69745	Lycanroc Dusk
+11351	71351	Castform Sunny
+11386	71386	Deoxys Speed
+11479	71479	Frost Rotom
+11741	71741	Oricorio Sensu
+12479	72479	Fan Rotom
 13252	60252	Treecko
 13253	60253	Grovyle
 13254	60254	Sceptile
