@@ -200,6 +200,29 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
         }
     }
 }
+/// Official Kick streamers reported by PokéIdle (not general Kick search).
+/// `None` means roster data was not delivered; `Some([])` means all offline.
+/// Preserve all valid live names here; active session limits are applied later.
+pub fn pokeidle_live_officials(state: &serde_json::Value) -> Option<Vec<String>> {
+    let rows = state.get("kick")?.get("oficiais")?.as_array()?;
+    let mut names = BTreeSet::new();
+    for row in rows {
+        if row.get("aoVivo").and_then(serde_json::Value::as_bool) != Some(true) {
+            continue;
+        }
+        let Some(raw) = row.get("slug").or_else(|| row.get("login"))
+            .and_then(serde_json::Value::as_str) else { continue; };
+        // The game supplies names, not arbitrary URLs. Whitelist valid
+        // channel names before passing them to Kick requests or UI.
+        let slug = raw.trim().to_ascii_lowercase();
+        if !slug.is_empty() && slug.len() <= 25 && slug.bytes().all(|b|
+            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') {
+            names.insert(slug);
+        }
+    }
+    Some(names.into_iter().collect())
+}
+
 /// Keep only validated public channel slugs (and official Kick links).
 pub fn normalize_channels(input: &str) -> Result<Vec<String>, String> {
     let mut channels = BTreeSet::new();
@@ -232,6 +255,22 @@ mod tests {
         assert!(normalize_channels("").is_err());
         assert!(normalize_channels(&(0..13).map(|i| format!("ch{i}"))
             .collect::<Vec<_>>().join(",")).is_err());
+    }
+    #[test]
+    fn official_pokeidle_kick_roster_is_live_only_and_deduplicated() {
+        use serde_json::json;
+        assert_eq!(pokeidle_live_officials(&json!({})), None);
+        assert_eq!(pokeidle_live_officials(&json!({"kick":{"oficiais":[]}})),
+            Some(Vec::new()));
+        let state = json!({"kick":{"oficiais":[
+            {"slug":"KickLive","aoVivo":true},
+            {"login":"kicklive","aoVivo":true},
+            {"login":"not_live","aoVivo":false},
+            {"slug":"https://evil.invalid/path","aoVivo":true},
+            {"slug":"Another_One","aoVivo":true}
+        ]}});
+        assert_eq!(pokeidle_live_officials(&state),
+            Some(vec!["another_one".into(), "kicklive".into()]));
     }
     #[test]
     fn never_count_point_balance_as_earned_without_delta() {
