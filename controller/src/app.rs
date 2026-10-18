@@ -13,6 +13,7 @@ use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
 mod hunt_panel;
 mod market_panel;
+mod kick_panel;
 mod translations;
 use hunt_panel::HuntSubtab;
 use crate::monitor::{
@@ -1574,6 +1575,9 @@ struct NativeBrowserClosedEvent {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccountsSection { Profiles, Kick }
+
 /// Account-local automation workspaces. Keep the selected section while
 /// switching accounts; the scroll position is isolated per account/section.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1617,6 +1621,8 @@ pub struct ControllerApp {
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
     panel_tab: PanelTab,
+    accounts_section: AccountsSection,
+    kick_selected_account: usize,
     dashboard_show_history: bool,
     dashboard_session_view: bool,
     ui_options: UiOptions,
@@ -1667,10 +1673,14 @@ pub struct ControllerApp {
     inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
     inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     accounts: [AccountConfig; 4],
-    /// Kick Developer API monitors are independent per profile. No token persistence.
+    /// Kick website sessions run independently per account. Bearer tokens
+    /// are entered in masked fields and optionally stored in the OS vault.
     kick_monitors: [Option<KickMonitor>; 4],
     kick_api_token_input: [String; 4],
     kick_channels_input: [String; 4],
+    kick_channel_new: [String; 4],
+    kick_saved_login: [bool; 4],
+    kick_remember_login: [bool; 4],
     account_names_dirty: [bool; 4],
     status: String,
     status_error: bool,
@@ -1741,6 +1751,8 @@ impl ControllerApp {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
             panel_tab: PanelTab::Overview,
+            accounts_section: AccountsSection::Profiles,
+            kick_selected_account: 0,
             dashboard_show_history: false,
             dashboard_session_view: false,
             ui_options: Config::load_ui_options().unwrap_or_else(|error| {
@@ -1799,6 +1811,13 @@ impl ControllerApp {
                 logging::warn(&error);
                 std::array::from_fn(|_| String::new())
             }),
+            kick_channel_new: std::array::from_fn(|_| String::new()),
+            kick_saved_login: std::array::from_fn(|index| {
+                GameProfile::from_index(index).is_some_and(|profile|
+                    crate::native_auth::load_kick_token(profile)
+                        .ok().flatten().is_some())
+            }),
+            kick_remember_login: [true; 4],
             account_names_dirty: [false; 4],
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
@@ -6546,6 +6565,22 @@ fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
 /// Show all four account slots at once; a card never switches or stops another
 /// account. All indicators come from the current game and Twitch connection.
 fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        if ui.selectable_label(app.accounts_section == AccountsSection::Profiles,
+            if pt_br() { "Perfis PokéIdle" } else { "PokéIdle profiles" }).clicked() {
+            app.accounts_section = AccountsSection::Profiles;
+        }
+        if ui.selectable_label(app.accounts_section == AccountsSection::Kick,
+            "Kick").clicked() {
+            app.accounts_section = AccountsSection::Kick;
+        }
+    });
+    ui.add_space(12.0);
+    if app.accounts_section == AccountsSection::Kick {
+        kick_panel::draw_kick_panel(app, ui);
+        return;
+    }
+
     if app.account_setup_checked_at
         .is_none_or(|checked| checked.elapsed() >= Duration::from_secs(15))
     {
@@ -6675,126 +6710,20 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        // Separate authenticated viewer presence, actual HLS traffic and
-        // independently sampled point balances; do not confuse signals.
-        ui.add_space(9.0);
-        ui.collapsing(if pt_br() { "Kick · transmissões nativas" }
-                     else { "Kick · native streaming" }, |ui| {
-            ui.label(RichText::new(if pt_br() {
-                "Canais da Kick (separados por vírgula)"
-            } else {
-                "Kick channel names (comma separated)"
-            }).size(10.0).color(MUTED));
-            ui.add(egui::TextEdit::singleline(&mut app.kick_channels_input[index])
-                .hint_text("canal1, canal2")
-                .desired_width(ui.available_width()));
-            let monitoring = app.kick_monitors[index].is_some();
-            if !monitoring {
-                ui.label(RichText::new(if pt_br() {
-                    "Bearer token da sua conta Kick (não é token Developer API)"
-                } else {
-                    "Kick account Bearer token (not Developer API token)"
-                }).size(10.0).color(MUTED));
-                ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[index])
-                    .password(true).desired_width(ui.available_width()));
+        // Keep game/Twitch profile cards compact; Kick has its own workspace.
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            let kick_running = app.kick_monitors[index].is_some();
+            let kick_channels = crate::native_kick::normalize_channels(
+                &app.kick_channels_input[index]).map(|items| items.len()).unwrap_or(0);
+            ui.label(RichText::new(format!("Kick · {} {}",
+                kick_channels, if pt_br() { "canais" } else { "channels" }))
+                .size(10.0).color(if kick_running { GOOD } else { MUTED }));
+            if ui.small_button(if pt_br() { "Gerenciar Kick →" }
+                               else { "Manage Kick →" }).clicked() {
+                app.kick_selected_account = index;
+                app.accounts_section = AccountsSection::Kick;
             }
-            ui.horizontal_wrapped(|ui| {
-                if ui.small_button(if pt_br() { "Salvar canais" } else { "Save channels" }).clicked() {
-                    match Config::save_kick_channels(&app.kick_channels_input) {
-                        Ok(()) => app.set_status(if pt_br() {
-                            "Canais Kick salvos".into()
-                        } else { "Kick channels saved".into() }, false),
-                        Err(error) => app.set_status(error, true),
-                    }
-                }
-                if monitoring {
-                    if ui.small_button(if pt_br() { "Parar transmissões" } else { "Stop streams" }).clicked() {
-                        app.kick_monitors[index].take();
-                    }
-                } else if ui.small_button(if pt_br() { "Iniciar transmissões" }
-                                          else { "Start streaming" }).clicked() {
-                    let token = std::mem::take(&mut app.kick_api_token_input[index]);
-                    match KickMonitor::start(token, &app.kick_channels_input[index]) {
-                        Ok(monitor) => {
-                            app.kick_monitors[index] = Some(monitor);
-                            if let Err(error) = Config::save_kick_channels(&app.kick_channels_input) {
-                                app.set_status(error, true);
-                            } else {
-                                app.set_status(if pt_br() { "Kick iniciado: conectando aos canais" }
-                                               else { "Kick started: connecting to channels" }.into(), false);
-                            }
-                        }
-                        Err(error) => app.set_status(error, true),
-                    }
-                }
-                if ui.small_button(if pt_br() { "Abrir canais" }
-                                   else { "Open channels" }).clicked() {
-                    match crate::native_kick::normalize_channels(&app.kick_channels_input[index]) {
-                        Ok(channels) => match open_kick_channels_in_regular_browser(&channels) {
-                            Ok(_) => {},
-                            Err(error) => app.set_status(error, true),
-                        },
-                        Err(error) => app.set_status(error, true),
-                    }
-                }
-            });
-            if let Some(monitor) = app.kick_monitors[index].as_ref() {
-                let snapshot = monitor.snapshot();
-                ui.label(RichText::new(format!("Kick: {}", snapshot.phase))
-                    .size(10.0).color(if snapshot.phase == "Online" { GOOD } else { WARN }));
-                for channel in &snapshot.channels {
-                    let state = match channel.live {
-                        Some(true) => if pt_br() { "AO VIVO" } else { "LIVE" },
-                        Some(false) => if pt_br() { "offline" } else { "offline" },
-                        None => if pt_br() { "desconhecido" } else { "unknown" },
-                    };
-                    let count = channel.viewers.map(|n| format!(" · {n} viewers"))
-                        .unwrap_or_default();
-                    ui.label(RichText::new(format!("{}: {}{}", channel.slug, state, count))
-                        .size(10.0).color(if channel.live == Some(true) { GOOD } else { MUTED }));
-                    let watch = &channel.watch;
-                    let media_active = watch.media.last_segment
-                        .is_some_and(|instant| instant.elapsed() < Duration::from_secs(25));
-                    let ws_status = if watch.ws_connected {
-                        if watch.handshake_received { "WS OK" } else { "WS conectando" }
-                    } else { "WS offline" };
-                    let media_status = if media_active { if pt_br() { "recebendo mídia" } else { "media flowing" } }
-                        else { if pt_br() { "mídia inativa" } else { "media inactive" } };
-                    ui.label(RichText::new(format!(
-                        "{} · {} · {} {} · {:.1} MiB",
-                        ws_status, media_status, watch.media.segments,
-                        if pt_br() { "segmentos" } else { "segments" },
-                        watch.media.bytes as f64 / 1_048_576.0
-                    )).size(10.0)
-                        .color(if media_active && watch.ws_connected { GOOD } else { MUTED }));
-                    if let Some(balance) = watch.points {
-                        ui.label(RichText::new(format!(
-                            "{}: {} · {}: +{}",
-                            if pt_br() { "Pontos atuais" } else { "Current points" },
-                            balance,
-                            if pt_br() { "Ganho observado" } else { "Observed gain" },
-                            watch.points_gained
-                        )).size(11.0).strong()
-                            .color(if watch.points_gained > 0 { GOOD } else { MUTED }));
-                    } else {
-                        ui.label(RichText::new(if pt_br() {
-                            "Pontos ainda não disponíveis — sem ganho confirmado"
-                        } else { "Points not yet available — no gain confirmed" })
-                            .size(10.0).color(MUTED));
-                    }
-                    if let Some(error) = watch.error.as_ref().or(watch.media.error.as_ref()) {
-                        ui.label(RichText::new(error).size(9.0).color(WARN));
-                    }
-                }
-                if let Some(error) = snapshot.error {
-                    ui.label(RichText::new(error).size(10.0).color(WARN));
-                }
-            }
-            ui.label(RichText::new(if pt_br() {
-                "HLS transfere mídia sem abrir player. Ganhos só são confirmados por aumento do saldo real."
-            } else {
-                "HLS downloads media without opening a player. Gains require a real balance increase."
-            }).size(9.0).color(DIM));
         });
 
         let show_guide = !setup.setup_complete || app.show_setup_guide[index];
