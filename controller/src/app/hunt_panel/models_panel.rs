@@ -292,8 +292,8 @@ pub(super) fn draw_atlas_models(
         let share=spawn.weight/all_weight;
         let name=reference.and_then(|r|r.species.get(&spawn.id))
             .map(|m|m.name.as_str()).unwrap_or("Unknown");
-        let rarity=reference.and_then(|r|r.capture_rarities.get(&spawn.id)).copied();
-        let stage=reference.and_then(|r|r.capture_stages.get(&spawn.id)).copied();
+        let (stage,rarity)=reference.map(|r|
+            native_atlas::capture_inputs(r,spawn.id)).unwrap_or((None,None));
         let plan=kills.and_then(|speed|models::capture_scenario_with_stage(
             stage,rarity,efficiency,speed,share,
             scenario.accepted_fraction_override,outland,&scenario.modifiers));
