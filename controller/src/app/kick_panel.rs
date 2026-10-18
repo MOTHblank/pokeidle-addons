@@ -452,15 +452,15 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     crate::native_kick_login::LoginStatus::Running);
                 if busy {
                     ui.label(RichText::new(kick_label(br,
-                        "● Waiting for Kick login in Firefox…",
-                        "● Aguardando login na Kick pelo Firefox…"))
+                        "● Sign in to Kick, then CLOSE Firefox to import.",
+                        "● Entre na Kick e FECHE o Firefox para importar."))
                         .color(WARN));
                     if ui.button(kick_label(br, "Cancel", "Cancelar")).clicked() {
                         crate::native_kick_login::cancel(profile);
                     }
                 } else if ui.button(kick_label(br,
-                    "Open Firefox and import Kick login",
-                    "Entrar na Kick pelo Firefox")).clicked() {
+                    "Sign in with normal Firefox",
+                    "Entrar pelo Firefox normal")).clicked() {
                     if let Err(error) = crate::native_kick_login::start(profile) {
                         app.set_status(error, true);
                     }
@@ -475,8 +475,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new(message).size(10.0).color(WARN));
             }
             ui.label(RichText::new(kick_label(br,
-                "The temporary Firefox profile closes after successful capture. Finish the PokéIdle browser handoff first.",
-                "O Firefox temporário fecha ao importar o login. Conclua primeiro a conexão nativa do PokéIdle."))
+                "A clean, unmonitored Firefox profile opens with no Remote Agent. Complete login and close the window. The Kick session is then imported securely.",
+                "Abre um Firefox limpo, sem Remote Agent. Faça login e feche a janela. A sessão Kick será importada com segurança."))
                 .size(10.0).color(DIM));
             ui.collapsing(kick_label(br, "Advanced · Manual token",
                 "Avançado · Token manual"), |ui| {
