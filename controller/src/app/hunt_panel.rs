@@ -797,6 +797,7 @@ pub(super) struct ExplorerCache {
     roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
     roster_ready:bool,
     ball_quotes:Option<Arc<std::collections::BTreeMap<u64,native_hunts::BallQuote>>>,
+    gold_data_signature:Option<(u64,u64,bool,bool)>,
     initialized:bool,
     #[cfg(test)]
     rebuilds:usize,
@@ -816,12 +817,20 @@ impl ExplorerCache {
         // Retaining the previous source Arc prevents pointer reuse from
         // hiding a genuine server roster/catalog update.
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
+        // Measurements change every second. Invalidate only gold-sorted rows,
+        // and bucket by elapsed time and kills to avoid recomputing each repaint.
+        let gold_data_signature=(filters.sort==AtlasSort::Gold).then(||{
+            let m=&view.measurements;
+            ((m.seconds/20.0).max(0.0) as u64,m.kills/5,m.valid_gross_gold,
+                m.last_battle_age_secs.is_some_and(|age|age>180))
+        });
         let changed=!self.initialized ||
             self.filters.as_ref()!=Some(&key_filters) ||
             self.scenario.as_ref()!=Some(scenario) ||
             self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
             self.reference_ptr!=reference_ptr ||
             self.forecast_at!=estimates.refreshed ||
+            self.gold_data_signature!=gold_data_signature ||
             self.model_signature!=estimates.active_signature ||
             self.hunt_slug!=view.hunt_slug ||
             self.trainer_level!=view.trainer_level ||
@@ -837,6 +846,7 @@ impl ExplorerCache {
             self.catalog=Some(Arc::clone(&view.hunts));
             self.reference_ptr=reference_ptr;
             self.forecast_at=estimates.refreshed;
+            self.gold_data_signature=gold_data_signature;
             self.model_signature=estimates.active_signature;
             self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
@@ -1465,14 +1475,15 @@ fn draw_atlas_destination(
             if let Some(f)=dest.forecast.as_ref(){
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
-                        (tr("Trainer XP/h"),f.trainer_xp_h),
-                        (tr("Pokémon XP/h"),f.pokemon_xp_h),
-                        (tr("Gross gold/h"),f.gold_h),
-                        (tr("Kills/h"),f.kills_h),
+                        (tr("Trainer XP/h"),Some(f.trainer_xp_h)),
+                        (tr("Pokémon XP/h"),Some(f.pokemon_xp_h)),
+                        (tr("Gross gold/h"),f.calibrated.then_some(f.gold_h)),
+                        (tr("Kills/h"),Some(f.kills_h)),
                     ]{
                         ui.vertical(|ui|{
                             ui.label(RichText::new(label).size(9.0).color(DIM));
-                            ui.label(RichText::new(format_hunt_amount(value))
+                            ui.label(RichText::new(value.map(format_hunt_amount)
+                                .unwrap_or_else(||"—".into()))
                                 .size(11.0).strong().color(TEXT));
                         });
                         ui.add_space(12.0);
@@ -1482,7 +1493,8 @@ fn draw_atlas_destination(
                     "{} · {:.0}% {} · {} {} / h",
                     if f.calibrated{tr("Calibrated estimate")}else{tr("Early estimate")},
                     f.coverage*100.0,tr("species modeled"),tr("combat gold"),
-                    format_hunt_amount(f.combat_gold_h)
+                    if f.calibrated{format_hunt_amount(f.combat_gold_h)}
+                    else{"—".into()}
                 )).size(10.0).color(MUTED));
             }else{
                 ui.label(RichText::new(tr("Combat forecast unavailable for this location"))
@@ -1737,6 +1749,10 @@ fn draw_atlas_explorer(
         ui.label(RichText::new(
             tr("Shiny estimates use a base rate of 1 in 24,000 wild encounters outside Outland. Capture chances and extra bonuses are not included.")
         ).size(10.0).color(WARN));
+    }
+    if filters.sort==AtlasSort::Gold {
+        ui.label(RichText::new(tr("Gold comparisons use measured combat gold for the current hunt; other hunts use its kill pace as a scenario, not predicted DPS."))
+            .size(10.0).color(MUTED));
     }
     if filters.sort==AtlasSort::SaleValue {
         ui.label(RichText::new(tr("Catalog reference, not an observed market sale average."))
@@ -2224,12 +2240,12 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
-                        (tr("Trainer XP/h"),forecast.trainer_xp_h),
-                        (tr("Pokémon XP/h"),forecast.pokemon_xp_h),
-                        (tr("Gross gold/h"),forecast.gold_h),
-                        (tr("Kills/h"),forecast.kills_h),
+                        (tr("Trainer XP/h"),Some(forecast.trainer_xp_h)),
+                        (tr("Pokémon XP/h"),Some(forecast.pokemon_xp_h)),
+                        (tr("Gross gold/h"),forecast.calibrated.then_some(forecast.gold_h)),
+                        (tr("Kills/h"),Some(forecast.kills_h)),
                     ]{
-                        draw_rate(ui,label,Some(value),
+                        draw_rate(ui,label,value,
                             if forecast.calibrated {RateSource::Calibrated}
                             else {RateSource::Experimental});
                         ui.add_space(12.0);
@@ -2247,7 +2263,9 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         tr("Pokémon XP/kill"),format_hunt_amount(forecast.pokemon_xp_per_kill)
                     ));
                     ui.label(format!("{} {}",
-                        tr("Combat gold/h"),format_hunt_amount(forecast.combat_gold_h)));
+                        tr("Combat gold/h"),if forecast.calibrated {
+                            format_hunt_amount(forecast.combat_gold_h)
+                        }else{"—".into()}));
                 });
                 for (channel,observed,valid,estimate) in [
                     (tr("Trainer XP"),m.trainer_xp_h,m.valid_trainer,forecast.trainer_xp_h),
@@ -2543,7 +2561,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         ));
                         ui.label(tr("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded."));
                     });
-                    ui.label(RichText::new(tr("Gold forecasts are gross expected rewards, not measured net gold. Guide model uses approximate DPS and may significantly overestimate real combat throughput."))
+                    ui.label(RichText::new(tr("Gross combat gold from battle receipts is measured separately from wallet net gold. Other-hunt rates are calibrated estimates or same-pace scenarios; missing loot boosts are not guessed."))
                         .size(10.0).color(MUTED));
                 }
             }
@@ -2937,6 +2955,25 @@ mod tests {
         results.update(&view,None,&estimates,&filters,&scenario);
         assert_eq!(results.rebuilds,1);
         filters.min_level=80;
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,2);
+    }
+    #[test]
+    fn explorer_gold_cache_refreshes_on_new_combat_receipts(){
+        let mut view=HuntView::default();
+        let estimates=EstimateCache::default();
+        let scenario=AtlasScenario::default();
+        let filters=AtlasFilters{sort:AtlasSort::Gold,..AtlasFilters::default()};
+        let mut results=ExplorerCache::default();
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,1);
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,1);
+        view.measurements.seconds=40.0;
+        view.measurements.kills=10;
+        view.measurements.valid_gross_gold=true;
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,2);
         results.update(&view,None,&estimates,&filters,&scenario);
         assert_eq!(results.rebuilds,2);
     }
