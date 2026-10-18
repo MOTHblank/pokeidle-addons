@@ -50,16 +50,28 @@ impl ControllerApp {
             };
             let available = found.is_some();
             let channels = found.unwrap_or_default();
-            if self.kick_discovery_available[index] == available &&
-                self.kick_discovered_live[index] == channels {
-                continue;
+            let roster_changed = self.kick_discovery_available[index] != available ||
+                self.kick_discovered_live[index] != channels;
+            if roster_changed {
+                self.kick_discovery_available[index] = available;
+                self.kick_discovered_live[index] = channels;
             }
-            self.kick_discovery_available[index] = available;
-            self.kick_discovered_live[index] = channels;
-            let desired = desired_kick_channels(self, index);
+            let desired = if roster_changed {
+                Some(desired_kick_channels(self, index))
+            } else { None };
+            // Only the browserless native game socket supplies the complete
+            // official roster; the old browser bridge reports live names only.
+            let offline: Vec<String> = self.games[index].native.as_ref()
+                .and_then(|game| game.official_kick_roster())
+                .unwrap_or_default().into_iter()
+                .filter(|creator| !creator.live)
+                .map(|creator| creator.slug).collect();
             if let Some(monitor) = self.kick_monitors[index].as_mut() {
-                if let Err(error) = monitor.sync_channels(&desired) {
-                    logging::warn(&format!("Kick official channel sync failed: {error}"));
+                let outcome = desired.as_ref()
+                    .map(|names| monitor.sync_channels(names))
+                    .transpose().and_then(|_| monitor.sync_offline_officials(&offline));
+                if let Err(error) = outcome {
+                    logging::warn(&format!("Kick channel synchronization failed: {error}"));
                     self.set_status(error, true);
                 }
             }
