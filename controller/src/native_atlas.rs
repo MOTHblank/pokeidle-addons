@@ -305,6 +305,19 @@ pub fn finalize_capture_stages(reference:&mut Reference){
             }
         }
     }
+    // Cross-generation and repaired/truncated links are conditional upstream:
+    // a real evolvesToId always wins over the fallback.
+    for line in include_str!("../assets/visual/upstream-evolution-cross.tsv").lines(){
+        if line.starts_with('#'){continue}
+        let mut values=line.split('\t');
+        if let (Some(from),Some(to))=(values.next(),values.next()){
+            if let (Ok(from),Ok(to))=(from.parse::<u64>(),to.parse::<u64>()){
+                if !reference.capture_evolutions.contains_key(&from){
+                    links.push((from,to));
+                }
+            }
+        }
+    }
     for _ in 0..8 {
         let mut changed=false;
         for &(from,to) in &links {
