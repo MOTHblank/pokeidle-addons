@@ -262,8 +262,10 @@ pub fn pokeidle_live_officials(state: &serde_json::Value) -> Option<Vec<String>>
         if row.get("aoVivo").and_then(serde_json::Value::as_bool) != Some(true) {
             continue;
         }
-        let Some(raw) = row.get("slug").or_else(|| row.get("login"))
-            .and_then(serde_json::Value::as_str) else { continue; };
+        let Some(raw) = row.get("slug").and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| row.get("login").and_then(serde_json::Value::as_str))
+            else { continue; };
         // The game supplies names, not arbitrary URLs. Whitelist valid
         // channel names before passing them to Kick requests or UI.
         let slug = raw.trim().to_ascii_lowercase();
@@ -326,10 +328,11 @@ mod tests {
             {"login":"kicklive","aoVivo":true},
             {"login":"not_live","aoVivo":false},
             {"slug":"https://evil.invalid/path","aoVivo":true},
-            {"slug":"Another_One","aoVivo":true}
+            {"slug":"Another_One","aoVivo":true},
+            {"slug":null,"login":"Fallback","aoVivo":true}
         ]}});
         assert_eq!(pokeidle_live_officials(&state),
-            Some(vec!["another_one".into(), "kicklive".into()]));
+            Some(vec!["another_one".into(), "fallback".into(), "kicklive".into()]));
     }
     #[test]
     fn never_count_point_balance_as_earned_without_delta() {
