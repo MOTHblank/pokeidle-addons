@@ -1,6 +1,6 @@
 # Moth Controller — Linux (x86_64)
 
-O Moth Controller roda como **executável Rust nativo**, com interface X11 ou Wayland. Não usa Wine, WebView2, Tauri nem Violentmonkey. O Firefox é necessário somente para a autenticação ou para abrir manualmente o jogo; a sessão nativa pode continuar depois que o navegador fecha.
+O Moth Controller roda como **executável Rust nativo**, com interface X11 ou Wayland. Não necessita de Wine ou de um navegador incorporado. O Firefox é necessário somente para a autenticação ou para abrir manualmente o jogo; a sessão nativa pode continuar depois que o navegador fecha.
 
 ## Dependências
 
