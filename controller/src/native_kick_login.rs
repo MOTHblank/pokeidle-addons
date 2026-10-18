@@ -50,8 +50,37 @@ fn cookie_looks_like_kick_token(value: &str) -> bool {
         && secret.bytes().all(|b| b.is_ascii_graphic())
 }
 
-/// Return one unexpired Kick session token or None. Never copy other cookies
-/// or open an arbitrary Firefox profile/database.
+/// Decode URL-encoded session values such as 123%7Csecret, then
+/// validate the actual credential. All bytes remain local and bounded.
+fn decode_kick_session_cookie(value: &str) -> Option<String> {
+    let bytes = value.trim().as_bytes();
+    if bytes.is_empty() || bytes.len() > 8192 { return None; }
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = |b: u8| -> Option<u8> {
+                match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                }
+            };
+            decoded.push(hex(*bytes.get(i + 1)?)? * 16 +
+                hex(*bytes.get(i + 2)?)?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let token = String::from_utf8(decoded).ok()?;
+    cookie_looks_like_kick_token(&token).then_some(token)
+}
+
+/// Return one unexpired session credential from the selected account's
+/// first-party Kick cookie database. Do not touch other browser data.
 fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
     let path = profile_dir.join("cookies.sqlite");
     if !path.is_file() { return Ok(None); }
@@ -86,9 +115,9 @@ fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
                 let text = unsafe { sqlite3_column_text(stmt.0, 0) };
                 if text.is_null() { continue; }
                 let bytes = unsafe { std::slice::from_raw_parts(text, length as usize) };
-                if let Ok(token) = std::str::from_utf8(bytes) {
-                    if cookie_looks_like_kick_token(token) {
-                        return Ok(Some(token.to_owned()));
+                if let Ok(raw) = std::str::from_utf8(bytes) {
+                    if let Some(token) = decode_kick_session_cookie(raw) {
+                        return Ok(Some(token));
                     }
                 }
             }
@@ -176,17 +205,32 @@ fn kick_config(profile: GameProfile) -> Result<Config, String> {
 }
 pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String> {
     let config = kick_config(profile)?;
+    // A prior Firefox visit to Kick may already have a session. Avoid
+    // opening another login window when it can be reused directly.
+    if let Some(token) = read_kick_cookie(&config.profile_dir)? {
+        if cancelled.load(Ordering::Relaxed) { return Err("Kick login cancelled".into()); }
+        return native_auth::save_kick_token(profile, &token);
+    }
     if firefox::find_profile_process(&config)?.is_some() {
         return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Kick login again.".into());
     }
     let mut browser = firefox::launch_kick_login(&config)?;
-    // Ordinary Firefox is user-controlled. No inspection or interaction with
-    // its web pages: the user signs in and closes the browser when finished.
+    // The browser stays uninstrumented. Watch the local Firefox cookie
+    // database; no site scripts, Remote Agent or BiDi are involved.
     loop {
         if cancelled.load(Ordering::Relaxed) {
             let _ = browser.kill();
             let _ = browser.wait();
             return Err("Kick login cancelled".into());
+        }
+        // Read the first-party session during the active login. Some
+        // browsers clear transient cookies when the window is closed.
+        if let Ok(Some(token)) = read_kick_cookie(&config.profile_dir) {
+            native_auth::save_kick_token(profile, &token)?;
+            // The OS vault now owns the login. Close only the temporary
+            // Firefox process started by this button, not another account.
+            let _ = firefox::stop_child(&mut browser, None);
+            return Ok(());
         }
         match browser.try_wait() {
             Ok(Some(_)) => break,
@@ -198,14 +242,23 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
         return Err("Kick login cancelled".into());
     }
     let token = read_kick_cookie(&config.profile_dir)?.ok_or_else(|| {
-        "No valid Kick session_token was found. Sign in, then close the Firefox window.".to_owned()
+        "Kick login not detected. Sign in using Firefox; Moth will import automatically.".to_owned()
     })?;
     native_auth::save_kick_token(profile, &token)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::cookie_looks_like_kick_token;
+    use super::{cookie_looks_like_kick_token, decode_kick_session_cookie};
+    #[test]
+    fn decodes_percent_encoded_kick_cookies() {
+        let expected = Some("123|abcdefghijklmnop123456".to_owned());
+        assert_eq!(decode_kick_session_cookie("123%7Cabcdefghijklmnop123456"), expected);
+        assert_eq!(decode_kick_session_cookie("123%7cabcdefghijklmnop123456"), expected);
+        assert_eq!(decode_kick_session_cookie("123|abcdefghijklmnop123456"), expected);
+        assert_eq!(decode_kick_session_cookie("123%7Gabcdefghijklmnop123456"), None);
+        assert_eq!(decode_kick_session_cookie("123%25257Cabcdefghijklmnop123456"), None);
+    }
     #[test]
     fn accepts_site_session_format_only() {
         assert!(cookie_looks_like_kick_token("123|abcdefghijklmnop123456"));
