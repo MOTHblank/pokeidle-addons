@@ -1346,6 +1346,9 @@ mod tests {
             buyer.last_scan.insert(format!("pokemon:gold:{page}"),
                 now-Duration::from_secs(if page==0 {7} else {45}));
         }
+        // The other currency has a recent page-zero response, so the due
+        // Gold front page must win over an older Gold deep page.
+        buyer.last_scan.insert("pokemon:orb:0".into(),now-Duration::from_secs(2));
         // Without front-page priority the oldest deep page wins here.
         let cfg=MarketRules{enabled:true,rules:vec![BuyRule{
             id:"pokemon-rule".into(),kind:"pokemon_any".into(),currency:"gold".into(),
