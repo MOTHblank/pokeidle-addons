@@ -18,6 +18,38 @@ const HANDSHAKE_GAP: Duration = Duration::from_secs(30);
 const EVENT_GAP: Duration = Duration::from_secs(12);
 const POINTS_GAP: Duration = Duration::from_secs(120);
 
+/// Prevents an account from endlessly retrying rejected private Kick APIs.
+/// A new KickMonitor creates a fresh gate; no automatic token refresh loops.
+#[derive(Default)]
+pub struct AuthGate {
+    denied: AtomicBool,
+    lock: Mutex<()>,
+}
+impl AuthGate {
+    pub fn denied(&self) -> bool { self.denied.load(Ordering::Acquire) }
+    pub fn checked<T>(&self, operation: impl FnOnce() -> Result<T, String>)
+        -> Result<T, String>
+    {
+        if self.denied() {
+            return Err("Kick auth denied (401/403); private requests stopped".into());
+        }
+        let _lock = self.lock.lock()
+            .map_err(|_| "Kick authentication gate unavailable".to_owned())?;
+        if self.denied() {
+            return Err("Kick auth denied (401/403); private requests stopped".into());
+        }
+        let result = operation();
+        if let Err(error) = &result {
+            if error.contains("(401)") || error.contains("(403)") ||
+               error.contains("(401/403)") {
+                self.denied.store(true, Ordering::Release);
+            }
+        }
+        result
+    }
+}
+
+
 #[derive(Clone, Debug)]
 pub struct ChannelMeta {
     pub channel_id: u64,
@@ -168,7 +200,8 @@ pub fn point_balance(client: &Client, slug: &str, bearer: &str) -> Result<Option
         // A channel profile contains the creator's totals, NOT the viewer's
         // points. An unavailable private endpoint is an unknown balance.
         404 => Ok(None),
-        401 | 403 => Err("Kick points authorization denied (401/403)".into()),
+        401 => Err("Kick points rejected account authorization (401)".into()),
+        403 => Err("Kick points refused access, possibly challenge (403)".into()),
         429 => Err("Kick points request rate limited (429)".into()),
         code => Err(format!("Kick points request failed (HTTP {code})")),
     }
@@ -190,11 +223,16 @@ fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str) -> Result<Str
         ("X-Chatroom", meta.channel_id.to_string()),
         ("X-User-Id", meta.user_id.to_string()),
         ("Content-Type", "application/json".to_owned()),
+        // Kick's viewer client identifier, as used by the upstream miner.
+        ("X-Client-Token",
+            "e1393935a959b4020a4491574f6490129f678acdaa92760471263db43487f823"
+                .to_owned()),
     ];
     let (code, response) = private_get(client, TOKEN_ENDPOINT, bearer, &headers)?;
     match code {
         200 => {},
-        401 | 403 => return Err("Kick viewer-token authorization denied (401/403)".into()),
+        401 => return Err("Kick viewer-token rejected account authorization (401)".into()),
+        403 => return Err("Kick viewer-token refused access, possibly challenge (403)".into()),
         429 => return Err("Kick viewer-token request rate limited (429)".into()),
         code => return Err(format!("Kick viewer-token request failed (HTTP {code})")),
     }
@@ -252,11 +290,12 @@ fn watch_event(meta: &ChannelMeta) -> Value {
 /// as successful point earning.
 pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                   status: &Arc<Mutex<WatchTelemetry>>,
-                  stop: Arc<AtomicBool>, bearer: &str) -> Result<(), String> {
+                  stop: Arc<AtomicBool>, bearer: &str,
+                  auth: &AuthGate) -> Result<(), String> {
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
-    let token = viewer_token(client, meta, bearer)?;
+    let token = auth.checked(|| viewer_token(client, meta, bearer))?;
     let mut socket = ws_connect(&token)?;
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
@@ -289,7 +328,7 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
             last_event = Instant::now();
         }
         if last_points.elapsed() >= POINTS_GAP {
-            match point_balance(client, slug, bearer) {
+            match auth.checked(|| point_balance(client, slug, bearer)) {
                 Ok(balance) => {
                     if let Ok(mut state) = status.lock() {
                         observe_points(&mut state, balance);
