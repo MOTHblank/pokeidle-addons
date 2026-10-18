@@ -356,6 +356,16 @@ mod tests {
         assert_eq!(decode_kick_session_cookie("123%7Gabcdefghijklmnop123456"), None);
         assert_eq!(decode_kick_session_cookie("123%25257Cabcdefghijklmnop123456"), None);
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_sqlite_runtime_symbols_resolve() {
+        // Loading must not require the unversioned libsqlite3.so development
+        // symlink. The shared library stays loaded for the process lifetime.
+        let api = super::sqlite_api().expect("install libsqlite3-0 for Kick login");
+        assert_ne!(api.open as usize, 0);
+        assert_ne!(api.finalize as usize, 0);
+    }
+
     #[test]
     fn accepts_site_session_format_only() {
         assert!(cookie_looks_like_kick_token("123|abcdefghijklmnop123456"));
