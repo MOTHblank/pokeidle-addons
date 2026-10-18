@@ -5,6 +5,8 @@ mod app;
 mod config;
 mod kick;
 mod native_kick;
+mod native_kick_hls;
+mod native_kick_viewer;
 mod firefox;
 mod monitor;
 mod native_auth;
