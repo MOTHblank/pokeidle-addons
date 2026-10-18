@@ -71,6 +71,8 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
         "header = \"Accept: application/json, text/plain, */*\"\n\
          header = \"Origin: https://kick.com\"\n\
          header = \"Referer: https://kick.com/\"\n\
+         header = \"X-Requested-With: XMLHttpRequest\"\n\
+         header = \"Accept-Language: en-US,en;q=0.9\"\n\
          header = \"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"\n");
     fn quoted(value: &str) -> Result<String, String> {
         if value.is_empty() || value.len() > 8192 ||
@@ -85,7 +87,7 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
         ));
     }
     for (name, value) in extra_headers {
-        if !matches!(*name, "X-Chatroom" | "X-User-Id" | "Content-Type") {
+        if !matches!(*name, "X-Chatroom" | "X-User-Id" | "Content-Type" | "X-Client-Token") {
             return Err("Unexpected Kick API header".into());
         }
         config.push_str(&format!(
