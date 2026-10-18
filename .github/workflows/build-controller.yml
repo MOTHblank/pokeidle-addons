@@ -1,4 +1,4 @@
-name: Publicar release v0.1.6 (Windows e Linux)
+name: Publicar release v0.1.7 (Windows e Linux)
 
 # Only run this workflow when explicitly requested.
 on:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publicar-release-v0.1.6
+  group: publicar-release-v0.1.7
   cancel-in-progress: false
 
 jobs:
@@ -25,8 +25,8 @@ jobs:
         run: |
           set -euo pipefail
           versao="$(grep -m1 '^version = ' controller/Cargo.toml | cut -d '"' -f 2)"
-          test "$versao" = "0.1.6" || { echo "Cargo.toml deve estar em 0.1.6, não $versao"; exit 1; }
-          test -s .github/release-notes/v0.1.6.md || { echo "Notas de lançamento ausentes"; exit 1; }
+          test "$versao" = "0.1.7" || { echo "Cargo.toml deve estar em 0.1.7, não $versao"; exit 1; }
+          test -s .github/release-notes/v0.1.7.md || { echo "Notas de lançamento ausentes"; exit 1; }
 
   windows:
     name: Windows x86_64
@@ -56,7 +56,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $arquivo = 'moth-controller-v0.1.6-windows-x86_64.exe'
+          $arquivo = 'moth-controller-v0.1.7-windows-x86_64.exe'
           Copy-Item 'controller/target/release/moth-controller.exe' "dist/$arquivo"
           $hash = (Get-FileHash "dist/$arquivo" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $arquivo" | Set-Content -Encoding ascii "dist/$arquivo.sha256"
@@ -64,7 +64,7 @@ jobs:
       - name: Enviar artefato Windows
         uses: actions/upload-artifact@v4
         with:
-          name: moth-controller-v0.1.6-windows
+          name: moth-controller-v0.1.7-windows
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -85,7 +85,7 @@ jobs:
             pkg-config libssl-dev libgtk-3-dev libudev-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxkbcommon-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev
+            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-dev
 
       - name: Instalar Rust estável
         uses: dtolnay/rust-toolchain@stable
@@ -110,14 +110,15 @@ jobs:
           mkdir -p dist pacote
           install -m755 controller/target/release/moth-controller pacote/moth-controller
           cp .github/release-notes/LEIA-ME-LINUX.md pacote/LEIA-ME-LINUX.md
-          arquivo=moth-controller-v0.1.6-linux-x86_64.tar.gz
-          tar -czf "dist/$arquivo" -C pacote moth-controller LEIA-ME-LINUX.md
+          install -m755 controller/linux/check-linux-deps.sh pacote/check-linux-deps.sh
+          arquivo=moth-controller-v0.1.7-linux-x86_64.tar.gz
+          tar -czf "dist/$arquivo" -C pacote moth-controller check-linux-deps.sh LEIA-ME-LINUX.md
           (cd dist && sha256sum "$arquivo" > "$arquivo.sha256")
 
       - name: Enviar artefato Linux
         uses: actions/upload-artifact@v4
         with:
-          name: moth-controller-v0.1.6-linux
+          name: moth-controller-v0.1.7-linux
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -135,7 +136,7 @@ jobs:
       - name: Baixar os dois pacotes
         uses: actions/download-artifact@v4
         with:
-          pattern: moth-controller-v0.1.6-*
+          pattern: moth-controller-v0.1.7-*
           path: dist
           merge-multiple: true
 
@@ -143,23 +144,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s dist/moth-controller-v0.1.6-windows-x86_64.exe
-          test -s dist/moth-controller-v0.1.6-linux-x86_64.tar.gz
+          test -s dist/moth-controller-v0.1.7-windows-x86_64.exe
+          test -s dist/moth-controller-v0.1.7-linux-x86_64.tar.gz
           (cd dist && for arquivo in *.sha256; do sed -i 's/\r$//' "$arquivo"; done && sha256sum -c ./*.sha256)
 
-      - name: Publicar v0.1.6 somente após testes e checksums
+      - name: Publicar v0.1.7 somente após testes e checksums
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=v0.1.6
-          notas=.github/release-notes/v0.1.6.md
-          titulo='Moth Controller v0.1.6 — Windows e Linux'
-          # Never overwrite an existing published release. Preserve its binaries.
+          tag=v0.1.7
+          notas=.github/release-notes/v0.1.7.md
+          titulo='Moth Controller v0.1.7 — Windows e Linux'
+          # A Windows-only tag may already exist. Attach ONLY a missing Linux
+          # artifact; never overwrite either platform's published binaries.
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "A versão $tag já existe. Não será substituída automaticamente."
-            exit 1
+            linux=moth-controller-v0.1.7-linux-x86_64.tar.gz
+            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fxq "$linux"; then
+              echo "O pacote Linux já existe em $tag; nenhum arquivo foi sobrescrito."
+              exit 0
+            fi
+            gh release upload "$tag" "dist/$linux" "dist/$linux.sha256"
+            echo "Pacote Linux adicionado à release existente $tag."
+            exit 0
           fi
           gh release create "$tag" dist/* \
             --target "$GITHUB_SHA" \

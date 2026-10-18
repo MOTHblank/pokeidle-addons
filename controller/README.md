@@ -105,6 +105,12 @@ Linux usa um item separado no Secret Service. Não existe fallback para
 arquivo em texto simples. O token pode expirar e exigir substituição.
 Não compartilhe tokens em logs, issues ou repositórios.
 
+## Linux
+
+A versão Linux usa Firefox nativo, X11 ou Wayland, `libsqlite3` para importar o login do Kick e o serviço de segredos do desktop para guardar sessões sem arquivos em texto simples. Instale `libsecret-tools` e configure um chaveiro Secret Service desbloqueado (por exemplo, GNOME Keyring ou KWallet com suporte Secret Service). Também são necessários `curl` e `xdg-open` (`xdg-utils`).
+
+No arquivo Linux distribuído, execute `./check-linux-deps.sh` para identificar dependências ausentes. Consulte [as instruções Linux](../.github/release-notes/LEIA-ME-LINUX.md). Sem um chaveiro funcional, o aplicativo ainda pode pedir login pelo Firefox a cada execução; não salva credenciais em texto simples.
+
 ## Compilação
 
 No diretório `controller/`, execute:

@@ -249,11 +249,9 @@ fn format_spawn_error(error: io::Error) -> String {
     format!("could not start Firefox: {error}")
 }
 
-/// Open setup/login/Violentmonkey links using Firefox's normal command-line
-/// URL handler, rather than a WebDriver BiDi-created browsing context.
-/// Installing a userscript can interrupt a navigation while Violentmonkey
-/// takes over; a BiDi navigation failure must not discard the installer tab.
-/// This restores the setup path that worked before v0.1.3.
+/// Open user-requested game and login links with Firefox's normal URL
+/// handler rather than a BiDi-created browsing context. This leaves normal
+/// browser navigation independent of native game-session monitoring.
 pub fn open_url(config: &Config, url: &str) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("refusing to open a non-HTTPS URL".to_string());

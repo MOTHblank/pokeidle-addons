@@ -208,7 +208,7 @@ fn localize_status(message: String) -> String {
     let mut value = message;
     for (en, pt) in [
         ("Ready · launch only the profiles you need", "Pronto · inicie apenas os perfis de que precisa"),
-        ("Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe.", "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe."),
+        ("Firefox was not found. Install Firefox or set MOTH_FIREFOX to its executable path.", "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para o caminho do executável."),
         ("invalid page probe: ", "sondagem de página inválida: "),
         ("invalid controller bridge snapshot: ", "snapshot inválido da ponte do controlador: "),
         ("invalid BiDi JSON: ", "JSON BiDi inválido: "),
@@ -906,7 +906,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "baseline refresh requested" => "atualização da linha de base solicitada",
         "updated." => "atualizado.",
         "Twitch uses this Firefox profile for its session. All actions target this account." => "A Twitch usa este perfil do Firefox para sua sessão. Todas as ações usam esta conta.",
-        "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe." => "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para firefox.exe.",
+        "Firefox was not found. Install Firefox or set MOTH_FIREFOX to its executable path." => "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para o caminho do executável.",
         "Live state for enabled isolated Firefox profiles" => "Estado atual dos perfis isolados do Firefox habilitados",
         "Recent bot activity" => "Atividade recente do bot",
         "Profile folder" => "Pasta do perfil",

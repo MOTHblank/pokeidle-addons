@@ -30,7 +30,7 @@ jobs:
             pkg-config libssl-dev libgtk-3-dev libudev-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxkbcommon-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev
+            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-dev
       - name: Test native controller
         working-directory: controller
         run: cargo test
@@ -47,10 +47,33 @@ jobs:
           name: moth-native-preview-windows
           path: controller/target/release/moth-controller.exe
           if-no-files-found: error
-      - name: Upload Linux preview (branch only)
+      - name: Check Linux shared-library links
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ldd controller/target/release/moth-controller | tee /tmp/moth-linux-ldd.txt
+          if grep -q 'not found' /tmp/moth-linux-ldd.txt; then
+            echo 'Linux release has unresolved shared libraries'
+            exit 1
+          fi
+      - name: Package Linux preview
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/package
+          install -m755 controller/target/release/moth-controller dist/package/moth-controller
+          install -m755 controller/linux/check-linux-deps.sh dist/package/check-linux-deps.sh
+          cp .github/release-notes/LEIA-ME-LINUX.md dist/package/LEIA-ME-LINUX.md
+          file=moth-native-preview-linux-x86_64.tar.gz
+          tar -czf "dist/$file" -C dist/package moth-controller check-linux-deps.sh LEIA-ME-LINUX.md
+          (cd dist && sha256sum "$file" > "$file.sha256")
+      - name: Upload Linux preview (manual workflow)
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: moth-native-preview-linux
-          path: controller/target/release/moth-controller
+          path: |
+            dist/moth-native-preview-linux-x86_64.tar.gz
+            dist/moth-native-preview-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
