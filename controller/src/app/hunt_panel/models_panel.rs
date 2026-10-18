@@ -297,10 +297,10 @@ pub(super) fn draw_atlas_models(
         let plan=kills.and_then(|speed|models::capture_scenario_with_stage(
             stage,rarity,efficiency,speed,share,
             scenario.accepted_fraction_override,outland,&scenario.modifiers));
-        rows.push((spawn.id,name.to_owned(),share,rarity,plan));
+        rows.push((spawn.id,name.to_owned(),share,stage,plan));
     }
     rows.sort_by(|a,b|b.2.total_cmp(&a.2));
-    ui.label(RichText::new(tr_dynamic(format!("Capture forecasts · {} species · {} with rarity input",
+    ui.label(RichText::new(tr_dynamic(format!("Capture forecasts · {} species · {} with evolution-stage input",
         rows.len(),rows.iter().filter(|r|r.3.is_some()).count())))
         .size(12.0).strong().color(TEXT));
     egui::Frame::new().fill(PANEL).corner_radius(9.0)
