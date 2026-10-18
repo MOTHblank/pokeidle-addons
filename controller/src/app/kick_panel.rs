@@ -11,7 +11,61 @@ fn stored_channel_list(app: &ControllerApp, index: usize) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The official live roster takes priority; saved manual channels fill
+/// remaining slots. Never permanently persist volatile game-server results.
+pub(super) fn desired_kick_channels(app: &ControllerApp, index: usize) -> Vec<String> {
+    let mut names = if app.kick_discovery_available[index] {
+        app.kick_discovered_live[index].clone()
+    } else { Vec::new() };
+    for manual in stored_channel_list(app, index) {
+        if !names.iter().any(|name| name == &manual) {
+            names.push(manual);
+        }
+    }
+    names.truncate(12);
+    names
+}
+
 impl ControllerApp {
+    /// Discover Kick's official live channels from the exact same server
+    /// state used by the in-browser scanner: state.kick.oficiais.
+    /// Browser-bridge telemetry is a fallback during sign-in only.
+    pub(super) fn sync_pokeidle_kick_streamers(&mut self) {
+        for index in 0..4 {
+            let native = self.games[index].native.as_ref()
+                .and_then(|session| session.official_kick_live());
+            let found = if native.is_some() {
+                native
+            } else {
+                let health = self.games[index].health();
+                if health.kick_state_available && health.telemetry_is_fresh() {
+                    let urls = health.kick_streams.iter()
+                        .map(|item| item.url.as_str()).collect::<Vec<_>>().join(",");
+                    Some(if urls.is_empty() { Vec::new() } else {
+                        crate::native_kick::normalize_channels(&urls).unwrap_or_default()
+                    })
+                } else {
+                    None
+                }
+            };
+            let available = found.is_some();
+            let channels = found.unwrap_or_default();
+            if self.kick_discovery_available[index] == available &&
+                self.kick_discovered_live[index] == channels {
+                continue;
+            }
+            self.kick_discovery_available[index] = available;
+            self.kick_discovered_live[index] = channels;
+            let desired = desired_kick_channels(self, index);
+            if let Some(monitor) = self.kick_monitors[index].as_mut() {
+                if let Err(error) = monitor.sync_channels(&desired) {
+                    logging::warn(&format!("Kick official channel sync failed: {error}"));
+                    self.set_status(error, true);
+                }
+            }
+        }
+    }
+
     fn persist_kick_channels(&mut self) {
         match Config::save_kick_channels(&self.kick_channels_input) {
             Ok(()) => self.set_status(
@@ -53,9 +107,11 @@ impl ControllerApp {
     fn start_kick_account(&mut self, index: usize) {
         if self.kick_monitors[index].is_some() { return; }
         let Some(profile) = GameProfile::from_index(index) else { return; };
-        if stored_channel_list(self, index).is_empty() {
-            self.set_status(kick_label(pt_br(), "Add a Kick channel first",
-                "Adicione um canal Kick primeiro").into(), true);
+        let target = desired_kick_channels(self, index);
+        if target.is_empty() && !self.kick_discovery_available[index] {
+            self.set_status(kick_label(pt_br(),
+                "Start PokéIdle or add a Kick channel first",
+                "Inicie o PokéIdle ou adicione um canal Kick primeiro").into(), true);
             return;
         }
         // Prefer a freshly typed token, otherwise use the OS vault. Failed
@@ -75,7 +131,7 @@ impl ControllerApp {
                 Err(error) => { self.set_status(error, true); return; },
             }
         };
-        let monitor = match KickMonitor::start(token.clone(), &self.kick_channels_input[index]) {
+        let monitor = match KickMonitor::start(token.clone(), &target.join(",")) {
             Ok(worker) => worker,
             Err(error) => { self.set_status(error, true); return; },
         };
@@ -260,6 +316,9 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let monitor = app.kick_monitors[i].as_ref().map(|monitor| monitor.snapshot());
     let running = monitor.is_some();
     let configured = stored_channel_list(app, i);
+    let desired = desired_kick_channels(app, i);
+    let discovered = app.kick_discovered_live[i].clone();
+    let auto_available = app.kick_discovery_available[i];
     let online = monitor.as_ref().map(|snapshot|
         snapshot.channels.iter().filter(|c| c.live == Some(true)).count()).unwrap_or(0);
     let receiving = monitor.as_ref().map(|snapshot|
@@ -281,7 +340,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         ui.columns(3, |cols| {
             kick_metric(&mut cols[0], kick_label(br, "Live", "Ao vivo"),
-                format!("{online}/{}", configured.len()), if online > 0 { GOOD } else { TEXT });
+                format!("{online}/{}", desired.len()), if online > 0 { GOOD } else { TEXT });
             kick_metric(&mut cols[1], kick_label(br, "Receiving media", "Recebendo mídia"),
                 receiving.to_string(), if receiving > 0 { GOOD } else { TEXT });
             kick_metric(&mut cols[2], kick_label(br, "Points gained*", "Pontos ganhos*"),
@@ -338,10 +397,42 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         ui.label(RichText::new(kick_label(br, "2 · Channels", "2 · Canais"))
             .strong().size(14.0).color(TEXT));
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(if auto_available {
+                format!("{} {}",
+                    discovered.len(),
+                    kick_label(br, "official live channels detected on pokeidle.io",
+                        "canais oficiais ao vivo encontrados no pokeidle.io"))
+            } else {
+                kick_label(br,
+                    "Start your PokéIdle account to discover official Kick streamers.",
+                    "Inicie sua conta PokéIdle para descobrir os streamers oficiais da Kick.")
+                    .to_owned()
+            }).size(11.0).color(if auto_available { GOOD } else { MUTED }));
+        });
+        if !discovered.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for slug in &discovered {
+                    ui.label(RichText::new(format!("● {slug}"))
+                        .size(11.0).color(GOOD));
+                }
+            });
+        }
+        if discovered.len() + configured.iter()
+            .filter(|name| !discovered.contains(name)).count() > 12 {
+            ui.label(RichText::new(kick_label(br,
+                "12-channel limit: live official channels take priority.",
+                "Limite de 12 canais: os oficiais ao vivo têm prioridade."))
+                .size(10.0).color(WARN));
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new(kick_label(br,
+            "Manual channels (optional)", "Canais manuais (opcionais)"))
+            .size(11.0).color(MUTED));
         if configured.is_empty() {
             ui.label(RichText::new(kick_label(br,
-                "No channels configured. Add a Kick channel below.",
-                "Nenhum canal configurado. Adicione um canal abaixo."))
+                "Official PokéIdle channels are added automatically; add extras below if needed.",
+                "Canais oficiais do PokéIdle entram automaticamente. Adicione extras se desejar."))
                 .size(11.0).color(MUTED));
         } else {
             ui.horizontal_wrapped(|ui| {
@@ -372,8 +463,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
             ui.label(RichText::new(kick_label(br,
-                "Up to 12 channels per account. Changes save automatically.",
-                "Até 12 canais por conta. Alterações salvas automaticamente."))
+                "Up to 12 active channels. Manual choices are saved; official live channels update automatically.",
+                "Até 12 canais ativos. Os manuais ficam salvos; oficiais ao vivo atualizam automaticamente."))
                 .size(10.0).color(DIM));
         } else {
             ui.label(RichText::new(kick_label(br,
@@ -387,7 +478,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 if ui.button(kick_label(br, "■ Stop streams", "■ Parar transmissões")).clicked() {
                     app.stop_kick_account(i);
                 }
-            } else if ui.add_enabled(!configured.is_empty(),
+            } else if ui.add_enabled(!desired.is_empty() || auto_available,
                 egui::Button::new(kick_label(br, "▶ Start streams", "▶ Iniciar transmissões")))
                 .clicked()
             {
@@ -423,14 +514,15 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 });
                 ui.add_space(10.0);
             }
-        } else if !configured.is_empty() {
+        } else if !desired.is_empty() || auto_available {
             ui.label(RichText::new(kick_label(br,
                 "Start streams to display connection health and point balances.",
                 "Inicie as transmissões para ver conexões e saldos de pontos."))
                 .size(11.0).color(MUTED));
         } else {
             ui.label(RichText::new(kick_label(br,
-                "Add your first channel to begin.", "Adicione seu primeiro canal para começar."))
+                "Start PokéIdle to discover streamers or add a manual channel.",
+                "Inicie o PokéIdle para descobrir streamers ou adicione um canal manual."))
                 .size(11.0).color(MUTED));
         }
     });

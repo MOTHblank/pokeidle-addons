@@ -39,16 +39,28 @@ impl Default for KickSnapshot {
         }
     }
 }
+// A separate cancellation flag per channel allows PokéIdle's live roster
+// to change without restarting unrelated viewer/HLS sessions or losing the
+// observed point-balance baseline for streams that stay online.
+struct KickWorker {
+    slug: String,
+    telemetry: Arc<Mutex<WatchTelemetry>>,
+    stop: Arc<AtomicBool>,
+}
 pub struct KickMonitor {
     snapshot: Arc<Mutex<KickSnapshot>>,
-    observed: Vec<(String, Arc<Mutex<WatchTelemetry>>)>,
-    stop: Arc<AtomicBool>,
+    observed: Vec<KickWorker>,
+    token: String,
 }
 impl KickMonitor {
     pub fn start(token: String, input: &str) -> Result<Self, String> {
-        let slugs = normalize_channels(input)?;
-        // A Kick website account token is distinct from a Developer API
-        // access token. Never log or persist it, including failed requests.
+        // An empty official roster is valid: keep the session ready for the
+        // next PokéIdle live-state update, without creating a false channel.
+        let slugs = if input.trim().is_empty() {
+            Vec::new()
+        } else {
+            normalize_channels(input)?
+        };
         let trimmed = token.trim();
         let bearer = trimmed.strip_prefix("Bearer ").unwrap_or(trimmed).trim();
         if bearer.is_empty() || bearer.len() > MAX_TOKEN_LEN ||
@@ -56,47 +68,84 @@ impl KickMonitor {
         {
             return Err("A Kick account Bearer token is required".into());
         }
-        let snapshot = Arc::new(Mutex::new(KickSnapshot {
-            channels: slugs.iter().map(|slug| ChannelStatus {
-                slug: slug.clone(), live: None, title: String::new(),
-                viewers: None, watch: WatchTelemetry::default(), error: None,
-            }).collect(),
-            ..KickSnapshot::default()
-        }));
-        let stop = Arc::new(AtomicBool::new(false));
-        // One isolated supervisor per channel. Stagger connections to avoid
-        // a simultaneous burst from all four controller account profiles.
-        let mut observed = Vec::with_capacity(slugs.len());
-        for (offset, slug) in slugs.into_iter().enumerate() {
-            let state = Arc::new(Mutex::new(WatchTelemetry::default()));
-            let child_state = Arc::clone(&state);
-            let child_snapshot = Arc::clone(&snapshot);
-            let child_stop = Arc::clone(&stop);
-            let child_token = bearer.to_owned();
+        let mut monitor = Self {
+            snapshot: Arc::new(Mutex::new(KickSnapshot::default())),
+            observed: Vec::new(),
+            token: bearer.to_owned(),
+        };
+        monitor.sync_channels(&slugs)?;
+        Ok(monitor)
+    }
+
+    /// Reconcile active channels without interrupting unchanged streams.
+    /// Empty means no official live streams (unless manually selected).
+    /// Do not persist discovered channels as permanent manual preferences.
+    pub fn sync_channels(&mut self, slugs: &[String]) -> Result<(), String> {
+        let normalized = if slugs.is_empty() {
+            Vec::new()
+        } else {
+            normalize_channels(&slugs.join(","))?
+        };
+        let desired: BTreeSet<_> = normalized.iter().cloned().collect();
+        for worker in &self.observed {
+            if !desired.contains(&worker.slug) {
+                worker.stop.store(true, Ordering::Relaxed);
+            }
+        }
+        self.observed.retain(|w| desired.contains(&w.slug));
+        if let Ok(mut state) = self.snapshot.lock() {
+            state.channels.retain(|channel| desired.contains(&channel.slug));
+        }
+        for (offset, slug) in normalized.iter().enumerate() {
+            if self.observed.iter().any(|worker| worker.slug == *slug) {
+                continue;
+            }
+            let telemetry = Arc::new(Mutex::new(WatchTelemetry::default()));
+            let worker_stop = Arc::new(AtomicBool::new(false));
+            if let Ok(mut state) = self.snapshot.lock() {
+                state.channels.push(ChannelStatus {
+                    slug: slug.clone(), live: None, title: String::new(),
+                    viewers: None, watch: WatchTelemetry::default(), error: None,
+                });
+                state.channels.sort_by(|a,b| a.slug.cmp(&b.slug));
+            }
+            let child_state = Arc::clone(&telemetry);
+            let child_snapshot = Arc::clone(&self.snapshot);
+            let child_stop = Arc::clone(&worker_stop);
+            let child_token = self.token.clone();
             let child_slug = slug.clone();
-            let outcome = thread::Builder::new()
+            let result = thread::Builder::new()
                 .name("moth-kick-channel".into())
                 .spawn(move || {
-                    for _ in 0..offset.saturating_mul(7) {
+                    // A short stagger avoids bursts, without delaying already
+                    // active channels when the official list changes.
+                    for _ in 0..offset.min(5).saturating_mul(2) {
                         if child_stop.load(Ordering::Relaxed) { return; }
                         thread::sleep(Duration::from_secs(1));
                     }
                     channel_loop(child_token, child_slug, child_state,
                         child_snapshot, child_stop)
                 });
-            if outcome.is_err() {
-                stop.store(true, Ordering::Relaxed);
+            if result.is_err() {
+                worker_stop.store(true, Ordering::Relaxed);
+                if let Ok(mut state) = self.snapshot.lock() {
+                    state.channels.retain(|item| item.slug != *slug);
+                }
                 return Err("Could not start Kick channel worker".into());
             }
-            observed.push((slug, state));
+            self.observed.push(KickWorker {
+                slug: slug.clone(), telemetry, stop: worker_stop,
+            });
         }
-        Ok(Self { snapshot, observed, stop })
+        Ok(())
     }
     pub fn snapshot(&self) -> KickSnapshot {
         let mut state = self.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
         for channel in &mut state.channels {
-            if let Some((_, observed)) = self.observed.iter().find(|(slug, _)| slug == &channel.slug) {
-                if let Ok(watching) = observed.lock() {
+            if let Some(worker) = self.observed.iter()
+                .find(|worker| worker.slug == channel.slug)
+            {
+                if let Ok(watching) = worker.telemetry.lock() {
                     channel.watch = watching.clone();
                 }
             }
@@ -104,12 +153,15 @@ impl KickMonitor {
         state
     }
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        for worker in &self.observed {
+            worker.stop.store(true, Ordering::Relaxed);
+        }
     }
 }
 impl Drop for KickMonitor {
     fn drop(&mut self) { self.stop(); }
 }
+
 fn update_channel(snapshot: &Arc<Mutex<KickSnapshot>>, slug: &str,
                   action: impl FnOnce(&mut ChannelStatus)) {
     if let Ok(mut state) = snapshot.lock() {
@@ -200,6 +252,31 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
         }
     }
 }
+/// Official Kick streamers reported by PokéIdle (not general Kick search).
+/// `None` means roster data was not delivered; `Some([])` means all offline.
+/// Preserve all valid live names here; active session limits are applied later.
+pub fn pokeidle_live_officials(state: &serde_json::Value) -> Option<Vec<String>> {
+    let rows = state.get("kick")?.get("oficiais")?.as_array()?;
+    let mut names = BTreeSet::new();
+    for row in rows {
+        if row.get("aoVivo").and_then(serde_json::Value::as_bool) != Some(true) {
+            continue;
+        }
+        let Some(raw) = row.get("slug").and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| row.get("login").and_then(serde_json::Value::as_str))
+            else { continue; };
+        // The game supplies names, not arbitrary URLs. Whitelist valid
+        // channel names before passing them to Kick requests or UI.
+        let slug = raw.trim().to_ascii_lowercase();
+        if !slug.is_empty() && slug.len() <= 25 && slug.bytes().all(|b|
+            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') {
+            names.insert(slug);
+        }
+    }
+    Some(names.into_iter().collect())
+}
+
 /// Keep only validated public channel slugs (and official Kick links).
 pub fn normalize_channels(input: &str) -> Result<Vec<String>, String> {
     let mut channels = BTreeSet::new();
@@ -232,6 +309,30 @@ mod tests {
         assert!(normalize_channels("").is_err());
         assert!(normalize_channels(&(0..13).map(|i| format!("ch{i}"))
             .collect::<Vec<_>>().join(",")).is_err());
+    }
+    #[test]
+    fn can_start_waiting_for_official_kick_lives() {
+        assert!(normalize_channels("").is_err()); // empty manual input
+        let monitor = KickMonitor::start("local-test-token".into(), "").unwrap();
+        assert!(monitor.snapshot().channels.is_empty());
+        monitor.stop();
+    }
+    #[test]
+    fn official_pokeidle_kick_roster_is_live_only_and_deduplicated() {
+        use serde_json::json;
+        assert_eq!(pokeidle_live_officials(&json!({})), None);
+        assert_eq!(pokeidle_live_officials(&json!({"kick":{"oficiais":[]}})),
+            Some(Vec::new()));
+        let state = json!({"kick":{"oficiais":[
+            {"slug":"KickLive","aoVivo":true},
+            {"login":"kicklive","aoVivo":true},
+            {"login":"not_live","aoVivo":false},
+            {"slug":"https://evil.invalid/path","aoVivo":true},
+            {"slug":"Another_One","aoVivo":true},
+            {"slug":null,"login":"Fallback","aoVivo":true}
+        ]}});
+        assert_eq!(pokeidle_live_officials(&state),
+            Some(vec!["another_one".into(), "fallback".into(), "kicklive".into()]));
     }
     #[test]
     fn never_count_point_balance_as_earned_without_delta() {

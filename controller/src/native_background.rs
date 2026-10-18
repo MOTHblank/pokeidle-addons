@@ -56,6 +56,9 @@ pub struct NativeSnapshot {
     pub twitch_live: Vec<String>,
     pub twitch_watching: Vec<String>,
     pub twitch_bonus_pct: f32,
+    /// Live official Kick channels from the authenticated PokéIdle game state.
+    /// None = the server has not supplied the roster; Some(empty) = no one live.
+    pub kick_official_live: Option<Vec<String>>,
     pub error: Option<String>,
 }
 impl Default for NativeSnapshot {
@@ -72,6 +75,7 @@ impl Default for NativeSnapshot {
             pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
             pokemon_sale_error: None,
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
+            kick_official_live: None,
         }
     }
 }
@@ -342,6 +346,16 @@ impl NativeSession {
     pub fn snapshot(&self) -> NativeSnapshot {
         self.snapshot.lock().map(|status| status.clone()).unwrap_or_default()
     }
+    /// Cheap roster read for the Kick workspace. The native game snapshot
+    /// may contain much larger automation and market data.
+    pub fn official_kick_live(&self) -> Option<Vec<String>> {
+        let state = self.snapshot.lock().ok()?;
+        if state.phase != "Online" || state.last_received
+            .is_none_or(|at| at.elapsed() > Duration::from_secs(90)) {
+            return None;
+        }
+        state.kick_official_live.clone()
+    }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.twitch.stop();
@@ -483,6 +497,11 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
             }
             if let Some(slug) = state.get("huntSlug").and_then(Value::as_str) {
                 status.hunt_slug = Some(slug.to_owned());
+            }
+            // Keep PokéIdle's own Kick official roster authoritative. The
+            // optional value distinguishes unavailable data from an empty list.
+            if let Some(channels) = crate::native_kick::pokeidle_live_officials(state) {
+                status.kick_official_live = Some(channels);
             }
             if let Some(twitch) = state.get("twitch") {
                 if let Some(lives) = twitch.get("lives").and_then(Value::as_array) {
