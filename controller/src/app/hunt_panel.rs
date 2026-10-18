@@ -794,6 +794,7 @@ pub(super) struct ExplorerCache {
     model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool)>,
     hunt_slug:Option<String>,
     trainer_level:Option<u32>,
+    outland_catalog:Option<[(u32,f64);8]>,
     roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
     roster_ready:bool,
     ball_quotes:Option<Arc<std::collections::BTreeMap<u64,native_hunts::BallQuote>>>,
@@ -834,6 +835,7 @@ impl ExplorerCache {
             self.model_signature!=estimates.active_signature ||
             self.hunt_slug!=view.hunt_slug ||
             self.trainer_level!=view.trainer_level ||
+            self.outland_catalog!=view.outland_catalog ||
             self.roster.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.pokemon_roster)) ||
             self.roster_ready!=view.roster_ready ||
             self.ball_quotes.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.ball_quotes));
@@ -850,6 +852,7 @@ impl ExplorerCache {
             self.model_signature=estimates.active_signature;
             self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
+            self.outland_catalog=view.outland_catalog;
             self.roster=Some(Arc::clone(&view.pokemon_roster));
             self.roster_ready=view.roster_ready;
             self.ball_quotes=Some(Arc::clone(&view.ball_quotes));
@@ -958,9 +961,10 @@ fn atlas_species_rows(
                             &scenario.modifiers)
                     })).and_then(|estimate|estimate.shiny_caught_h),
                 AtlasSort::OutlandRare=>forecast.as_ref().and_then(|f|
-                    models::rare_scenarios(
+                    models::rare_scenarios_with_gate(
                         hunt.area.eq_ignore_ascii_case("outland"),hunt.level,
-                        scenario.tier,view.trainer_level,f.kills_h,&scenario.modifiers)
+                        view.outland_requirement(scenario.tier),
+                        view.trainer_level,f.kills_h,&scenario.modifiers)
                         .into_iter().find(|r|r.id==scenario.rare_target)
                         .map(|r|r.units_h)),
                 _=>base
