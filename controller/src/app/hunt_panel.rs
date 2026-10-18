@@ -938,27 +938,28 @@ fn atlas_species_rows(
             };
 
             let objective=match filters.sort {
-                AtlasSort::Capture=>reference.and_then(|r|
-                    r.capture_rarities.get(&spawn.id).copied())
-                    .and_then(|rarity|{
+                AtlasSort::Capture=>reference.and_then(|r|{
+                    let efficiency=view.ball_quotes.get(&scenario.ball.id())
+                        .and_then(|q|q.efficiency)
+                        .unwrap_or_else(||scenario.ball.wiki_efficiency());
+                    models::capture_chance_for_stage(
+                        r.capture_stages.get(&spawn.id).copied(),
+                        r.capture_rarities.get(&spawn.id).copied(),
+                        efficiency,0.0)
+                }).map(|chance|(chance*scenario.modifiers.catch_factor()).min(1.0)),
+                AtlasSort::ShinyCaught=>forecast.as_ref()
+                    .and_then(|f|reference.and_then(|r|{
                         let efficiency=view.ball_quotes.get(&scenario.ball.id())
                             .and_then(|q|q.efficiency)
                             .unwrap_or_else(||scenario.ball.wiki_efficiency());
-                        models::wiki_capture_chance(rarity,efficiency,0.0)
-                    })
-                    .map(|chance|(chance*scenario.modifiers.catch_factor()).min(1.0)),
-                AtlasSort::ShinyCaught=>forecast.as_ref()
-                    .and_then(|f|reference.and_then(|r|
-                        r.capture_rarities.get(&spawn.id).copied().and_then(|rarity|{
-                            let efficiency=view.ball_quotes.get(&scenario.ball.id())
-                                .and_then(|q|q.efficiency)
-                                .unwrap_or_else(||scenario.ball.wiki_efficiency());
-                            models::capture_scenario(Some(rarity),efficiency,f.kills_h,share,
-                                scenario.accepted_fraction_override,
-                                hunt.area.eq_ignore_ascii_case("outland"),
-                                &scenario.modifiers)
-                        })))
-                    .and_then(|estimate|estimate.shiny_caught_h),
+                        models::capture_scenario_with_stage(
+                            r.capture_stages.get(&spawn.id).copied(),
+                            r.capture_rarities.get(&spawn.id).copied(),
+                            efficiency,f.kills_h,share,
+                            scenario.accepted_fraction_override,
+                            hunt.area.eq_ignore_ascii_case("outland"),
+                            &scenario.modifiers)
+                    })).and_then(|estimate|estimate.shiny_caught_h),
                 AtlasSort::OutlandRare=>forecast.as_ref().and_then(|f|
                     models::rare_scenarios(
                         hunt.area.eq_ignore_ascii_case("outland"),hunt.level,
