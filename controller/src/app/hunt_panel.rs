@@ -2884,6 +2884,10 @@ mod tests {
         assert_eq!(rows[0].best,None);
         guide.capture_rarities.insert(1,12000.0);
         let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
+        assert_eq!(rows[0].best,None,
+            "Old economic rarity must not masquerade as ordinary hunt capture odds");
+        guide.capture_stages.insert(1,20);
+        let rows=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
         assert!(rows[0].best.is_some_and(|n|n>0.0&&n<=0.10));
         filters.sort=AtlasSort::SaleValue;
         assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario)[0].best,None);
