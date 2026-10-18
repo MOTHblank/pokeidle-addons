@@ -363,7 +363,8 @@ pub struct MarketBuyer {
     pending: VecDeque<usize>, pending_scan: Option<(Scan,Instant)>,
     last_scan: HashMap<String,Instant>, urgent_details: HashSet<String>,
     scan_sequence: u64, last_buy: Option<Instant>,
-    blocked: HashMap<u64, Instant>, backoff_until: Option<Instant>, failed_closed: bool,
+    blocked: HashMap<u64, Instant>, backoff_until: Option<Instant>,
+    scan_slow_until: Option<Instant>, failed_closed: bool,
     snatch:HashMap<u64,SnatchEntry>, snatch_closed:HashMap<u64,String>,
     snatch_verifying:HashMap<u64,Instant>, snatch_last_verify:HashMap<u64,Instant>,
     snatch_last_send:HashMap<u64,Instant>,
@@ -391,7 +392,8 @@ impl MarketBuyer {
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
             summary:BTreeMap::new(),pending:VecDeque::new(),pending_scan:None,last_scan:HashMap::new(),
             urgent_details:HashSet::new(),scan_sequence:0,
-            last_buy:None,blocked:HashMap::new(),backoff_until:None,failed_closed:error.is_some(),
+            last_buy:None,blocked:HashMap::new(),backoff_until:None,
+            scan_slow_until:None,failed_closed:error.is_some(),
             snatch:HashMap::new(),snatch_closed:HashMap::new(),
             snatch_verifying:HashMap::new(),snatch_last_verify:HashMap::new(),
             snatch_last_send:HashMap::new() }
@@ -609,6 +611,9 @@ impl MarketBuyer {
             if message.to_lowercase().contains("rate limit") || message.to_lowercase().contains("muitas mensagens") {
                 self.status.error=Some("Market request rate-limited; backing off".into());
                 self.backoff_until=Some(now+Duration::from_secs(15));
+                // Preserve release-time buying priority: repeated scan-limit
+                // errors must not keep the fast scanner active indefinitely.
+                self.scan_slow_until=Some(now+Duration::from_secs(180));
             }
         }
         if t!="market" {return}
@@ -766,7 +771,9 @@ impl MarketBuyer {
         // scanning retains its conservative two-second request spacing.
         let pokemon_buying=cfg.rules.iter().any(|r|
             r.enabled && r.buy_max>0 && r.kind.starts_with("pokemon_"));
-        let gap=if pokemon_buying {Duration::from_millis(1250)}
+        let gap=if self.scan_slow_until.is_some_and(|until|now<until) {
+            Duration::from_secs(3)
+        } else if pokemon_buying {Duration::from_millis(1250)}
             else {Duration::from_secs(2)};
         if self.last_scan.values().any(|at|now.saturating_duration_since(*at)<gap){return None}
         let mut targets=Vec::<(String,Scan,Value)>::new();
