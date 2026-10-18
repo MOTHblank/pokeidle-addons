@@ -59,17 +59,19 @@ impl ControllerApp {
             let desired = if roster_changed {
                 Some(desired_kick_channels(self, index))
             } else { None };
-            // Only the browserless native game socket supplies the complete
-            // official roster; the old browser bridge reports live names only.
-            let offline: Vec<String> = self.games[index].native.as_ref()
-                .and_then(|game| game.official_kick_roster())
-                .unwrap_or_default().into_iter()
-                .filter(|creator| !creator.live)
-                .map(|creator| creator.slug).collect();
+            // Query balances for any official creators *not* currently
+            // supervised, including online creators beyond the HLS limit.
+            // A single read-only poller handles them without video downloads.
+            let remaining: Vec<String> = if self.kick_monitors[index].is_some() {
+                self.games[index].native.as_ref()
+                    .and_then(|game| game.official_kick_roster())
+                    .unwrap_or_default().into_iter()
+                    .map(|creator| creator.slug).collect()
+            } else { Vec::new() };
             if let Some(monitor) = self.kick_monitors[index].as_mut() {
                 let outcome = desired.as_ref()
                     .map(|names| monitor.sync_channels(names))
-                    .transpose().and_then(|_| monitor.sync_offline_officials(&offline));
+                    .transpose().and_then(|_| monitor.sync_offline_officials(&remaining));
                 if let Err(error) = outcome {
                     logging::warn(&format!("Kick channel synchronization failed: {error}"));
                     self.set_status(error, true);
