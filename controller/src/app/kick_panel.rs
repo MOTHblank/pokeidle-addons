@@ -409,7 +409,19 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Game-reported live channels are not the same thing as native Kick
     // connections. Keep these measures separate instead of showing 0/N
     // whenever the Kick API rejects or delays its first response.
-    let online = channel_list.iter().filter(|c| c.live == Some(true)).count();
+    let online = if auto_available {
+        // The game already tells us which official streams are live, even
+        // while the independent Kick API is failing its first HTTP requests.
+        desired.iter().filter(|slug| discovered.contains(slug)).count()
+    } else {
+        monitor.as_ref().map(|snapshot| snapshot.channels.iter()
+            .filter(|channel| channel.live == Some(true)).count()).unwrap_or(0)
+    };
+    let online_source = if auto_available {
+        kick_label(br, "Live (PokéIdle)", "Ao vivo (PokéIdle)")
+    } else {
+        kick_label(br, "Live (Kick)", "Ao vivo (Kick)")
+    };
     let checked = monitor.as_ref().map(|snapshot|
         snapshot.channels.iter().filter(|c| c.live.is_some()).count()).unwrap_or(0);
     let receiving = monitor.as_ref().map(|snapshot|
@@ -430,8 +442,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
         ui.add_space(8.0);
         ui.columns(3, |cols| {
-            kick_metric(&mut cols[0], kick_label(br,
-                "Live (PokéIdle)", "Ao vivo (PokéIdle)"),
+            kick_metric(&mut cols[0], online_source,
                 format!("{online}/{}", desired.len()), if online > 0 { GOOD } else { TEXT });
             kick_metric(&mut cols[1], kick_label(br, "Kick API verified", "Verificados na Kick"),
                 format!("{checked}/{}", desired.len()),
