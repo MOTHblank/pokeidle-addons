@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::net::{SocketAddr, TcpStream};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use std::{thread, io};
 use tungstenite::{client, stream::MaybeTlsStream, Message, WebSocket};
@@ -160,6 +161,67 @@ fn stop_owned_browser(socket: &mut Socket, child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
+/// Safe, per-account UI state; never contains a credential.
+#[derive(Clone, Debug)]
+pub enum LoginStatus {
+    Idle,
+    Running,
+    Done,
+    Error(String),
+}
+struct LoginJob {
+    status: LoginStatus,
+    cancelled: Arc<AtomicBool>,
+}
+fn jobs() -> &'static Mutex<[LoginJob; 4]> {
+    static JOBS: OnceLock<Mutex<[LoginJob; 4]>> = OnceLock::new();
+    JOBS.get_or_init(|| Mutex::new(std::array::from_fn(|_| LoginJob {
+        status: LoginStatus::Idle,
+        cancelled: Arc::new(AtomicBool::new(false)),
+    })))
+}
+pub fn status(profile: GameProfile) -> LoginStatus {
+    jobs().lock().ok().map(|guard| guard[profile.index()].status.clone())
+        .unwrap_or(LoginStatus::Error("Kick login state unavailable".into()))
+}
+pub fn cancel(profile: GameProfile) {
+    if let Ok(guard) = jobs().lock() {
+        guard[profile.index()].cancelled.store(true, Ordering::Relaxed);
+    }
+}
+pub fn start(profile: GameProfile) -> Result<(), String> {
+    let cancelled = {
+        let mut guard = jobs().lock()
+            .map_err(|_| "Kick login state unavailable".to_owned())?;
+        let current = &mut guard[profile.index()];
+        if matches!(current.status, LoginStatus::Running) {
+            return Err("Kick login is already in progress".into());
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        current.status = LoginStatus::Running;
+        current.cancelled = Arc::clone(&cancelled);
+        cancelled
+    };
+    let outcome = thread::Builder::new()
+        .name(format!("moth-kick-login-{}", profile.name()))
+        .spawn(move || {
+            let result = login(profile, &cancelled);
+            if let Ok(mut guard) = jobs().lock() {
+                guard[profile.index()].status = match result {
+                    Ok(()) => LoginStatus::Done,
+                    Err(error) => LoginStatus::Error(error),
+                };
+            }
+        });
+    if let Err(error) = outcome {
+        if let Ok(mut guard) = jobs().lock() {
+            guard[profile.index()].status = LoginStatus::Idle;
+        }
+        return Err(format!("Could not start Kick Firefox login: {error}"));
+    }
+    Ok(())
+}
+
 pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String> {
     let config = Config::for_profile(profile)?;
     if firefox::find_profile_process(&config)?.is_some() {
