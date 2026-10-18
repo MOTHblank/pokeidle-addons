@@ -66,6 +66,24 @@ pub fn wiki_capture_chance(rarity:f64,efficiency:f64,hp_fraction:f64)->Option<f6
     let factor=1.0+r.powi(3)/17.0;
     Some((0.0075*efficiency/factor*(1.4-hp_fraction)).clamp(0.003,0.10))
 }
+/// v1.314.2: ordinary hunts use evolutionary-stage factors, not NPC value.
+/// Legendary / Mythical special encounters and missing stage data retain the
+/// old economic formula. Values are the canonical upstream shared constants.
+pub fn capture_chance_for_stage(stage:Option<u32>,rarity:Option<f64>,
+    efficiency:f64,hp_fraction:f64)->Option<f64>{
+    if !efficiency.is_finite()||efficiency<=0.0||
+        !hp_fraction.is_finite()||!(0.0..=1.0).contains(&hp_fraction){return None}
+    let factor=match stage {
+        Some(20)=>2.8669, Some(40)=>3.5745,
+        Some(_)=>4.4681,
+        None=>{
+            let price=rarity.filter(|n|n.is_finite()&&*n>0.0)?;
+            let r=price.max(100.0).log10()-1.0;
+            1.0+r.powi(3)/17.0
+        }
+    };
+    Some((0.0075*efficiency/factor*(1.4-hp_fraction)).clamp(0.003,0.10))
+}
 pub fn at_least_one(p:f64,rolls:f64)->Option<f64>{
     if !p.is_finite()||!(0.0..=1.0).contains(&p)
         ||!rolls.is_finite()||rolls<0.0{return None}
@@ -96,11 +114,19 @@ pub fn capture_scenario(
     rarity:Option<f64>,efficiency:f64,kill_h:f64,spawn_share:f64,
     accepted_fraction:Option<f64>,outland:bool,mods:&Modifiers
 )->Option<CaptureForecast>{
+    capture_scenario_with_stage(None,rarity,efficiency,kill_h,spawn_share,
+        accepted_fraction,outland,mods)
+}
+pub fn capture_scenario_with_stage(
+    stage:Option<u32>,rarity:Option<f64>,efficiency:f64,
+    kill_h:f64,spawn_share:f64,accepted_fraction:Option<f64>,
+    outland:bool,mods:&Modifiers
+)->Option<CaptureForecast>{
     if !mods.valid()||!kill_h.is_finite()||kill_h<0.0
         ||!spawn_share.is_finite()||!(0.0..=1.0).contains(&spawn_share)
         ||accepted_fraction.is_some_and(|v|!v.is_finite()||!(0.0..=1.0).contains(&v))
     {return None}
-    let chance=wiki_capture_chance(rarity?,efficiency,0.0)?;
+    let chance=capture_chance_for_stage(stage,rarity,efficiency,0.0)?;
     let chance=(chance*mods.catch_factor()).min(1.0);
     let accepted=kill_h*spawn_share*accepted_fraction.unwrap_or(1.0);
     let catches_h=accepted*chance;
@@ -194,6 +220,22 @@ mod tests {
         assert!(wiki_capture_chance(0.0,4.0,0.0).is_none());
         assert_eq!(catalog_rarity(Some(200),Some(100.0),None),
             Some((12000.0_f64*(200.0_f64/150.0).powf(0.6)).round()));
+    }
+    #[test] fn upstream_evolution_stage_capture_factors(){
+        let ordinary=|tier,ball|capture_chance_for_stage(Some(tier),None,ball,0.0).unwrap();
+        assert!((ordinary(20,8.0)-0.0293).abs()<0.00002);
+        assert!((ordinary(40,8.0)-0.0235).abs()<0.00002);
+        assert!((ordinary(100,8.0)-0.0188).abs()<0.00002);
+        assert!((ordinary(20,4.0)-0.0146).abs()<0.00002);
+        assert!((ordinary(40,4.0)-0.0117).abs()<0.00002);
+        assert!((ordinary(100,4.0)-0.0094).abs()<0.00002);
+        assert_eq!(capture_chance_for_stage(None,None,4.0,0.0),None);
+        assert_eq!(capture_chance_for_stage(None,Some(12000.0),4.0,0.0),
+            wiki_capture_chance(12000.0,4.0,0.0));
+        let m=Modifiers::default();
+        let forecast=capture_scenario_with_stage(Some(20),None,8.0,100.0,1.0,
+            None,false,&m).unwrap();
+        assert!((forecast.chance-ordinary(20,8.0)).abs()<1e-12);
     }
     #[test] fn capture_bonuses_and_ceiling_provenance(){
         let m=Modifiers::default();
