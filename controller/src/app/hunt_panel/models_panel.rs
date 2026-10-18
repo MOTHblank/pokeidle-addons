@@ -508,7 +508,7 @@ pub(super) fn draw_atlas_models(
                 }
             });
         });
-    ui.label(RichText::new(tr("No NPC loot or player-market proceeds are included."))
+    ui.label(RichText::new(tr("Converted ordinary loot is already included in combat gold. No NPC sales or player-market proceeds are assumed."))
         .size(10.0).color(MUTED));
     ui.add_space(10.0);
     ui.collapsing(tr("History & forecast comparisons"),|ui|{
