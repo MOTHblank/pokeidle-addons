@@ -233,6 +233,8 @@ fn kick_stream_card(ui: &mut egui::Ui, channel: &crate::native_kick::ChannelStat
 }
 pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let br = pt_br();
+    egui::ScrollArea::vertical().id_salt("kick_workspace")
+        .auto_shrink([false, true]).show(ui, |ui| {
     ui.label(RichText::new(kick_label(br, "Kick streams", "Transmissões Kick"))
         .font(FontId::proportional(22.0)).strong().color(TEXT));
     ui.label(RichText::new(kick_label(br,
@@ -294,8 +296,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .strong().size(14.0).color(TEXT));
         if app.kick_saved_login[i] {
             ui.label(RichText::new(kick_label(br,
-                "● Login protected by the operating system. Ready to start.",
-                "● Login protegido pelo sistema operacional. Pronto para iniciar."))
+                "● Token protected by the operating system (may expire).",
+                "● Token protegido pelo sistema (pode expirar)."))
                 .size(11.0).color(GOOD));
         } else {
             ui.label(RichText::new(kick_label(br,
@@ -402,8 +404,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         "* Ganhos exigem aumento real do saldo. Uma conexão ativa não confirma pontos."))
         .size(10.0).color(MUTED));
     ui.add_space(8.0);
-    egui::ScrollArea::vertical().id_salt(("kick_stream_cards",i))
-        .auto_shrink([false, true]).show(ui, |ui| {
+    ui.vertical(|ui| {
         if let Some(snapshot) = &monitor {
             let cols = if ui.available_width() >= 850.0 { 2 } else { 1 };
             let gap = 12.0;
@@ -432,5 +433,6 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 "Add your first channel to begin.", "Adicione seu primeiro canal para começar."))
                 .size(11.0).color(MUTED));
         }
+    });
     });
 }
