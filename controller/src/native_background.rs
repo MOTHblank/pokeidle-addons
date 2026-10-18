@@ -59,6 +59,8 @@ pub struct NativeSnapshot {
     /// Live official Kick channels from the authenticated PokéIdle game state.
     /// None = the server has not supplied the roster; Some(empty) = no one live.
     pub kick_official_live: Option<Vec<String>>,
+    /// Full official roster including offline creators, as reported by the game.
+    pub kick_official_roster: Option<Vec<crate::native_kick::OfficialKickChannel>>,
     pub error: Option<String>,
 }
 impl Default for NativeSnapshot {
@@ -75,7 +77,7 @@ impl Default for NativeSnapshot {
             pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
             pokemon_sale_error: None,
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
-            kick_official_live: None,
+            kick_official_live: None, kick_official_roster: None,
         }
     }
 }
@@ -356,6 +358,14 @@ impl NativeSession {
         }
         state.kick_official_live.clone()
     }
+    pub fn official_kick_roster(&self) -> Option<Vec<crate::native_kick::OfficialKickChannel>> {
+        let state = self.snapshot.lock().ok()?;
+        if state.phase != "Online" ||
+            state.last_received.is_none_or(|at| at.elapsed() > Duration::from_secs(90)) {
+            return None;
+        }
+        state.kick_official_roster.clone()
+    }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.twitch.stop();
@@ -500,8 +510,10 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
             }
             // Keep PokéIdle's own Kick official roster authoritative. The
             // optional value distinguishes unavailable data from an empty list.
-            if let Some(channels) = crate::native_kick::pokeidle_live_officials(state) {
-                status.kick_official_live = Some(channels);
+            if let Some(roster) = crate::native_kick::pokeidle_official_roster(state) {
+                status.kick_official_live = Some(roster.iter().filter(|entry| entry.live)
+                    .map(|entry| entry.slug.clone()).collect());
+                status.kick_official_roster = Some(roster);
             }
             if let Some(twitch) = state.get("twitch") {
                 if let Some(lives) = twitch.get("lives").and_then(Value::as_array) {
