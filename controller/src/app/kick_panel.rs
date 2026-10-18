@@ -475,8 +475,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new(message).size(10.0).color(WARN));
             }
             ui.label(RichText::new(kick_label(br,
-                "A clean, unmonitored Firefox profile opens with no Remote Agent. Complete login and close the window. The Kick session is then imported securely.",
-                "Abre um Firefox limpo, sem Remote Agent. Faça login e feche a janela. A sessão Kick será importada com segurança."))
+                "Reopens this account's PokéIdle Firefox profile without Remote Agent. Your existing Google login remains available. Finish the game's native handoff first; close Firefox after Kick login to import the session.",
+                "Reabre o mesmo perfil Firefox do PokéIdle, sem Remote Agent, aproveitando o login Google já existente. Conclua a conexão nativa do jogo antes; após entrar na Kick, feche o Firefox para importar a sessão."))
                 .size(10.0).color(DIM));
             ui.collapsing(kick_label(br, "Advanced · Manual token",
                 "Avançado · Token manual"), |ui| {
