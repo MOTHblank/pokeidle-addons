@@ -495,7 +495,7 @@ pub(super) fn draw_atlas_models(
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
                 for (label,num) in [
-                    (tr("Gross gold/h"),f.as_ref().map(|f|f.combat_gold_h)),
+                    (tr("Gross gold/h"),f.as_ref().filter(|f|f.calibrated).map(|f|f.combat_gold_h)),
                     (tr("Ball gold cost / h"),gold_cost),
                     (tr("Ball diamonds / h"),diamond_cost),
                 ]{
@@ -508,7 +508,7 @@ pub(super) fn draw_atlas_models(
                 }
             });
         });
-    ui.label(RichText::new(tr("No NPC loot or player-market proceeds are included."))
+    ui.label(RichText::new(tr("Converted ordinary loot is already included in combat gold. No NPC sales or player-market proceeds are assumed."))
         .size(10.0).color(MUTED));
     ui.add_space(10.0);
     ui.collapsing(tr("History & forecast comparisons"),|ui|{

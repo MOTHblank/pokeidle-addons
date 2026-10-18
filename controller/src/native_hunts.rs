@@ -147,6 +147,9 @@ pub struct HuntMeasurements {
     pub trainer_xp_h: f64,
     pub pokemon_xp_h: f64,
     pub gold_net_h: f64,
+    /// Gross Coins paid in server-confirmed wild-death receipts, excluding sales.
+    pub gold_gross_h: f64,
+    pub valid_gross_gold: bool,
     pub valid_trainer: bool,
     pub valid_pokemon: bool,
     pub valid_gold: bool,
@@ -233,8 +236,8 @@ struct Sample { at: Instant, trainer: Option<u64>, pokemon: Option<u64>, gold: O
 /// Manager-style battle statistics must not depend on a full state refresh.
 #[derive(Clone, Debug)]
 struct BattleSample {
-    at: Instant, trainer: u64, pokemon: u64, kills: u64,
-    trainer_receipts: u64, pokemon_receipts: u64,
+    at: Instant, trainer: u64, pokemon: u64, gold: u64, kills: u64,
+    trainer_receipts: u64, pokemon_receipts: u64, gold_receipts: u64,
 }
 const WINDOW: Duration = Duration::from_secs(600);
 const MIN_MEASUREMENT: f64 = 20.0;
@@ -250,6 +253,8 @@ pub struct HuntIntel {
     battle_pokemon: u64,
     battle_trainer_receipts: u64,
     battle_pokemon_receipts: u64,
+    battle_gold: u64,
+    battle_gold_receipts: u64,
     last_battle_at: Option<Instant>,
     last_combat_at: Option<Instant>,
     session_kills: u64,
@@ -266,6 +271,7 @@ impl HuntIntel {
             samples: VecDeque::new(), battle_samples: VecDeque::new(),
             battle_trainer: 0, battle_pokemon: 0,
             battle_trainer_receipts: 0, battle_pokemon_receipts: 0,
+            battle_gold: 0, battle_gold_receipts: 0,
             last_battle_at: None, last_combat_at: None, session_kills: 0,
             session_start: Instant::now(),
             recent_drops: VecDeque::new(), pending_at: None,
@@ -287,6 +293,7 @@ impl HuntIntel {
             self.view.measurements.valid_trainer=false;
             self.view.measurements.valid_pokemon=false;
             self.view.measurements.valid_gold=false;
+            self.view.measurements.valid_gross_gold=false;
             self.view.sample_quality="No confirmed kill in three minutes; measured pace expired".into();
         }
         if self.roster_dirty {
@@ -380,6 +387,8 @@ impl HuntIntel {
         self.battle_pokemon = 0;
         self.battle_trainer_receipts = 0;
         self.battle_pokemon_receipts = 0;
+        self.battle_gold = 0;
+        self.battle_gold_receipts = 0;
         self.session_kills = 0; // Reset the per-hunt *rate* baseline, not session totals.
         self.view.battle_kills = 0;
         self.last_battle_at = None;
@@ -404,12 +413,14 @@ impl HuntIntel {
             self.battle_pokemon = 0;
             self.battle_trainer_receipts = 0;
             self.battle_pokemon_receipts = 0;
+        self.battle_gold = 0;
+        self.battle_gold_receipts = 0;
             self.last_battle_at = None;
             self.last_combat_at = None;
             self.view.wild = None;
             self.battle_samples.push_back(BattleSample {
-                at: now, trainer: 0, pokemon: 0, kills: 0,
-                trainer_receipts: 0, pokemon_receipts: 0,
+                at: now, trainer: 0, pokemon: 0, gold: 0, kills: 0,
+                trainer_receipts: 0, pokemon_receipts: 0, gold_receipts: 0,
             });
             self.session_kills = 0;
             // Like Manager, keep accumulated session loot and XP across
@@ -580,11 +591,13 @@ impl HuntIntel {
                 self.battle_pokemon=0;
                 self.battle_trainer_receipts=0;
                 self.battle_pokemon_receipts=0;
+                self.battle_gold=0;
+                self.battle_gold_receipts=0;
                 self.last_battle_at=None;
                 self.last_combat_at=None;
                 self.battle_samples.push_back(BattleSample{
-                    at:now,trainer:0,pokemon:0,kills:self.session_kills,
-                    trainer_receipts:0,pokemon_receipts:0,
+                    at:now,trainer:0,pokemon:0,gold:0,kills:self.session_kills,
+                    trainer_receipts:0,pokemon_receipts:0,gold_receipts:0,
                 });
                 self.view.measurements = HuntMeasurements::default();
             }
@@ -793,17 +806,27 @@ impl HuntIntel {
                                     self.battle_pokemon_receipts=
                                         self.battle_pokemon_receipts.saturating_add(1);
                                 }
+                                // "ouro" is the actual kill payout, including the new
+                                // converted loot bonus; "ouroVendaAuto" is a sale, not raw gold.
+                                // Require a receipt for every kill in the observation window.
+                                if let Some(gold) = Self::num(e, "ouro") {
+                                    self.battle_gold=self.battle_gold.saturating_add(gold);
+                                    self.battle_gold_receipts=
+                                        self.battle_gold_receipts.saturating_add(1);
+                                }
                                 if self.battle_samples.is_empty() {
                                     self.battle_samples.push_back(BattleSample {
-                                        at: now, trainer: 0, pokemon: 0, kills: 0,
-                                        trainer_receipts: 0, pokemon_receipts: 0,
+                                        at: now, trainer: 0, pokemon: 0, gold: 0, kills: 0,
+                                        trainer_receipts: 0, pokemon_receipts: 0, gold_receipts: 0,
                                     });
                                 }
                                 self.battle_samples.push_back(BattleSample {
                                     at: now, trainer: self.battle_trainer,
-                                    pokemon: self.battle_pokemon, kills: self.session_kills,
+                                    pokemon: self.battle_pokemon, gold: self.battle_gold,
+                                    kills: self.session_kills,
                                     trainer_receipts: self.battle_trainer_receipts,
                                     pokemon_receipts: self.battle_pokemon_receipts,
+                                    gold_receipts: self.battle_gold_receipts,
                                 });
                                 for (key,dest) in [
                                     ("xpTreinador",&mut session.trainer_xp),
@@ -892,6 +915,12 @@ impl HuntIntel {
             measurements.pokemon_xp_h =
                 last.pokemon.saturating_sub(first.pokemon) as f64 * scale;
         }
+        measurements.valid_gross_gold =
+            last.gold_receipts.saturating_sub(first.gold_receipts)==kills;
+        if measurements.valid_gross_gold {
+            measurements.gold_gross_h =
+                last.gold.saturating_sub(first.gold) as f64 * scale;
+        }
         measurements.window_samples = self.battle_samples.len();
         self.view.sample_quality = if kills < 5 {
             "Early estimate · fewer than five battles recorded".into()
@@ -934,6 +963,8 @@ impl HuntIntel {
             trainer_xp_h: rate(first.trainer, last.trainer).unwrap_or(0.0),
             pokemon_xp_h: rate(first.pokemon, last.pokemon).unwrap_or(0.0),
             gold_net_h: net_gold.unwrap_or(0.0),
+            gold_gross_h: self.view.measurements.gold_gross_h,
+            valid_gross_gold: self.view.measurements.valid_gross_gold,
             valid_trainer: rate(first.trainer, last.trainer).is_some(),
             valid_pokemon: rate(first.pokemon, last.pokemon).is_some(),
             valid_gold: net_gold.is_some(),
@@ -954,15 +985,34 @@ pub fn base_xp(level: u32) -> f64 {
     if level <= 150 { (0.6 * n * n).floor() + 8.0 }
     else { (13_500.0 * (n / 150.0).powf(1.25)).floor() }
 }
+/// Actual base Coins per kill from shared/sell-value.mjs, capped at level 25k.
 pub fn base_gold(level: u32) -> f64 {
-    (36.0 * (level.min(25_000) as f64).powf(0.6007)).round()
+    if level == 0 { return 0.0; }
+    let exponent = (6000.0_f64 / 36.0).ln() / 5000.0_f64.ln();
+    (36.0 * (level.min(25_000) as f64).powf(exponent)).round().max(1.0)
+}
+/// Since 15 Oct 2026 the ordinary loot value is credited as Coins at death,
+/// not dropped as NPC-sellable items. This matches ouroDoAbate in the game's
+/// shared/recompensa-hunt.mjs; boosts multiply only the converted loot part.
+pub fn gross_gold_per_kill(level: u32, loot_boost_pct: f64) -> f64 {
+    if level == 0 { return 0.0; }
+    let base = base_gold(level);
+    let cap = base_gold(25_000);
+    let target_base = if level <= 25_000 {
+        base
+    } else {
+        cap * (level as f64 / 25_000.0).powf(0.30)
+    };
+    let loot = (target_base * 1.15).round().max(base) - base;
+    let bonus = if loot_boost_pct.is_finite() { loot_boost_pct.max(0.0) } else { 0.0 };
+    base + (loot * (1.0 + bonus / 100.0)).round()
 }
 /// A comparable *scenario* at the presently observed kill pace. Not an
 /// estimate of a different hunt's actual DPS, travel or XP bonuses.
 pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f64, f64)> {
     if measured_kills_h <= 0.0 || hunt.level == 0 { return None }
     Some((base_xp(hunt.level) * measured_kills_h,
-        base_gold(hunt.level) * measured_kills_h))
+        gross_gold_per_kill(hunt.level, 0.0) * measured_kills_h))
 }
 
 #[cfg(test)]
@@ -1263,6 +1313,50 @@ mod tests {
         assert_eq!(intel.view.automation.as_ref().unwrap()["autoRevive"],true);
         assert_eq!(intel.view.wild.as_ref().unwrap().slot,5);
         assert_eq!(intel.snapshot().pokemon_roster.len(),1);
+    }
+    #[test]
+    fn gold_payout_matches_upstream_loot_conversion_and_high_level_cap() {
+        assert_eq!(base_gold(1),36.0);
+        assert_eq!(base_gold(5_000),6_000.0);
+        assert_eq!(base_gold(25_000),base_gold(160_300));
+        assert_eq!(gross_gold_per_kill(1,0.0),41.0);
+        assert_eq!(gross_gold_per_kill(100,0.0),658.0);
+        assert_eq!(gross_gold_per_kill(100,40.0),692.0);
+        assert_eq!(gross_gold_per_kill(25_000,0.0),18_142.0);
+        assert_eq!(gross_gold_per_kill(160_300,0.0),31_681.0);
+        assert_eq!(gross_gold_per_kill(160_300,40.0),38_043.0);
+        assert_eq!(gross_gold_per_kill(0,0.0),0.0);
+    }
+    #[test]
+    fn receipts_measure_combat_gold_separately_from_wallet_spend_and_sales() {
+        let mut model=HuntIntel::new();
+        let now=Instant::now();
+        model.ingest(r#"{"t":"welcome","hunts":[{"slug":"a","nome":"A"}],
+            "estado":{"huntSlug":"a","gold":1000}}"#,now);
+        for elapsed in [20,40] {
+            model.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
+                "ouro":658,"ouroVendaAuto":1000000,"xpTreinador":100,"xpPokemon":100}]}"#,
+                now+Duration::from_secs(elapsed));
+        }
+        model.ingest(r#"{"t":"estado","estado":{"gold":400}}"#,
+            now+Duration::from_secs(60));
+        assert!(model.view.measurements.valid_gross_gold);
+        assert_eq!(model.view.measurements.gold_gross_h,118_440.0);
+        assert_eq!(model.view.measurements.gold_net_h,-36_000.0);
+        assert_eq!(model.view.session.combat_gold,1316);
+        assert_eq!(model.view.session.auto_sale_gold,2_000_000);
+    }
+    #[test]
+    fn missing_gold_receipt_does_not_fabricate_gross_income() {
+        let mut model=HuntIntel::new();
+        let now=Instant::now();
+        model.ingest(r#"{"t":"welcome","hunts":[{"slug":"a"}],
+            "estado":{"huntSlug":"a","gold":500}}"#,now);
+        model.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
+            "ouro":500}]}"#,now+Duration::from_secs(20));
+        model.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem"}]}"#,
+            now+Duration::from_secs(40));
+        assert!(!model.view.measurements.valid_gross_gold);
     }
     #[test]
     fn measured_net_gold_includes_negative_spend() {

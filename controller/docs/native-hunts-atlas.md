@@ -127,3 +127,27 @@ actual currency snapshots; it is never fabricated from gross battle earnings.
 These are native egui improvements, **not a complete React/Tauri Manager
 interface port**. No live authenticated game regression test or Rust compiler
 was available in the editing environment.
+
+
+## Gold/hour correction (17 October 2026)
+
+Following the 15 October upstream change in `shared/recompensa-hunt.mjs`,
+ordinary NPC-resellable loot no longer drops. Instead, each wild kill deposits
+base gold plus its converted loot bonus. The native forecast uses the upstream
+gold cap at level 25,000, a 15% converted-loot target below the cap, and the
+0.30 high-level target exponent above the cap. Known guild loot bonuses apply
+only to the converted-loot portion; missing store and event boosts are not guessed.
+
+**Measured gross combat Coins/hour** comes from actual `batalha.ev`
+`k=morte, quem=selvagem, ouro` receipts and excludes `ouroVendaAuto`.
+It is valid only when all kills in the observation window have receipts.
+**Wallet net Coins/hour** instead uses `estado.gold` deltas and may be negative
+because it includes purchases, capture costs, and auto-sales. Do not compare
+wallet net directly to projected gross gold. Gold-sorted Hunt Atlas now uses
+measured gross for the current hunt, calibrated forecasts where possible,
+and clearly identified same-pace scenarios otherwise. Without reliable combat
+measurements, uncalibrated gross gold estimates are hidden instead of ranked
+as realistic earnings.
+
+Regression tests cover payout anchors, >25,000 scaling, gross-versus-net
+ledger separation, missing receipts, and Explorer cache invalidation.
