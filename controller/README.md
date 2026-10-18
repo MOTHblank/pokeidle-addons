@@ -54,9 +54,16 @@ duplicar toda a configuração.
    próximas execuções. **Parar transmissões** encerra as conexões. Para
    remover o token do cofre, utilize **Esquecer login salvo**; isto também
    encerra as transmissões da conta.
-5. **Atividade:** cartões responsivos mostram cada canal, estado ao vivo,
-   conexão WebSocket, fluxo HLS, saldo de pontos e ganho observado. A
-   seção **Detalhes da conexão** concentra bytes, segmentos, bitrate e erros.
+5. **Canais Kick:** lista compacta com **uma linha por canal**, incluindo
+   os streamers oficiais que estejam **offline**. Exibe o nome, **AO VIVO /
+   OFFLINE / Não verificado**, o **saldo de pontos individual da conta
+   naquele canal** e o botão **Abrir ↗**. Os dados de WebSocket/HLS ficam
+   em **Detalhes**. O saldo vem somente de uma resposta autenticada da Kick;
+   **— significa indisponível, nunca zero**. Dados antigos são sinalizados.
+   Com o monitor iniciado, um único worker de baixa frequência consulta os
+   canais oficiais sem transmissão, sem abrir HLS ou criar uma thread por
+   streamer offline. A lista oficial completa vem da sessão nativa do
+   PokéIdle; no fallback do navegador podem aparecer somente os ao vivo.
 
 **Interpretação dos pontos:** apenas a diferença positiva entre duas
 consultas numéricas válidas do saldo da própria conta é contabilizada como
