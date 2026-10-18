@@ -224,7 +224,7 @@ pub(super) fn draw_atlas_models(
             .inner_margin(egui::Margin::same(9)).show(ui,|ui|{
                 let m=&mut scenario.modifiers;
                 ui.horizontal_wrapped(|ui|{
-                    ui.checkbox(&mut m.capture_boost,tr("Capture boost ×1.5"));
+                    ui.checkbox(&mut m.capture_boost,tr("Capture boost ×2"));
                     ui.checkbox(&mut m.shiny_boost,tr("Shiny boost ×1.5"));
                     ui.checkbox(&mut m.kick_capture,tr("Kick catch ×1.15"));
                     ui.checkbox(&mut m.kick_shiny,tr("Kick shiny ×1.15"));
