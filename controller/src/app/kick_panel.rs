@@ -173,6 +173,7 @@ impl ControllerApp {
                 self.kick_monitors[index].take();
                 self.kick_api_token_input[index].clear();
                 self.kick_saved_login[index] = false;
+                crate::native_kick_login::reset(profile);
                 self.set_status(kick_label(pt_br(), "Saved Kick login removed",
                     "Login Kick salvo removido"), false);
             },
@@ -313,6 +314,11 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
     ui.add_space(10.0);
     let i = app.kick_selected_account.min(3);
+    let profile = GameProfile::from_index(i).expect("known Kick profile");
+    let kick_login_status = crate::native_kick_login::status(profile);
+    if matches!(kick_login_status, crate::native_kick_login::LoginStatus::Done) {
+        app.kick_saved_login[i] = true;
+    }
     let monitor = app.kick_monitors[i].as_ref().map(|monitor| monitor.snapshot());
     let running = monitor.is_some();
     let configured = stored_channel_list(app, i);
@@ -355,39 +361,61 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .strong().size(14.0).color(TEXT));
         if app.kick_saved_login[i] {
             ui.label(RichText::new(kick_label(br,
-                "● Token protected by the operating system (may expire).",
-                "● Token protegido pelo sistema (pode expirar)."))
+                "● Kick login saved securely in your operating system.",
+                "● Login Kick salvo com proteção do sistema."))
                 .size(11.0).color(GOOD));
         } else {
             ui.label(RichText::new(kick_label(br,
-                "Login is not configured. Use your own Kick account Bearer token.",
-                "Login não configurado. Use o token Bearer da sua própria conta Kick."))
+                "Authenticate once with this account's Firefox profile.",
+                "Entre uma vez na Kick com o Firefox deste perfil."))
                 .size(11.0).color(MUTED));
         }
         if !running {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(kick_label(br, "Token", "Token")).size(10.0).color(MUTED));
-                ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[i])
-                    .password(true).hint_text(kick_label(br,
-                        "Paste to sign in or replace saved login",
-                        "Cole para entrar ou substituir o login salvo"))
-                    .desired_width(ui.available_width().min(550.0)));
-            });
-            ui.checkbox(&mut app.kick_remember_login[i], kick_label(br,
-                "Remember login securely (OS vault)", "Salvar login com proteção do sistema"));
             ui.horizontal_wrapped(|ui| {
-                ui.hyperlink_to(kick_label(br, "Open Kick login ↗", "Abrir login da Kick ↗"),
-                    "https://kick.com/");
+                let busy = matches!(kick_login_status,
+                    crate::native_kick_login::LoginStatus::Running);
+                if busy {
+                    ui.label(RichText::new(kick_label(br,
+                        "● Waiting for Kick login in Firefox…",
+                        "● Aguardando login na Kick pelo Firefox…"))
+                        .color(WARN));
+                    if ui.button(kick_label(br, "Cancel", "Cancelar")).clicked() {
+                        crate::native_kick_login::cancel(profile);
+                    }
+                } else if ui.button(kick_label(br,
+                    "Open Firefox and import Kick login",
+                    "Entrar na Kick pelo Firefox")).clicked() {
+                    if let Err(error) = crate::native_kick_login::start(profile) {
+                        app.set_status(error, true);
+                    }
+                }
                 if app.kick_saved_login[i] &&
-                    ui.small_button(kick_label(br, "Forget saved login", "Esquecer login salvo")).clicked()
-                {
+                    ui.small_button(kick_label(br,
+                        "Forget login", "Esquecer login")).clicked() {
                     app.forget_kick_account(i);
                 }
             });
+            if let crate::native_kick_login::LoginStatus::Error(message) = &kick_login_status {
+                ui.label(RichText::new(message).size(10.0).color(WARN));
+            }
             ui.label(RichText::new(kick_label(br,
-                "Automatic Kick sign-in is not available. The Bearer token is a secret; never share it.",
-                "Login automático da Kick ainda não existe. O token Bearer é secreto; não o compartilhe."))
+                "The temporary Firefox profile closes after successful capture. Finish the PokéIdle browser handoff first.",
+                "O Firefox temporário fecha ao importar o login. Conclua primeiro a conexão nativa do PokéIdle."))
                 .size(10.0).color(DIM));
+            ui.collapsing(kick_label(br, "Advanced · Manual token",
+                "Avançado · Token manual"), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[i])
+                    .password(true)
+                    .hint_text(kick_label(br, "Kick account Bearer token",
+                        "Token Bearer da conta Kick"))
+                    .desired_width(ui.available_width().min(480.0)));
+                ui.checkbox(&mut app.kick_remember_login[i],
+                    kick_label(br, "Save in OS vault", "Salvar no cofre do sistema"));
+                ui.label(RichText::new(kick_label(br,
+                    "Fallback only. Never share your token.",
+                    "Apenas alternativa. Nunca compartilhe seu token."))
+                    .size(10.0).color(DIM));
+            });
         } else {
             ui.label(RichText::new(kick_label(br,
                 "The token entry stays hidden while streaming.",
