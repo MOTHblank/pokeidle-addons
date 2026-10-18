@@ -2,7 +2,7 @@
 //! No Remote Agent, BiDi, WebDriver, injected scripts or page automation.
 //! After Firefox closes, import only this profile's own Kick session cookie
 //! from its local cookie database and store it in the OS credential vault.
-use crate::config::{self, Config, GameProfile};
+use crate::config::{Config, GameProfile};
 use crate::{firefox, native_auth};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::path::Path;
@@ -167,18 +167,17 @@ fn reset_after_spawn_failure(profile: GameProfile) {
     }
 }
 
-/// This profile is separate from Game1..Game4 so Kick login remains a regular
-/// Firefox session even while PokéIdle's native game session is running.
+/// Reuse the *same* Game1..Game4 Firefox profile that authenticated
+/// PokéIdle and Google. The normal browser can only open after the game's
+/// BiDi handoff closed Firefox and released its profile lock. Starting with
+/// no Remote Agent does not erase existing cookies, Google sessions or prefs.
 fn kick_config(profile: GameProfile) -> Result<Config, String> {
-    let mut config = Config::for_profile(profile)?;
-    config.profile_dir = config::data_root()?.join("Kick-Profiles").join(profile.name());
-    config.url = "https://kick.com/".into();
-    Ok(config)
+    Config::for_profile(profile)
 }
 pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String> {
     let config = kick_config(profile)?;
     if firefox::find_profile_process(&config)?.is_some() {
-        return Err("A Kick Firefox window is already using this profile".into());
+        return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Kick login again.".into());
     }
     let mut browser = firefox::launch_kick_login(&config)?;
     // Ordinary Firefox is user-controlled. No inspection or interaction with
