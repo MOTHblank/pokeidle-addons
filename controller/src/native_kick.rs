@@ -3,7 +3,6 @@
 //! balances are distinct signals. Only an observed increase of a real
 //! authenticated point balance is reported as points earned.
 use crate::native_kick_viewer::{self, WatchTelemetry};
-use serde_json::Value;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
