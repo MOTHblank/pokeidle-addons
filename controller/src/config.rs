@@ -336,7 +336,7 @@ pub struct Config {
 impl Config {
     pub fn for_profile(profile: GameProfile) -> Result<Self, String> {
         let firefox_executable = find_firefox().ok_or_else(|| {
-            "Firefox was not found. Install Firefox or set MOTH_FIREFOX to firefox.exe."
+            "Firefox was not found. Install Firefox or set MOTH_FIREFOX to its executable path."
                 .to_string()
         })?;
 
@@ -383,6 +383,18 @@ fn find_firefox() -> Option<PathBuf> {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);
+        }
+        // Accept MOTH_FIREFOX=firefox as well as an absolute executable path
+        // on Linux. Never attempt to pass a shell command to Command::new.
+        #[cfg(not(windows))]
+        if path.components().count() == 1 {
+            if let Some(executable) = path.to_str() {
+                if let Some(found) = firefox_from_path(&[executable])
+                    .into_iter().find(|candidate| candidate.is_file())
+                {
+                    return Some(found);
+                }
+            }
         }
     }
 
