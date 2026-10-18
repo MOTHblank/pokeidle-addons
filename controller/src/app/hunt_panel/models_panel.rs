@@ -293,8 +293,9 @@ pub(super) fn draw_atlas_models(
         let name=reference.and_then(|r|r.species.get(&spawn.id))
             .map(|m|m.name.as_str()).unwrap_or("Unknown");
         let rarity=reference.and_then(|r|r.capture_rarities.get(&spawn.id)).copied();
-        let plan=kills.and_then(|speed|models::capture_scenario(
-            rarity,efficiency,speed,share,
+        let stage=reference.and_then(|r|r.capture_stages.get(&spawn.id)).copied();
+        let plan=kills.and_then(|speed|models::capture_scenario_with_stage(
+            stage,rarity,efficiency,speed,share,
             scenario.accepted_fraction_override,outland,&scenario.modifiers));
         rows.push((spawn.id,name.to_owned(),share,rarity,plan));
     }
