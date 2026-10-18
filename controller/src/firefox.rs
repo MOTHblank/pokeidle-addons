@@ -93,6 +93,28 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
     Ok((child, monitor))
 }
 
+/// Launch the selected Moth-owned Firefox profile exclusively for Kick
+/// sign-in. The Kick worker owns its BiDi connection and closes this process
+/// after the user's credential is protected by the OS vault.
+pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
+    migrate_legacy_profile(config)?;
+    fs::create_dir_all(&config.profile_dir)
+        .map_err(|_| "Could not prepare Firefox profile for Kick login".to_owned())?;
+    provision_profile(&config.profile_dir)?;
+    ensure_debug_port_available(config.remote_debug_port)?;
+    let mut command = Command::new(&config.firefox_executable);
+    command.arg("--no-remote")
+        .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-window")
+        .arg("about:blank")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.spawn().map_err(format_spawn_error)
+}
+
 pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
     migrate_legacy_profile(config)?;
 
