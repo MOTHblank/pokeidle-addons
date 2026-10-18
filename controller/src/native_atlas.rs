@@ -1,7 +1,7 @@
 //! Read-only Hunt Atlas reference: fetched only when Hunts tab opens.
 //! Never execute public JavaScript or send credentials to the reference host.
 //! The account's own welcome.hunts is authoritative for unlocked destinations.
-use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, base_gold};
+use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, gross_gold_per_kill};
 use serde_json::Value;
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
@@ -325,12 +325,16 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
     }else{None};
     let kills_h=(base_kills*calibration.unwrap_or(1.0))
         .min(3600.0/if hunt.level<20{4.2}else{3.2});
+    // Guild bonus is reported by estado and, per upstream, also boosts
+    // converted loot Coins. Unreported loot-store/event boosts are not guessed.
+    let loot_pct=if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0};
+    let combat_gold_h=gross_gold_per_kill(hunt.level,loot_pct)*kills_h;
     Some(Forecast {
         kills_h,
         trainer_xp_h:base_xp(hunt.level)*kills_h*bonus(view,true),
         pokemon_xp_h:base_xp(hunt.level)*kills_h*bonus(view,false),
-        gold_h:base_gold(hunt.level)*kills_h,
-        combat_gold_h:base_gold(hunt.level)*kills_h,
+        gold_h:combat_gold_h,
+        combat_gold_h,
         npc_loot_gold_h:0.0,
         trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
         pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
