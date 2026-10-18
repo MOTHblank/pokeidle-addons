@@ -48,13 +48,18 @@ fi
 
 if [[ -f "$here/moth-controller" ]]; then
   if command -v ldd >/dev/null 2>&1; then
-    missing="$(ldd "$here/moth-controller" 2>&1 | grep 'not found' || true)"
-    if [[ -n "$missing" ]]; then
-      printf '[MISSING] Shared libraries:\n%s\n' "$missing"
-      printf 'On Ubuntu/Debian, check libsqlite3-0, libgtk-3-0, libgl1 and X11/Wayland libraries.\n'
+    if ! libraries="$(ldd "$here/moth-controller" 2>&1)"; then
+      printf '[MISSING] Could not inspect binary shared libraries:\n%s\n' "$libraries"
       failed=1
     else
-      printf '[OK] Binary shared-library dependencies\n'
+      missing="$(printf '%s\n' "$libraries" | grep 'not found' || true)"
+      if [[ -n "$missing" ]]; then
+        printf '[MISSING] Shared libraries:\n%s\n' "$missing"
+        printf 'On Ubuntu/Debian, check libsqlite3-0, libgtk-3-0, libgl1 and X11/Wayland libraries.\n'
+        failed=1
+      else
+        printf '[OK] Binary shared-library dependencies\n'
+      fi
     fi
   else
     printf '[INFO] ldd unavailable; shared libraries not checked\n'
