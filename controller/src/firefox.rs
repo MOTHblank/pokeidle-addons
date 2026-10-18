@@ -93,26 +93,27 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
     Ok((child, monitor))
 }
 
-/// Launch the selected Moth-owned Firefox profile exclusively for Kick
-/// sign-in. The Kick worker owns its BiDi connection and closes this process
-/// after the user's credential is protected by the OS vault.
+/// Open a dedicated, ordinary Firefox window for Kick sign-in.
+/// No remote debugging/Remote Agent/BiDi, extensions, injected scripts,
+/// or the game profile's customized resource-saving user.js preferences.
+/// Its persistent profile is isolated per Moth account.
 pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
-    migrate_legacy_profile(config)?;
     fs::create_dir_all(&config.profile_dir)
-        .map_err(|_| "Could not prepare Firefox profile for Kick login".to_owned())?;
-    provision_profile(&config.profile_dir)?;
-    ensure_debug_port_available(config.remote_debug_port)?;
-    let mut command = Command::new(&config.firefox_executable);
-    command.arg("--no-remote")
-        .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
+        .map_err(|_| "Could not create the dedicated Kick Firefox profile".to_owned())?;
+    if find_profile_process(config)?.is_some() {
+        return Err("A Kick login Firefox window is already using this profile".into());
+    }
+    Command::new(&config.firefox_executable)
+        .arg("--no-remote")
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
-        .arg("about:blank")
+        .arg("https://kick.com/")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command.spawn().map_err(format_spawn_error)
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(format_spawn_error)
 }
 
 pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
