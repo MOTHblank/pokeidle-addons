@@ -13,31 +13,47 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
 - **Automações:** captura automática, reposição de itens e regras do mercado.
 - **Abrir no Firefox:** abre o jogo no navegador para interação manual.
 
-## Kick — monitoramento nativo
+## Kick — sessões leves, transmissão HLS e pontos
 
-Em **Contas**, expanda **Kick · monitoramento nativo** no cartão de uma conta.
-Informe os nomes dos canais separados por vírgula e um **token de acesso da API
-Kick Developer** obtido por autorização legítima no serviço. Use **Salvar canais**
-para manter apenas a lista de nomes e **Monitorar Kick** para iniciar o worker
-nativo. Cada conta tem seu próprio monitor; **Parar Kick** o encerra.
+Em **Contas → Kick · transmissões nativas**, configure os canais
+(separados por vírgula), informe **o Bearer token da sua própria conta Kick**
+(não o token da API pública de desenvolvedores) e clique em
+**Iniciar transmissões**. O app continua independente da Twitch e do PokéIdle.
 
-O worker usa somente o endpoint oficial de leitura
-`GET https://api.kick.com/public/v1/channels?slug=...` (com Bearer token),
-verifica se cada canal está ao vivo a cada 90 segundos e apresenta contagens de
-espectadores quando a API as oferece. Requisições têm timeout; erros temporários
-geram retries espaçados, e falhas de autenticação interrompem a consulta. Não
-é necessário Streamlink, VLC, MPV ou Python.
+A implementação nativa usa os endpoints da interface web da Kick, estudados no
+projeto Baillora/Kick_Channel_Points_Miner:
 
-**Segurança:** tokens são usados apenas em memória, não são escritos no
-`kick-channels.json`, no cache de login do jogo, em logs ou URLs. Após reiniciar
-o aplicativo, é necessário inserir o token novamente. O monitor não usa
-cookies da Twitch, não conecta o player de vídeo, não envia mensagens de chat,
-não relata eventos de visualização e **não confirma ou acumula pontos**.
+- `GET https://kick.com/api/v2/channels/{slug}` identifica se o canal está
+  ao vivo, o canal, o usuário, o ID da live e o playback_url.
+- `GET https://websockets.kick.com/viewer/v1/token`, com headers
+  `X-Chatroom` e `X-User-Id`, solicita um token temporário de conexão.
+- `wss://websockets.kick.com/viewer/v1/connect` mantém a sessão via
+  handshake do canal, pings e eventos de watch enquanto há bytes HLS chegando.
+  Não há envio de mensagens de chat.
+- Uma thread HLS solicita o playlist M3U8, escolhe o menor bitrate anunciado,
+  recebe segmentos e descarta os bytes, sem decodificação, cache em disco ou
+  player externo. A interface mostra os segmentos e bytes transferidos.
+- `GET https://kick.com/api/v2/channels/{slug}/points` consulta
+  periodicamente o saldo associado à conta. Apenas **aumentos numéricos
+  consecutivos confirmados pelo endpoint** aparecem como `ganho observado`.
+  Resposta ausente, rejeitada ou não numérica é *sem confirmação*, nunca
+  uma contagem zerada inventada.
 
-A API Kick Developer exige um token emitido para um aplicativo registrado.
-Este recurso é independente da autenticação em Twitch/PokéIdle; não aceite
-cookies de sessão nem tokens extraídos de navegadores como substitutos do
-token da API oficial.
+**Importante:** a conexão WS e os segmentos HLS comprovam tráfego de rede,
+não que pontos serão atribuídos. A integração depende de endpoints privados
+e não documentados que podem mudar sem aviso. Se o saldo não aumentar, o
+painel deve refletir isso em vez de declarar sucesso. O sistema não contorna
+CAPTCHAs nem desafios da Kick e não garante elegibilidade para recompensas.
+
+**Credenciais:** o token do usuário fica só em memória e é apagado do campo
+ao iniciar. São salvos apenas os nomes dos canais no `kick-channels.json`,
+nunca o token ou as URLs HLS temporárias. Não inclua credenciais em issues,
+diagnósticos ou repositórios. Ao reiniciar o app, informe o token de novo.
+
+**Uso de recursos:** o menor bitrate disponível é selecionado, e o vídeo
+não é decodificado. Contudo os bytes dos segmentos completos são transferidos,
+então o uso de banda depende do canal e **não é comparável à Twitch IRC**.
+Pode haver 12 canais por conta; configure somente o necessário.
 
 ## Compilação
 
