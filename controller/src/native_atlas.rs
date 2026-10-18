@@ -3,7 +3,7 @@
 //! The account's own welcome.hunts is authoritative for unlocked destinations.
 use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, gross_gold_per_kill};
 use serde_json::Value;
-use std::{collections::BTreeMap, io::Read, time::Duration};
+use std::{collections::{BTreeMap,BTreeSet}, io::Read, time::Duration};
 
 const URL: &str = "https://guiapokeidlehardtocapture.site/data.js?v=32";
 const HOST: &str = "guiapokeidlehardtocapture.site";
@@ -44,6 +44,11 @@ pub struct Reference {
     pub hunts: Vec<HuntEntry>,
     /// Public client-catalog derived capture rarity (not guide loot prices).
     pub capture_rarities: BTreeMap<u64,f64>,
+    /// Upstream evolutionary-stage capture cap (20/40/100), inferred from
+    /// current public creature evolution chains after all catalogs merge.
+    pub capture_stages: BTreeMap<u64,u32>,
+    capture_catalog_ids: BTreeSet<u64>,
+    capture_evolutions: BTreeMap<u64,u64>,
     pub npc_sell_prices: BTreeMap<u64,f64>,
     /// Static catalog sellValue; not an observed player-to-player market average.
     pub catalog_sell_values: BTreeMap<u64,f64>,
@@ -187,7 +192,8 @@ pub fn load() -> Result<Reference, String> {
         }))
         .build().map_err(|_|"Could not initialize static asset downloader")?;
     for name in ["creatures.json","creatures-novos.json",
-        "creatures-outland-novos.json","creatures-audit-overrides.json"]{
+        "creatures-outland-novos.json","creatures-formas.json",
+        "creatures-audit-overrides.json"]{
         let uri=format!("https://pokeidle.io/assets/{name}");
         let Ok(response)=assets.get(&uri).send()
             .and_then(reqwest::blocking::Response::error_for_status)
@@ -202,6 +208,7 @@ pub fn load() -> Result<Reference, String> {
             merge_creature_catalog(&mut reference,&catalog);
         }
     }
+    finalize_capture_stages(&mut reference);
     Ok(reference)
 }
 /// A creature's player-market listing must never become NPC/capture rarity.
@@ -229,6 +236,91 @@ pub fn merge_creature_catalog(reference:&mut Reference,data:&Value){
         if let Some(rarity)=crate::native_atlas_models::catalog_rarity(level,sell,npc){
             reference.capture_rarities.insert(id,rarity);
         }
+        // The game's capture stage is determined by evolutionary links, not
+        // by market price or hunt level. Hold the edges until every catalog
+        // (including regional forms) has been merged.
+        if let Some(name)=raw.get("name").and_then(Value::as_str)
+            .filter(|s|!s.is_empty()) {
+            reference.capture_catalog_ids.insert(id);
+            if let Some(next)=raw.get("evolvesToId").and_then(Value::as_u64)
+                .filter(|v|*v>0) {
+                let next=if (10501..10548).contains(&next){next-8500}else{next};
+                reference.capture_evolutions.insert(id,next);
+            }
+            let types=["type1","type2"].iter().filter_map(|key|
+                raw.get(*key).and_then(Value::as_str)
+                    .filter(|s|!s.is_empty())).map(str::to_owned)
+                .collect::<Vec<_>>();
+            let base=["baseHp","baseAtk","baseDef","baseSpAtk","baseSpDef","baseSpeed"]
+                .iter().filter_map(|key|raw.get(*key).and_then(Value::as_f64))
+                .collect::<Vec<_>>();
+            if types.len()>0 && base.len()==6 && base.iter().all(|n|n.is_finite()&&*n>0.0) {
+                let mut moves=raw.get("attacks").and_then(Value::as_array)
+                    .map(|arr|arr.iter().filter_map(|attack|{
+                        let move_type=attack.get("type")?.as_str()?;
+                        let power=attack.get("power")?.as_f64()?;
+                        let cooldown=attack.get("cooldownMs")?.as_f64()?;
+                        if !power.is_finite()||power<0.0||!cooldown.is_finite()||cooldown<=0.0{return None}
+                        Some(ReferenceMove{
+                            move_type:move_type.to_owned(),
+                            special:attack.get("category").and_then(Value::as_str)
+                                ==Some("SPECIAL"),
+                            power,cooldown,
+                            min_level:attack.get("learnLevel").and_then(Value::as_u64)
+                                .unwrap_or(1).min(u32::MAX as u64) as u32,
+                        })
+                    }).collect::<Vec<_>>()).unwrap_or_default();
+                if moves.is_empty() {
+                    if let Some(existing)=reference.species.get(&id) {
+                        moves=existing.moves.clone();
+                    }
+                }
+                reference.species.insert(id,ReferenceSpecies{
+                    name:name.to_owned(),types,base,moves,drops:Vec::new(),
+                });
+            }
+        }
+    }
+}
+
+/// Apply the upstream teto-captura evolution-chain ladder after merging.
+/// 3 links: 20/40/100; 2 links: 40/100; singleton/Outland: 100.
+/// We require a public catalog identity; missing data keeps the older
+/// rarity model rather than asserting an invented evolutionary stage.
+pub fn finalize_capture_stages(reference:&mut Reference){
+    let mut before:BTreeMap<u64,u32>=reference.capture_catalog_ids.iter()
+        .map(|id|(*id,0)).collect();
+    let mut after=before.clone();
+    for _ in 0..8 {
+        let mut changed=false;
+        for (&from,&to) in &reference.capture_evolutions {
+            if !reference.capture_catalog_ids.contains(&from)
+                ||!reference.capture_catalog_ids.contains(&to)||from==to{continue}
+            let previous=before.get(&from).copied().unwrap_or(0);
+            if previous+1>before.get(&to).copied().unwrap_or(0) {
+                before.insert(to,previous+1);changed=true;
+            }
+            let next=after.get(&to).copied().unwrap_or(0);
+            if next+1>after.get(&from).copied().unwrap_or(0) {
+                after.insert(from,next+1);changed=true;
+            }
+        }
+        if !changed {break}
+    }
+    reference.capture_stages.clear();
+    for &id in &reference.capture_catalog_ids{
+        let depth=before.get(&id).copied().unwrap_or(0).min(3);
+        let forward=after.get(&id).copied().unwrap_or(0).min(3);
+        let length=(depth+forward+1).min(4);
+        let cap=match (length,depth) {
+            (1,_)=>100, (2,0)=>40, (2,_)=>100,
+            (3,0)=>20, (3,1)=>40, (3,_)=>100,
+            (4,0)=>20, (4,1)=>40, (4,2)=>70, _=>100,
+        };
+        // Outland variants are intentionally unevolving, irrespective of
+        // the national Pokémon whose art or types they may reuse.
+        reference.capture_stages.insert(id,
+            if (2001..=2047).contains(&id){100}else{cap});
     }
 }
 fn effect(chart:&Reference, attack:&str, target:&ReferenceSpecies) -> f64 {
@@ -360,6 +452,34 @@ mod tests {
         assert_eq!(reference.catalog_sell_values[&25],8000.0);
         assert!(reference.capture_rarities.contains_key(&2001));
         assert!(!reference.capture_rarities.contains_key(&1));
+    }
+    #[test]
+    fn catalog_merge_adds_regional_forms_and_preserves_identity(){
+        let mut reference=Reference::default();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[
+                {"pokeId":4019,"name":"Alolan Rattata",
+                 "type1":"DARK","type2":"NORMAL",
+                 "baseHp":30,"baseAtk":56,"baseDef":35,"baseSpAtk":25,
+                 "baseSpDef":35,"baseSpeed":72,"evolvesToId":4020},
+                {"pokeId":4020,"name":"Alolan Raticate",
+                 "type1":"DARK","type2":"NORMAL",
+                 "baseHp":75,"baseAtk":71,"baseDef":70,"baseSpAtk":40,
+                 "baseSpDef":80,"baseSpeed":77},
+                {"pokeId":1,"name":"Bulbasaur","evolvesToId":2},
+                {"pokeId":2,"name":"Ivysaur","evolvesToId":3},
+                {"pokeId":3,"name":"Venusaur"},
+                {"pokeId":2001,"name":"Outland","evolvesToId":2}
+            ]}));
+        finalize_capture_stages(&mut reference);
+        assert_eq!(reference.capture_stages[&4019],40);
+        assert_eq!(reference.capture_stages[&4020],100);
+        assert_eq!(reference.capture_stages[&1],20);
+        assert_eq!(reference.capture_stages[&2],40);
+        assert_eq!(reference.capture_stages[&3],100);
+        assert_eq!(reference.capture_stages[&2001],100);
+        assert_eq!(reference.species[&4019].types,vec!["DARK","NORMAL"]);
+        assert_eq!(reference.species[&4019].base[0],30.0);
     }
     #[test]
     fn parses_json_only_and_rejects_executable_script(){
