@@ -20,22 +20,24 @@ escolher outra conta não interrompe as demais. Os cartões principais do
 gerenciador PokéIdle contêm somente um atalho **Gerenciar Kick →**, sem
 duplicar toda a configuração.
 
-1. **Login pelo Firefox:** selecione o perfil em **Contas → Kick** e
-   clique em **Entrar na Kick pelo Firefox**. O Moth abre **uma janela
-   temporária com exatamente o perfil Firefox desse jogo**, instala um
-   observador de autenticação restrito a requisições da própria Kick, e
-   aguarda o login normal do usuário. Após obter uma credencial de sessão
-   válida em formato Bearer, o programa salva-a no cofre protegido do SO
-   (DPAPI no Windows, Secret Service no Linux) e encerra o Firefox temporário.
-   **Não há necessidade de localizar nem copiar o Bearer manualmente.**
-   A conta PokéIdle deve ter concluído sua transferência para a sessão
-   nativa antes, pois dois processos Firefox não podem compartilhar o
-   mesmo perfil. O monitor de Kick é iniciado separadamente após o login.
-   É possível cancelar a tentativa. Em caso de expiração ou de mudanças
-   na autenticação interna da Kick, repita o login.
-   **Avançado → Token manual** permanece como alternativa.
-   A captura utiliza a autenticação do site, não o OAuth Developer API.
-   **A compatibilidade real ainda depende de teste na Kick**.
+1. **Login pelo Firefox normal:** em **Contas → Kick** clique em
+   **Entrar pelo Firefox normal**. Para evitar os desafios de autenticação
+   causados por um navegador instrumentado, Moth abre uma **janela comum,
+   sem Remote Agent, BiDi, WebDriver ou scripts injetados**, usando um
+   perfil limpo e persistente dedicado à Kick para cada conta
+   (`Kick-Profiles/Game1` etc.). O perfil Kick não compartilha o Firefox
+   monitorado do PokéIdle: o login pode ocorrer com a sessão nativa do jogo
+   já em execução. **Entre na Kick normalmente e feche essa janela do
+   Firefox quando terminar.** Após a saída do navegador, Moth lê somente
+   o cookie `session_token` pertencente a `kick.com` no banco local
+   `cookies.sqlite` daquele perfil, valida o formato e guarda a sessão
+   apenas no cofre protegido pelo SO (DPAPI / Secret Service).
+   **Nenhum token precisa ser copiado manualmente.** O Moth não lê cookies
+   de outros domínios nem mantém o navegador aberto após o login.
+   Se o cookie estiver ausente, for incompatível ou tiver expirado, a
+   interface mostra o erro em vez de declarar o login bem-sucedido.
+   A compatibilidade com a autenticação interna não documentada da Kick
+   depende de um teste real. **Avançado → Token manual** continua disponível.
 2. **Canais oficiais do PokéIdle:** Moth Controller lê automaticamente
    `state.kick.oficiais` do WebSocket autenticado de `pokeidle.io/app`,
    usando `slug`/`login` quando `aoVivo` é verdadeiro. Os canais aparecem
