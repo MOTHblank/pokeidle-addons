@@ -185,7 +185,7 @@ pub(super) fn draw_atlas_models(
             ui.label(tr("Model preview tier"));
             ui.add(egui::Slider::new(&mut scenario.tier,1..=8).show_value(true));
             ui.label(tr_dynamic(format!("Requires trainer Lv {}",
-                models::TIER_LEVELS[(scenario.tier-1) as usize])));
+                view.outland_requirement(scenario.tier).map_or(0,|v|v.0))));
             if let Some(actual)=observed_tier{
                 ui.label(RichText::new(tr_dynamic(format!("Game tier: Outland {actual}")))
                     .size(10.0).color(GOOD));
