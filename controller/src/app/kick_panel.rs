@@ -199,106 +199,158 @@ fn kick_metric(ui: &mut egui::Ui, title: &str, value: String, tone: Color32) {
         ui.label(RichText::new(value).size(19.0).strong().color(tone));
     });
 }
-fn kick_stream_card(ui: &mut egui::Ui, channel: &crate::native_kick::ChannelStatus,
-                    width: f32) {
-    let br = pt_br();
-    let watch = &channel.watch;
-    let recent = watch.media.last_segment
-        .is_some_and(|last| last.elapsed() < Duration::from_secs(25));
-    let connected = watch.ws_connected && watch.handshake_received;
-    let points_updated = watch.last_points
-        .is_some_and(|last| last.elapsed() < Duration::from_secs(300));
-    let live = channel.live == Some(true);
-    let state = if channel.live.is_none() {
-        kick_label(br, "Checking", "Verificando")
-    } else if live {
-        kick_label(br, "LIVE", "AO VIVO")
-    } else {
-        "OFFLINE"
-    };
-    let tone = if live { GOOD } else { MUTED };
-    egui::Frame::new().fill(PANEL_ALT).stroke(Stroke::new(1.0,
-        if live && recent { GOOD } else { BORDER }))
-        .corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
-        ui.set_min_width(width - 24.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("● {}", state)).size(10.0).strong().color(tone));
-            ui.label(RichText::new(format!("kick.com/{}", channel.slug))
-                .size(12.0).strong().color(TEXT));
+/// The list includes official creators even if they are not broadcasting.
+/// A missing balance remains unknown (never displayed as zero).
+struct KickChannelRow {
+    slug: String,
+    live: Option<bool>,
+    points: Option<u64>,
+    checked_at: Option<Instant>,
+    gained: Option<u64>,
+    official: bool,
+    details: Option<crate::native_kick::ChannelStatus>,
+    error: Option<String>,
+}
+fn channel_rows(
+    selected: &[String],
+    official: &[crate::native_kick::OfficialKickChannel],
+    active: Option<&crate::native_kick::KickSnapshot>,
+    offline_points: &std::collections::BTreeMap<String, crate::native_kick::OfflinePoints>,
+) -> Vec<KickChannelRow> {
+    let mut merged = std::collections::BTreeMap::<String, KickChannelRow>::new();
+    for creator in official {
+        merged.insert(creator.slug.clone(), KickChannelRow {
+            slug: creator.slug.clone(), live: Some(creator.live), points: None,
+            checked_at: None, gained: None, official: true,
+            details: None, error: None,
         });
-        if !channel.title.is_empty() {
-            ui.label(RichText::new(&channel.title).size(10.0).color(MUTED));
+    }
+    for slug in selected {
+        merged.entry(slug.clone()).or_insert_with(|| KickChannelRow {
+            slug: slug.clone(), live: None, points: None, checked_at: None,
+            gained: None, official: false, details: None, error: None,
+        });
+    }
+    if let Some(snapshot) = active {
+        for channel in &snapshot.channels {
+            let row = merged.entry(channel.slug.clone()).or_insert_with(|| KickChannelRow {
+                slug: channel.slug.clone(), live: None, points: None,
+                checked_at: None, gained: None, official: false,
+                details: None, error: None,
+            });
+            row.live = channel.live.or(row.live);
+            row.points = channel.watch.points;
+            row.checked_at = channel.watch.last_points;
+            row.gained = channel.watch.points.map(|_| channel.watch.points_gained);
+            row.error = channel.error.clone().or_else(|| channel.watch.error.clone());
+            row.details = Some(channel.clone());
         }
-        ui.add_space(6.0);
-        ui.columns(2, |cols| {
-            cols[0].label(RichText::new(kick_label(br, "Current points", "Saldo de pontos"))
-                .size(10.0).color(MUTED));
-            cols[0].label(RichText::new(watch.points
-                .map(|points| points.to_string()).unwrap_or_else(|| "—".into()))
-                .size(20.0).strong().color(TEXT));
-            cols[1].label(RichText::new(kick_label(br, "Observed gain", "Ganho observado"))
-                .size(10.0).color(MUTED));
-            cols[1].label(RichText::new(if watch.points.is_some() {
-                    format!("+{}", watch.points_gained)
-                } else { "—".into() })
-                .size(20.0).strong()
-                .color(if watch.points_gained > 0 { GOOD } else { MUTED }));
-        });
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(
-                if connected {
-                    kick_label(br, "● WebSocket connected", "● WebSocket conectado")
-                } else {
-                    kick_label(br, "○ WebSocket pending", "○ WebSocket pendente")
-                }).size(10.0).color(if connected { GOOD } else { MUTED }));
-            ui.label(RichText::new(
-                if recent {
-                    kick_label(br, "● Media flowing", "● Recebendo mídia")
-                } else {
-                    kick_label(br, "○ Media inactive", "○ Mídia inativa")
-                }).size(10.0).color(if recent { GOOD } else { MUTED }));
-        });
-        if watch.points.is_none() {
-            ui.label(RichText::new(kick_label(br,
-                "Point balance not verified yet.",
-                "Saldo de pontos ainda não verificado.")).size(10.0).color(WARN));
-        } else if !points_updated {
-            ui.label(RichText::new(kick_label(br,
-                "Point data is outdated.",
-                "Dados de pontos desatualizados.")).size(10.0).color(WARN));
-        } else if watch.points_gained == 0 && live {
-            ui.label(RichText::new(kick_label(br,
-                "Awaiting a confirmed point increase.",
-                "Aguardando aumento confirmado de pontos.")).size(10.0).color(MUTED));
+    }
+    for (slug, observed) in offline_points {
+        if let Some(row) = merged.get_mut(slug) {
+            // Regular viewer status is fresher where available; do not
+            // overwrite its confirmed balance with an older offline poll.
+            if row.points.is_none() {
+                row.points = observed.balance;
+                row.checked_at = observed.updated_at;
+            }
+            if row.error.is_none() { row.error = observed.error.clone(); }
         }
-        if let Some(error) = channel.error.as_ref().or(watch.error.as_ref()) {
-            ui.label(RichText::new(error).size(10.0).color(WARN));
-        }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.small_button(kick_label(br, "Open channel ↗", "Abrir canal ↗")).clicked() {
-                let _ = open_kick_channels_in_regular_browser(&[channel.slug.clone()]);
-            }
-        });
-        ui.collapsing(kick_label(br, "Connection details", "Detalhes da conexão"), |ui| {
-            ui.label(format!("WebSocket: {} · handshake: {}",
-                watch.ws_connected, watch.handshake_received));
-            ui.label(format!("HLS: {} segments · {:.1} MiB",
-                watch.media.segments, watch.media.bytes as f64 / 1_048_576.0));
-            if let Some(rate) = watch.media.bitrate {
-                ui.label(format!("HLS bitrate: {} kbps", rate / 1000));
-            }
-            ui.label(format!("Tracking events: {}", watch.events_sent));
-            if let Some(viewers) = channel.viewers { ui.label(format!("Viewers: {viewers}")); }
-            if let Some(last) = watch.last_points {
-                ui.label(format!("Balance checked {} s ago", last.elapsed().as_secs()));
-            }
-            if let Some(error) = &watch.media.error {
-                ui.label(RichText::new(error).size(10.0).color(WARN));
-            }
-        });
+    }
+    let mut rows: Vec<_> = merged.into_values().collect();
+    rows.sort_by(|a, b| {
+        let rank = |item: &KickChannelRow| match item.live {
+            Some(true) => 0, Some(false) => 1, None => 2
+        };
+        rank(a).cmp(&rank(b)).then_with(|| a.slug.cmp(&b.slug))
     });
+    rows
+}
+fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
+    let br = pt_br();
+    let (state, state_color) = match channel.live {
+        Some(true) => (kick_label(br, "● LIVE", "● AO VIVO"), GOOD),
+        Some(false) => ("○ OFFLINE", MUTED),
+        None => (kick_label(br, "◌ Not checked", "◌ Não verificado"), WARN),
+    };
+    let points = channel.points.map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_owned());
+    let stale = channel.checked_at
+        .is_some_and(|checked| checked.elapsed() > Duration::from_secs(300));
+    let compact = ui.available_width() < 720.0;
+    let mut open = false;
+    egui::Frame::new().fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(8.0).inner_margin(egui::Margin::symmetric(11, 9))
+        .show(ui, |ui| {
+        ui.horizontal(|ui| {
+            if compact {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(&channel.slug).size(13.0).strong().color(TEXT));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(state).size(10.0).strong().color(state_color));
+                        ui.label(RichText::new(format!("{}: {points}",
+                            kick_label(br, "Points", "Pontos"))).size(11.0).strong()
+                            .color(if channel.points.is_some() { TEXT } else { MUTED }));
+                        if stale { ui.label(RichText::new(
+                            kick_label(br, "outdated", "desatualizado"))
+                            .size(10.0).color(WARN)); }
+                    });
+                });
+            } else {
+                ui.add_sized([170.0, 22.0],
+                    egui::Label::new(RichText::new(&channel.slug)
+                        .size(12.0).strong().color(TEXT)));
+                ui.add_sized([130.0, 22.0],
+                    egui::Label::new(RichText::new(state)
+                        .size(11.0).strong().color(state_color)));
+                let shown = if stale { format!("{points}*") } else { points };
+                ui.add_sized([160.0, 22.0],
+                    egui::Label::new(RichText::new(format!("{}: {shown}",
+                        kick_label(br, "Points", "Pontos")))
+                        .size(12.0).strong().color(TEXT)));
+                if let Some(gained) = channel.gained {
+                    ui.label(RichText::new(format!("+{gained}"))
+                        .size(10.0).color(if gained > 0 { GOOD } else { MUTED }));
+                }
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                open = ui.small_button(kick_label(br, "Open ↗", "Abrir ↗")).clicked();
+            });
+        });
+        if channel.error.is_some() || channel.details.is_some() {
+            ui.collapsing(kick_label(br, "Details", "Detalhes"), |ui| {
+                if channel.official {
+                    ui.label(RichText::new(kick_label(br,
+                        "Official PokéIdle channel", "Canal oficial do PokéIdle"))
+                        .size(10.0).color(MUTED));
+                }
+                if let Some(error) = &channel.error {
+                    ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
+                if let Some(detail) = &channel.details {
+                    let watch = &detail.watch;
+                    ui.label(format!("WebSocket: {} · handshake: {}",
+                        watch.ws_connected, watch.handshake_received));
+                    ui.label(format!("HLS: {} segments · {:.1} MiB",
+                        watch.media.segments, watch.media.bytes as f64 / 1_048_576.0));
+                    ui.label(format!("Tracking: {} events", watch.events_sent));
+                    if let Some(viewers) = detail.viewers {
+                        ui.label(format!("Viewers: {viewers}"));
+                    }
+                    if let Some(error) = &watch.media.error {
+                        ui.label(RichText::new(error).size(10.0).color(WARN));
+                    }
+                }
+                if let Some(checked) = channel.checked_at {
+                    ui.label(format!("{} {} s",
+                        kick_label(br, "Balance checked", "Saldo consultado há"),
+                        checked.elapsed().as_secs()));
+                }
+            });
+        }
+    });
+    open
 }
 pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let br = pt_br();
