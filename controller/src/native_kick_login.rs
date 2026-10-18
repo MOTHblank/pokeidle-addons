@@ -227,6 +227,9 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
         // browsers clear transient cookies when the window is closed.
         if let Ok(Some(token)) = read_kick_cookie(&config.profile_dir) {
             native_auth::save_kick_token(profile, &token)?;
+            // The OS vault now owns the login. Close only the temporary
+            // Firefox process started by this button, not another account.
+            let _ = firefox::stop_child(&mut browser, None);
             return Ok(());
         }
         match browser.try_wait() {
