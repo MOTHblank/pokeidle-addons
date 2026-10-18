@@ -76,11 +76,7 @@ pub fn capture_chance_for_stage(stage:Option<u32>,rarity:Option<f64>,
     let factor=match stage {
         Some(20)=>2.8669, Some(40)=>3.5745,
         Some(_)=>4.4681,
-        None=>{
-            let price=rarity.filter(|n|n.is_finite()&&*n>0.0)?;
-            let r=price.max(100.0).log10()-1.0;
-            1.0+r.powi(3)/17.0
-        }
+        None=>return wiki_capture_chance(rarity?,efficiency,hp_fraction),
     };
     Some((0.0075*efficiency/factor*(1.4-hp_fraction)).clamp(0.003,0.10))
 }
@@ -110,13 +106,6 @@ pub struct CaptureForecast {
 }
 /// If accepted fraction is missing, 100% targetability is an optimistic CEILING,
 /// not a measured player setting. Outland's shiny eligibility is unknown.
-pub fn capture_scenario(
-    rarity:Option<f64>,efficiency:f64,kill_h:f64,spawn_share:f64,
-    accepted_fraction:Option<f64>,outland:bool,mods:&Modifiers
-)->Option<CaptureForecast>{
-    capture_scenario_with_stage(None,rarity,efficiency,kill_h,spawn_share,
-        accepted_fraction,outland,mods)
-}
 pub fn capture_scenario_with_stage(
     stage:Option<u32>,rarity:Option<f64>,efficiency:f64,
     kill_h:f64,spawn_share:f64,accepted_fraction:Option<f64>,
@@ -239,12 +228,12 @@ mod tests {
     }
     #[test] fn capture_bonuses_and_ceiling_provenance(){
         let m=Modifiers::default();
-        let forecast=capture_scenario(Some(12000.0),4.0,100.0,0.5,None,false,&m).unwrap();
+        let forecast=capture_scenario_with_stage(None,Some(12000.0),4.0,100.0,0.5,None,false,&m).unwrap();
         assert!(forecast.accepted_is_ceiling);
         assert_eq!(forecast.accepted_h,50.0);
         assert!(forecast.shiny_caught_h.unwrap()>0.0);
-        assert!(capture_scenario(None,4.0,100.0,0.5,None,false,&m).is_none());
-        let outland=capture_scenario(Some(12000.0),8.0,100.0,0.5,Some(0.3),true,&m).unwrap();
+        assert!(capture_scenario_with_stage(None,None,4.0,100.0,0.5,None,false,&m).is_none());
+        let outland=capture_scenario_with_stage(None,Some(12000.0),8.0,100.0,0.5,Some(0.3),true,&m).unwrap();
         assert_eq!(outland.shiny_caught_h,None);
         assert_eq!(outland.accepted_h,15.0);
     }
