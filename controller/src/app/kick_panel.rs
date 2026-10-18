@@ -353,7 +353,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(channel).size(11.0).color(TEXT));
                             if ui.add_enabled(!running,
-                                egui::Button::new("×").small()).clicked() {
+                                egui::Button::new("×")).clicked() {
                                 app.remove_kick_channel(i, channel);
                             }
                         });
