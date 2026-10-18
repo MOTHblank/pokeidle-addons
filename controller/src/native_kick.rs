@@ -3,7 +3,7 @@
 //! balances are distinct signals. Only an observed increase of a real
 //! authenticated point balance is reported as points earned.
 use crate::native_kick_viewer::{self, WatchTelemetry};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -47,10 +47,25 @@ struct KickWorker {
     telemetry: Arc<Mutex<WatchTelemetry>>,
     stop: Arc<AtomicBool>,
 }
+#[derive(Clone, Debug, Default)]
+pub struct OfflinePoints {
+    pub balance: Option<u64>,
+    pub updated_at: Option<Instant>,
+    pub error: Option<String>,
+}
+
+/// A single HTTP poller handles all official offline creators; none of these
+/// need a viewer WebSocket, HLS download, or per-channel thread.
+struct OfflinePointsWorker {
+    roster: Arc<Mutex<Vec<String>>>,
+    balances: Arc<Mutex<BTreeMap<String, OfflinePoints>>>,
+    stop: Arc<AtomicBool>,
+}
 pub struct KickMonitor {
     snapshot: Arc<Mutex<KickSnapshot>>,
     observed: Vec<KickWorker>,
     token: String,
+    offline_points: Option<OfflinePointsWorker>,
 }
 impl KickMonitor {
     pub fn start(token: String, input: &str) -> Result<Self, String> {
@@ -72,6 +87,7 @@ impl KickMonitor {
             snapshot: Arc::new(Mutex::new(KickSnapshot::default())),
             observed: Vec::new(),
             token: bearer.to_owned(),
+            offline_points: None,
         };
         monitor.sync_channels(&slugs)?;
         Ok(monitor)
@@ -139,6 +155,71 @@ impl KickMonitor {
         }
         Ok(())
     }
+    /// Check authenticated balances for official creators who are currently
+    /// offline and aren't already handled by a regular channel supervisor.
+    /// The worker sleeps between polls and never creates media connections.
+    pub fn sync_offline_officials(&mut self, names: &[String]) -> Result<(), String> {
+        let mut pending: Vec<String> = names.iter().filter(|name|
+            !self.observed.iter().any(|worker| worker.slug == **name)
+        ).cloned().collect();
+        pending.sort();
+        pending.dedup();
+        if self.offline_points.is_none() {
+            if pending.is_empty() { return Ok(()); }
+            let roster = Arc::new(Mutex::new(pending.clone()));
+            let balances = Arc::new(Mutex::new(BTreeMap::<String, OfflinePoints>::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let roster_worker = Arc::clone(&roster);
+            let balances_worker = Arc::clone(&balances);
+            let stop_worker = Arc::clone(&stop);
+            let token = self.token.clone();
+            thread::Builder::new().name("moth-kick-offline-points".into()).spawn(move || {
+                let Ok(client) = native_kick_viewer::new_client(&token) else { return };
+                let mut previous = Vec::<String>::new();
+                let mut last_poll = Instant::now() - Duration::from_secs(130);
+                while !stop_worker.load(Ordering::Relaxed) {
+                    let current = roster_worker.lock().map(|roster| roster.clone()).unwrap_or_default();
+                    if current != previous || last_poll.elapsed() >= Duration::from_secs(120) {
+                        previous = current.clone();
+                        last_poll = Instant::now();
+                        if let Ok(mut results) = balances_worker.lock() {
+                            results.retain(|slug, _| current.contains(slug));
+                        }
+                        for slug in &current {
+                            if stop_worker.load(Ordering::Relaxed) { break; }
+                            let outcome = native_kick_viewer::point_balance(&client, slug);
+                            if let Ok(mut results) = balances_worker.lock() {
+                                let info = results.entry(slug.clone()).or_default();
+                                match outcome {
+                                    Ok(Some(balance)) => {
+                                        info.balance = Some(balance);
+                                        info.updated_at = Some(Instant::now());
+                                        info.error = None;
+                                    }
+                                    Ok(None) => info.error = None,
+                                    Err(error) => info.error = Some(error),
+                                }
+                            }
+                            // Avoid bursts when many official creators are offline.
+                            thread::sleep(Duration::from_millis(350));
+                        }
+                    }
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }).map_err(|_| "Could not start Kick offline balance polling".to_owned())?;
+            self.offline_points = Some(OfflinePointsWorker { roster, balances, stop });
+        } else if let Some(worker) = &self.offline_points {
+            if let Ok(mut current) = worker.roster.lock() {
+                if *current != pending { *current = pending; }
+            }
+        }
+        Ok(())
+    }
+    pub fn offline_point_balances(&self) -> BTreeMap<String, OfflinePoints> {
+        self.offline_points.as_ref()
+            .and_then(|worker| worker.balances.lock().ok().map(|balances| balances.clone()))
+            .unwrap_or_default()
+    }
     pub fn snapshot(&self) -> KickSnapshot {
         let mut state = self.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
         for channel in &mut state.channels {
@@ -153,6 +234,9 @@ impl KickMonitor {
         state
     }
     pub fn stop(&self) {
+        if let Some(worker) = &self.offline_points {
+            worker.stop.store(true, Ordering::Relaxed);
+        }
         for worker in &self.observed {
             worker.stop.store(true, Ordering::Relaxed);
         }
