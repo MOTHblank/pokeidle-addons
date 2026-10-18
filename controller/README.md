@@ -20,24 +20,26 @@ escolher outra conta não interrompe as demais. Os cartões principais do
 gerenciador PokéIdle contêm somente um atalho **Gerenciar Kick →**, sem
 duplicar toda a configuração.
 
-1. **Login pelo Firefox normal:** em **Contas → Kick** clique em
-   **Entrar pelo Firefox normal**. Para evitar os desafios de autenticação
-   causados por um navegador instrumentado, Moth abre uma **janela comum,
-   sem Remote Agent, BiDi, WebDriver ou scripts injetados**, usando um
-   perfil limpo e persistente dedicado à Kick para cada conta
-   (`Kick-Profiles/Game1` etc.). O perfil Kick não compartilha o Firefox
-   monitorado do PokéIdle: o login pode ocorrer com a sessão nativa do jogo
-   já em execução. **Entre na Kick normalmente e feche essa janela do
-   Firefox quando terminar.** Após a saída do navegador, Moth lê somente
-   o cookie `session_token` pertencente a `kick.com` no banco local
-   `cookies.sqlite` daquele perfil, valida o formato e guarda a sessão
-   apenas no cofre protegido pelo SO (DPAPI / Secret Service).
-   **Nenhum token precisa ser copiado manualmente.** O Moth não lê cookies
-   de outros domínios nem mantém o navegador aberto após o login.
-   Se o cookie estiver ausente, for incompatível ou tiver expirado, a
-   interface mostra o erro em vez de declarar o login bem-sucedido.
-   A compatibilidade com a autenticação interna não documentada da Kick
-   depende de um teste real. **Avançado → Token manual** continua disponível.
+1. **Login pelo Firefox normal:** em **Contas → Kick**, clique em
+   **Entrar pelo Firefox normal**. O Moth reabre o **mesmo perfil Firefox
+   Game1–Game4 já utilizado pela conta PokéIdle**, preservando os cookies,
+   a sessão Google e demais configurações do usuário. Não cria mais um
+   perfil `Kick-Profiles` nem exige fazer login no Google novamente,
+   caso a sessão Google ainda esteja válida nesse perfil.
+
+   **Importante:** é preciso terminar primeiro a transferência do PokéIdle
+   para a sessão nativa, aguardando o fechamento do Firefox daquele perfil.
+   Dois processos Firefox não podem usar o mesmo perfil simultaneamente.
+   A reabertura para a Kick é **normal, sem Remote Agent,
+   `--remote-debugging-port`, BiDi ou scripts injetados**. O Moth não altera
+   as preferências já existentes no perfil. Depois de entrar na Kick,
+   **feche a janela do Firefox**. Só então o Moth lê o cookie
+   `session_token` de `kick.com` no banco `cookies.sqlite` do mesmo
+   perfil, valida seu formato e guarda o token no cofre seguro do SO
+   (DPAPI / Secret Service). Nenhuma senha ou token precisa ser copiado.
+   Se o cookie não estiver disponível ou for incompatível, informa um erro
+   em vez de declarar sucesso. A compatibilidade precisa de teste real.
+   **Avançado → Token manual** continua como alternativa.
 2. **Canais oficiais do PokéIdle:** Moth Controller lê automaticamente
    `state.kick.oficiais` do WebSocket autenticado de `pokeidle.io/app`,
    usando `slug`/`login` quando `aoVivo` é verdadeiro. Os canais aparecem
