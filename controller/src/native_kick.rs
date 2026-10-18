@@ -54,8 +54,8 @@ pub struct OfflinePoints {
     pub error: Option<String>,
 }
 
-/// A single HTTP poller handles all official offline creators; none of these
-/// need a viewer WebSocket, HLS download, or per-channel thread.
+/// A single HTTP poller handles official creators not currently monitored
+/// by the stream supervisors, without extra WebSockets or media downloads.
 struct OfflinePointsWorker {
     roster: Arc<Mutex<Vec<String>>>,
     balances: Arc<Mutex<BTreeMap<String, OfflinePoints>>>,
@@ -155,12 +155,12 @@ impl KickMonitor {
         }
         Ok(())
     }
-    /// Check authenticated balances for official creators who are currently
-    /// offline and aren't already handled by a regular channel supervisor.
+    /// Check authenticated balances for official creators not handled by a
+    /// regular channel supervisor (offline or beyond the streaming limit).
     /// The worker sleeps between polls and never creates media connections.
     pub fn sync_offline_officials(&mut self, names: &[String]) -> Result<(), String> {
         let mut pending: Vec<String> = names.iter().filter(|name|
-            !self.observed.iter().any(|worker| worker.slug == **name)
+            !self.observed.iter().any(|worker| worker.slug == name.as_str())
         ).cloned().collect();
         pending.sort();
         pending.dedup();
