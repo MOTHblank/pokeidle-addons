@@ -3298,8 +3298,17 @@ fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.panel_tab = PanelTab::Hunts;
             }
 
-            if sidebar_button(ui, tr("Accounts"), app.panel_tab == PanelTab::Accounts).clicked() {
+            if sidebar_button(ui, tr("Accounts"),
+                app.panel_tab == PanelTab::Accounts &&
+                app.accounts_section == AccountsSection::Profiles).clicked() {
                 app.panel_tab = PanelTab::Accounts;
+                app.accounts_section = AccountsSection::Profiles;
+            }
+            if sidebar_button(ui, "  ·  Kick",
+                app.panel_tab == PanelTab::Accounts &&
+                app.accounts_section == AccountsSection::Kick).clicked() {
+                app.panel_tab = PanelTab::Accounts;
+                app.accounts_section = AccountsSection::Kick;
             }
 
             if sidebar_button(ui, tr("Automation"), app.panel_tab == PanelTab::Automation).clicked() {
