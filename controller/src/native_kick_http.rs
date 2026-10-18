@@ -85,6 +85,15 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
         config.push_str(&format!(
             "header = \"Authorization: Bearer {}\"\n", quoted(token)?
         ));
+        // A regular Kick browser also sends its first-party session cookie.
+        // Only forward it to the two exact Kick endpoint families above;
+        // never send this cookie to HLS CDNs or arbitrary redirects.
+        if token.contains('|') {
+            config.push_str(&format!(
+                "header = \"Cookie: session_token={}\"\n",
+                quoted(&token.replace('|', "%7C"))?
+            ));
+        }
     }
     for (name, value) in extra_headers {
         if !matches!(*name, "X-Chatroom" | "X-User-Id" | "Content-Type" | "X-Client-Token") {
