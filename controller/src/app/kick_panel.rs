@@ -456,7 +456,13 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
 
     if let Some(snapshot) = monitor.as_ref() {
-        if let Some(error) = snapshot.error.as_ref()
+        if snapshot.auth_denied {
+            ui.add_space(6.0);
+            ui.label(RichText::new(kick_label(br,
+                "Kick refused viewer authentication (401/403). Repeated requests are paused for this account. The saved Firefox session may not be a valid API Bearer. Stop the Kick monitor before trying a new login.",
+                "Kick recusou a autenticação do espectador (401/403). As tentativas repetidas foram suspensas nesta conta. A sessão do Firefox pode não ser um Bearer válido para a API. Pare o monitor Kick antes de tentar novo login."))
+                .size(11.0).color(WARN));
+        } else if let Some(error) = snapshot.error.as_ref()
             .or_else(|| snapshot.channels.iter().find_map(|channel| {
                 channel.error.as_ref().or(channel.watch.error.as_ref())
             }))

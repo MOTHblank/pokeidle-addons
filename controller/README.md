@@ -64,7 +64,13 @@ duplicar toda a configuração.
    PokéIdle**, quantos já receberam **resposta da API da Kick**, e quantos
    estão **recebendo mídia**. Erros do servidor ou bloqueios da API são
    mostrados diretamente no painel, nunca ocultos apenas em detalhes. O
-   monitor usa o curl do sistema em chamadas curtas aos endpoints
+   monitor faz chamadas curtas aos endpoints da Kick via curl,
+   sem abrir console no Windows (CREATE_NO_WINDOW), com no máximo
+   **dois processos simultâneos** entre as contas. Após 401/403 da
+   API privada, suspende novas tentativas autenticadas naquela conta.
+   O viewer envia o identificador de cliente e o cookie de sessão ao
+   próprio domínio Kick; o segredo vai apenas por stdin e nunca nos
+   argumentos nem logs. Assim,
    internos da Kick; isso contorna diferenças de TLS observadas com alguns
    clientes HTTP Rust, sem iniciar outro navegador permanente. O token da
    conta é enviado pelo stdin do subprocesso, nunca nos argumentos ou logs.
