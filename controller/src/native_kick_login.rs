@@ -1,167 +1,103 @@
-//! Opt-in Kick login from the Moth-owned Firefox profile.
-//! One temporary BiDi session, scoped to a newly launched Kick-only browser.
-//! Browser login is not Kick Developer OAuth; the website's own authenticated
-//! request carries the token required by our private Kick viewer transport.
-use crate::config::{Config, GameProfile};
+//! Kick login through an ordinary, uninstrumented Firefox window.
+//! No Remote Agent, BiDi, WebDriver, injected scripts or page automation.
+//! After Firefox closes, import only this profile's own Kick session cookie
+//! from its local cookie database and store it in the OS credential vault.
+use crate::config::{self, Config, GameProfile};
 use crate::{firefox, native_auth};
-use serde_json::{json, Value};
-use std::net::{SocketAddr, TcpStream};
-use std::process::Child;
+use std::ffi::{CString, c_char, c_int, c_void};
+use std::path::Path;
+use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
-use std::{thread, io};
-use tungstenite::{client, stream::MaybeTlsStream, Message, WebSocket};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
-const TIMEOUT: Duration = Duration::from_secs(7);
-const LOGIN_WINDOW: Duration = Duration::from_secs(360);
+const CHECK_INTERVAL: Duration = Duration::from_millis(500);
+const SQLITE_OK: c_int = 0;
+const SQLITE_ROW: c_int = 100;
+const SQLITE_DONE: c_int = 101;
+const SQLITE_OPEN_READONLY: c_int = 1;
 
-// Installed before Kick is navigated, in the actual page realm. Observe only
-// first-party request headers; never intercept response bodies or log secrets.
-const PRELOAD: &str = r#"() => {
-    try {
-        if (location.hostname !== 'kick.com' && location.hostname !== 'www.kick.com') return;
-        if (window.__mothKickBrowserLogin) return;
-        let token = '';
-        const valid = value => typeof value === 'string' &&
-            /^[0-9]{1,18}\|[A-Za-z0-9._~-]{16,8192}$/.test(value);
-        const remember = value => {
-            if (typeof value !== 'string') return;
-            const found = value.trim().replace(/^Bearer\s+/i, '');
-            if (valid(found)) token = found;
-        };
-        const inspect = headers => {
-            try { if (headers) remember(new Headers(headers).get('authorization')); }
-            catch (_) {}
-        };
-        const firstParty = value => {
-            try {
-                const url = new URL(value, location.href);
-                return url.protocol === 'https:' &&
-                    (url.hostname === 'kick.com' || url.hostname.endsWith('.kick.com'));
-            } catch (_) { return false; }
-        };
-        Object.defineProperty(window, '__mothKickBrowserLogin', {
-            value: Object.freeze({ token() { return token || null; } }),
-            configurable: false
-        });
-        const original = window.fetch;
-        if (typeof original === 'function') {
-            window.fetch = function(input, options) {
-                try {
-                    const target = typeof input === 'string' ? input : input.url;
-                    if (firstParty(target)) {
-                        inspect(options?.headers);
-                        if (input instanceof Request) inspect(input.headers);
-                    }
-                } catch (_) {}
-                return Reflect.apply(original, this, arguments);
-            };
-        }
-        const proto = window.XMLHttpRequest?.prototype;
-        if (proto) {
-            const requests = new WeakMap();
-            const open = proto.open;
-            const setHeader = proto.setRequestHeader;
-            proto.open = function(method, url) {
-                requests.set(this, firstParty(url));
-                return Reflect.apply(open, this, arguments);
-            };
-            proto.setRequestHeader = function(name, value) {
-                if (requests.get(this) && /^authorization$/i.test(String(name))) {
-                    remember(value);
-                }
-                return Reflect.apply(setHeader, this, arguments);
-            };
-        }
-    } catch (_) {}
-}"#;
-
-fn command(socket: &mut Socket, id: u64, method: &str, params: Value) -> Result<Value, String> {
-    socket.send(Message::Text(json!({
-        "id":id, "method":method, "params":params
-    }).to_string().into())).map_err(|_| "Kick Firefox BiDi send failed".to_owned())?;
-    let deadline = Instant::now() + TIMEOUT;
-    while Instant::now() < deadline {
-        match socket.read() {
-            Ok(Message::Text(text)) => {
-                let Ok(reply) = serde_json::from_str::<Value>(&text) else { continue };
-                if reply.get("id").and_then(Value::as_u64) != Some(id) { continue; }
-                if reply.get("error").is_some() {
-                    return Err(format!("Kick Firefox BiDi rejected {method}"));
-                }
-                return Ok(reply.get("result").cloned().unwrap_or(Value::Null));
-            },
-            Ok(Message::Close(_)) => break,
-            Err(tungstenite::Error::Io(ref error)) if error.kind() == io::ErrorKind::WouldBlock
-                || error.kind() == io::ErrorKind::TimedOut => continue,
-            Err(_) => return Err("Kick Firefox BiDi disconnected".into()),
-            _ => {}
-        }
-    }
-    Err(format!("Kick Firefox BiDi timed out on {method}"))
+// Use the operating system's SQLite (Windows ships WinSQLite3). This avoids
+// bundling another SQLite engine just to read a single signed-in cookie.
+#[cfg_attr(windows, link(name = "winsqlite3"))]
+#[cfg_attr(not(windows), link(name = "sqlite3"))]
+unsafe extern "C" {
+    fn sqlite3_open_v2(filename: *const c_char, db: *mut *mut c_void,
+        flags: c_int, vfs: *const c_char) -> c_int;
+    fn sqlite3_close(db: *mut c_void) -> c_int;
+    fn sqlite3_prepare_v2(db: *mut c_void, sql: *const c_char,
+        bytes: c_int, stmt: *mut *mut c_void, tail: *mut *const c_char) -> c_int;
+    fn sqlite3_step(stmt: *mut c_void) -> c_int;
+    fn sqlite3_finalize(stmt: *mut c_void) -> c_int;
+    fn sqlite3_column_text(stmt: *mut c_void, column: c_int) -> *const u8;
+    fn sqlite3_column_bytes(stmt: *mut c_void, column: c_int) -> c_int;
+    fn sqlite3_column_int64(stmt: *mut c_void, column: c_int) -> i64;
 }
 
-fn connect(config: &Config, cancelled: &AtomicBool) -> Result<Socket, String> {
-    let address = SocketAddr::from(([127,0,0,1], config.remote_debug_port));
-    let deadline = Instant::now() + Duration::from_secs(18);
-    while Instant::now() < deadline && !cancelled.load(Ordering::Relaxed) {
-        if let Ok(tcp) = TcpStream::connect_timeout(&address, Duration::from_millis(800)) {
-            let _ = tcp.set_read_timeout(Some(Duration::from_millis(800)));
-            let _ = tcp.set_write_timeout(Some(TIMEOUT));
-            if let Ok((socket, _)) = client(
-                format!("ws://127.0.0.1:{}/session", config.remote_debug_port),
-                MaybeTlsStream::Plain(tcp))
-            { return Ok(socket); }
-        }
-        thread::sleep(Duration::from_millis(350));
-    }
-    Err("Could not establish Firefox BiDi for Kick sign-in".into())
+struct Database(*mut c_void);
+impl Drop for Database {
+    fn drop(&mut self) { unsafe { sqlite3_close(self.0); } }
 }
-fn capture(socket: &mut Socket, cancelled: &AtomicBool) -> Result<String, String> {
-    command(socket, 1, "session.new", json!({"capabilities":{}}))?;
-    command(socket, 2, "script.addPreloadScript",
-        json!({"functionDeclaration": PRELOAD}))?;
-    let tree = command(socket, 3, "browsingContext.getTree", json!({"maxDepth":1}))?;
-    let ctx = tree.get("contexts").and_then(Value::as_array)
-        .and_then(|list| list.first())
-        .and_then(|value| value.get("context")).and_then(Value::as_str)
-        .ok_or_else(|| "Kick sign-in browser has no tab".to_owned())?.to_owned();
-    command(socket, 4, "browsingContext.navigate",
-        json!({"context":ctx,"url":"https://kick.com/","wait":"none"}))?;
-    let deadline = Instant::now() + LOGIN_WINDOW;
-    let mut seq = 5u64;
-    while Instant::now() < deadline {
-        if cancelled.load(Ordering::Relaxed) { return Err("Kick login cancelled".into()); }
-        let output = command(socket, seq, "script.evaluate", json!({
-            "expression": "JSON.stringify(window.__mothKickBrowserLogin?.token() || null)",
-            "target": {"context":ctx}, "awaitPromise":false
-        }));
-        seq += 1;
-        if let Ok(result) = output {
-            if let Some(raw) = result.get("result").and_then(|v| v.get("value")).and_then(Value::as_str) {
-                if let Ok(Some(token)) = serde_json::from_str::<Option<String>>(raw) {
-                    if token.len() <= 8192 && token.starts_with(|ch:char| ch.is_ascii_digit()) {
-                        return Ok(token);
+struct Statement(*mut c_void);
+impl Drop for Statement {
+    fn drop(&mut self) { unsafe { sqlite3_finalize(self.0); } }
+}
+fn cookie_looks_like_kick_token(value: &str) -> bool {
+    let Some((id, secret)) = value.split_once('|') else { return false };
+    !id.is_empty() && id.len() <= 18 && id.bytes().all(|b| b.is_ascii_digit())
+        && secret.len() >= 16 && value.len() <= 8192
+        && secret.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// Return one unexpired Kick session token or None. Never copy other cookies
+/// or open an arbitrary Firefox profile/database.
+fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
+    let path = profile_dir.join("cookies.sqlite");
+    if !path.is_file() { return Ok(None); }
+    let path = CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|_| "Invalid Kick Firefox profile path".to_owned())?;
+    let mut raw = ptr::null_mut();
+    let rc = unsafe {
+        sqlite3_open_v2(path.as_ptr(), &mut raw, SQLITE_OPEN_READONLY, ptr::null())
+    };
+    if rc != SQLITE_OK {
+        if !raw.is_null() { unsafe { sqlite3_close(raw); } }
+        return Err("Could not open the Kick Firefox cookie database".into());
+    }
+    let db = Database(raw);
+    // Values are never used to construct SQL; restrict to the domain and the
+    // specific session cookie, not Cloudflare or third-party cookies.
+    let sql = c"SELECT value, expiry FROM moz_cookies WHERE name = 'session_token'         AND host IN ('kick.com', '.kick.com', 'www.kick.com', '.www.kick.com')         ORDER BY expiry DESC";
+    let mut stmt = ptr::null_mut();
+    if unsafe { sqlite3_prepare_v2(db.0, sql.as_ptr(), -1, &mut stmt, ptr::null_mut()) } != SQLITE_OK {
+        return Err("Kick Firefox cookies database has an unsupported schema".into());
+    }
+    let stmt = Statement(stmt);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)
+        .unwrap_or_default().as_secs() as i64;
+    loop {
+        match unsafe { sqlite3_step(stmt.0) } {
+            SQLITE_ROW => {
+                let expiry = unsafe { sqlite3_column_int64(stmt.0, 1) };
+                if expiry > 0 && expiry <= now { continue; }
+                let length = unsafe { sqlite3_column_bytes(stmt.0, 0) };
+                if !(1..=8192).contains(&length) { continue; }
+                let text = unsafe { sqlite3_column_text(stmt.0, 0) };
+                if text.is_null() { continue; }
+                let bytes = unsafe { std::slice::from_raw_parts(text, length as usize) };
+                if let Ok(token) = std::str::from_utf8(bytes) {
+                    if cookie_looks_like_kick_token(token) {
+                        return Ok(Some(token.to_owned()));
                     }
                 }
             }
+            SQLITE_DONE => return Ok(None),
+            _ => return Err("Could not read Kick Firefox session cookie".into()),
         }
-        thread::sleep(Duration::from_secs(2));
     }
-    Err("Kick login timed out. Open Kick and sign in, then retry.".into())
 }
-fn stop_owned_browser(socket: &mut Socket, child: &mut Child) {
-    let _ = command(socket, 900_001, "browser.close", json!({}));
-    for _ in 0..8 {
-        if matches!(child.try_wait(), Ok(Some(_))) { return; }
-        thread::sleep(Duration::from_millis(250));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-/// Safe, per-account UI state; never contains a credential.
+
 #[derive(Clone, Debug)]
 pub enum LoginStatus {
     Idle,
@@ -176,76 +112,107 @@ struct LoginJob {
 fn jobs() -> &'static Mutex<[LoginJob; 4]> {
     static JOBS: OnceLock<Mutex<[LoginJob; 4]>> = OnceLock::new();
     JOBS.get_or_init(|| Mutex::new(std::array::from_fn(|_| LoginJob {
-        status: LoginStatus::Idle,
-        cancelled: Arc::new(AtomicBool::new(false)),
+        status: LoginStatus::Idle, cancelled: Arc::new(AtomicBool::new(false)),
     })))
 }
 pub fn status(profile: GameProfile) -> LoginStatus {
-    jobs().lock().ok().map(|guard| guard[profile.index()].status.clone())
+    jobs().lock().ok().map(|jobs| jobs[profile.index()].status.clone())
         .unwrap_or(LoginStatus::Error("Kick login state unavailable".into()))
 }
 pub fn cancel(profile: GameProfile) {
-    if let Ok(guard) = jobs().lock() {
-        guard[profile.index()].cancelled.store(true, Ordering::Relaxed);
+    if let Ok(jobs) = jobs().lock() {
+        jobs[profile.index()].cancelled.store(true, Ordering::Relaxed);
     }
 }
 pub fn reset(profile: GameProfile) {
-    if let Ok(mut guard) = jobs().lock() {
-        let current = &mut guard[profile.index()];
-        if !matches!(current.status, LoginStatus::Running) {
-            current.status = LoginStatus::Idle;
+    if let Ok(mut jobs) = jobs().lock() {
+        if !matches!(jobs[profile.index()].status, LoginStatus::Running) {
+            jobs[profile.index()].status = LoginStatus::Idle;
         }
     }
 }
 pub fn start(profile: GameProfile) -> Result<(), String> {
     let cancelled = {
-        let mut guard = jobs().lock()
+        let mut jobs = jobs().lock()
             .map_err(|_| "Kick login state unavailable".to_owned())?;
-        let current = &mut guard[profile.index()];
-        if matches!(current.status, LoginStatus::Running) {
-            return Err("Kick login is already in progress".into());
+        let job = &mut jobs[profile.index()];
+        if matches!(job.status, LoginStatus::Running) {
+            return Err("Kick login already in progress".into());
         }
         let cancelled = Arc::new(AtomicBool::new(false));
-        current.status = LoginStatus::Running;
-        current.cancelled = Arc::clone(&cancelled);
+        job.status = LoginStatus::Running;
+        job.cancelled = Arc::clone(&cancelled);
         cancelled
     };
-    let outcome = thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name(format!("moth-kick-login-{}", profile.name()))
         .spawn(move || {
             let result = login(profile, &cancelled);
-            if let Ok(mut guard) = jobs().lock() {
-                guard[profile.index()].status = match result {
+            if let Ok(mut jobs) = jobs().lock() {
+                jobs[profile.index()].status = match result {
                     Ok(()) => LoginStatus::Done,
                     Err(error) => LoginStatus::Error(error),
                 };
             }
         });
-    if let Err(error) = outcome {
-        if let Ok(mut guard) = jobs().lock() {
-            guard[profile.index()].status = LoginStatus::Idle;
-        }
-        return Err(format!("Could not start Kick Firefox login: {error}"));
+    if let Err(error) = spawned {
+        reset_after_spawn_failure(profile);
+        return Err(format!("Could not start Kick login: {error}"));
     }
     Ok(())
 }
+fn reset_after_spawn_failure(profile: GameProfile) {
+    if let Ok(mut jobs) = jobs().lock() {
+        jobs[profile.index()].status = LoginStatus::Idle;
+    }
+}
 
+/// This profile is separate from Game1..Game4 so Kick login remains a regular
+/// Firefox session even while PokéIdle's native game session is running.
+fn kick_config(profile: GameProfile) -> Result<Config, String> {
+    let mut config = Config::for_profile(profile)?;
+    config.profile_dir = config::data_root()?.join("Kick-Profiles").join(profile.name());
+    config.url = "https://kick.com/".into();
+    Ok(config)
+}
 pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String> {
-    let config = Config::for_profile(profile)?;
+    let config = kick_config(profile)?;
     if firefox::find_profile_process(&config)?.is_some() {
-        return Err("This Firefox profile is already open. Complete native game handoff first.".into());
+        return Err("A Kick Firefox window is already using this profile".into());
     }
-    let mut child = firefox::launch_kick_login(&config)?;
-    let result = (|| {
-        let mut socket = connect(&config, cancelled)?;
-        let result = capture(&mut socket, cancelled)
-            .and_then(|token| native_auth::save_kick_token(profile, &token));
-        stop_owned_browser(&mut socket, &mut child);
-        result
-    })();
-    if result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
+    let mut browser = firefox::launch_kick_login(&config)?;
+    // Ordinary Firefox is user-controlled. No inspection or interaction with
+    // its web pages: the user signs in and closes the browser when finished.
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            let _ = browser.kill();
+            let _ = browser.wait();
+            return Err("Kick login cancelled".into());
+        }
+        match browser.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => thread::sleep(CHECK_INTERVAL),
+            Err(_) => return Err("Could not observe the Kick Firefox login window".into()),
+        }
     }
-    result
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Kick login cancelled".into());
+    }
+    let token = read_kick_cookie(&config.profile_dir)?.ok_or_else(|| {
+        "No valid Kick session_token was found. Sign in, then close the Firefox window.".to_owned()
+    })?;
+    native_auth::save_kick_token(profile, &token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cookie_looks_like_kick_token;
+    #[test]
+    fn accepts_site_session_format_only() {
+        assert!(cookie_looks_like_kick_token("123|abcdefghijklmnop123456"));
+        assert!(!cookie_looks_like_kick_token("Bearer 123|abcdefghijklmnop123456"));
+        assert!(!cookie_looks_like_kick_token("123|short"));
+        assert!(!cookie_looks_like_kick_token("123|hello there and a space"));
+        assert!(!cookie_looks_like_kick_token("abc|abcdefghijklmnop123456"));
+    }
 }
