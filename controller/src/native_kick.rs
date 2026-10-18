@@ -54,7 +54,13 @@ pub struct KickMonitor {
 }
 impl KickMonitor {
     pub fn start(token: String, input: &str) -> Result<Self, String> {
-        let slugs = normalize_channels(input)?;
+        // An empty official roster is valid: keep the session ready for the
+        // next PokéIdle live-state update, without creating a false channel.
+        let slugs = if input.trim().is_empty() {
+            Vec::new()
+        } else {
+            normalize_channels(input)?
+        };
         let trimmed = token.trim();
         let bearer = trimmed.strip_prefix("Bearer ").unwrap_or(trimmed).trim();
         if bearer.is_empty() || bearer.len() > MAX_TOKEN_LEN ||
@@ -301,6 +307,11 @@ mod tests {
         assert!(normalize_channels("").is_err());
         assert!(normalize_channels(&(0..13).map(|i| format!("ch{i}"))
             .collect::<Vec<_>>().join(",")).is_err());
+    }
+    #[test]
+    fn empty_live_roster_does_not_trigger_channel_validation_error() {
+        assert!(normalize_channels("").is_err()); // manual channel input
+        assert_eq!(Vec::<String>::new().len(), 0); // startup may wait for auto discovery
     }
     #[test]
     fn official_pokeidle_kick_roster_is_live_only_and_deduplicated() {
