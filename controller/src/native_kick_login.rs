@@ -52,6 +52,35 @@ fn cookie_looks_like_kick_token(value: &str) -> bool {
 
 /// Return one unexpired Kick session token or None. Never copy other cookies
 /// or open an arbitrary Firefox profile/database.
+/// Decode URL-encoded session values such as 123%7Csecret, then
+/// validate the actual credential. All bytes remain local and bounded.
+fn decode_kick_session_cookie(value: &str) -> Option<String> {
+    let bytes = value.trim().as_bytes();
+    if bytes.is_empty() || bytes.len() > 8192 { return None; }
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = |b: u8| -> Option<u8> {
+                match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                }
+            };
+            decoded.push(hex(*bytes.get(i + 1)?)? * 16 +
+                hex(*bytes.get(i + 2)?)?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let token = String::from_utf8(decoded).ok()?;
+    cookie_looks_like_kick_token(&token).then_some(token)
+}
+
 fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
     let path = profile_dir.join("cookies.sqlite");
     if !path.is_file() { return Ok(None); }
@@ -86,9 +115,9 @@ fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
                 let text = unsafe { sqlite3_column_text(stmt.0, 0) };
                 if text.is_null() { continue; }
                 let bytes = unsafe { std::slice::from_raw_parts(text, length as usize) };
-                if let Ok(token) = std::str::from_utf8(bytes) {
-                    if cookie_looks_like_kick_token(token) {
-                        return Ok(Some(token.to_owned()));
+                if let Ok(raw) = std::str::from_utf8(bytes) {
+                    if let Some(token) = decode_kick_session_cookie(raw) {
+                        return Ok(Some(token));
                     }
                 }
             }
@@ -205,7 +234,16 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
-    use super::cookie_looks_like_kick_token;
+    use super::{cookie_looks_like_kick_token, decode_kick_session_cookie};
+    #[test]
+    fn decodes_percent_encoded_kick_cookies() {
+        let expected = Some("123|abcdefghijklmnop123456".to_owned());
+        assert_eq!(decode_kick_session_cookie("123%7Cabcdefghijklmnop123456"), expected);
+        assert_eq!(decode_kick_session_cookie("123%7cabcdefghijklmnop123456"), expected);
+        assert_eq!(decode_kick_session_cookie("123|abcdefghijklmnop123456"), expected);
+        assert_eq!(decode_kick_session_cookie("123%7Gabcdefghijklmnop123456"), None);
+        assert_eq!(decode_kick_session_cookie("123%25257Cabcdefghijklmnop123456"), None);
+    }
     #[test]
     fn accepts_site_session_format_only() {
         assert!(cookie_looks_like_kick_token("123|abcdefghijklmnop123456"));
