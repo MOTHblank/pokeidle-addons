@@ -184,6 +184,29 @@ pub fn parse(script: &str) -> Result<Reference, String> {
     }
     Ok(result)
 }
+/// Fallback from the upstream game's elemental effectiveness contract.
+/// The public guide is helpful for locked destination previews but must not
+/// be a single point of failure for authenticated live Hunt Atlas data.
+fn built_in_type_chart()->BTreeMap<String,BTreeMap<String,f64>>{
+    const TYPES:[&str;18]=[
+        "NORMAL","FIRE","WATER","ELECTRIC","GRASS","ICE","FIGHTING",
+        "POISON","GROUND","FLYING","PSYCHIC","BUG","ROCK","GHOST",
+        "DRAGON","DARK","STEEL","FAIRY"
+    ];
+    let mut chart=TYPES.iter().map(|kind|
+        ((*kind).to_owned(),BTreeMap::new()))
+        .collect::<BTreeMap<_,_>>();
+    for line in include_str!("../assets/visual/upstream-type-chart.tsv").lines(){
+        if line.starts_with('#'){continue}
+        let mut fields=line.split('\t');
+        let (Some(attack),Some(defend),Some(raw))=
+            (fields.next(),fields.next(),fields.next())else{continue};
+        let Ok(value)=raw.parse::<f64>()else{continue};
+        if !value.is_finite()||value<0.0 || !chart.contains_key(defend){continue}
+        if let Some(row)=chart.get_mut(attack){row.insert(defend.to_owned(),value);}
+    }
+    chart
+}
 pub fn load() -> Result<Reference, String> {
     crate::native_tls::ensure()?;
     let client=reqwest::blocking::Client::builder()
@@ -195,19 +218,32 @@ pub fn load() -> Result<Reference, String> {
             } else { attempt.follow() }
         }))
         .build().map_err(|_| "Could not initialize guide downloader")?;
-    let response=client.get(URL)
-        .send().map_err(|e|format!("Guide unavailable: {e}"))?
-        .error_for_status().map_err(|e|format!("Guide returned error: {e}"))?;
-    if response.content_length().is_some_and(|n|n>MAX_BYTES) {
-        return Err("Guide reference is larger than the allowed 4 MB".into());
-    }
-    let mut bytes=Vec::new();
-    response.take(MAX_BYTES+1).read_to_end(&mut bytes)
-        .map_err(|_|"Could not read guide reference".to_owned())?;
-    if bytes.len() as u64 > MAX_BYTES {return Err("Guide reference exceeded size limit".into())}
-    let script=std::str::from_utf8(&bytes)
-        .map_err(|_|"Guide reference is not UTF-8".to_owned())?;
-    let mut reference=parse(script)?;
+    let guide=(||->Result<Reference,String>{
+        let response=client.get(URL)
+            .send().map_err(|e|format!("Guide unavailable: {e}"))?
+            .error_for_status().map_err(|e|format!("Guide returned error: {e}"))?;
+        if response.content_length().is_some_and(|n|n>MAX_BYTES){
+            return Err("Guide reference is larger than the allowed 4 MB".into())
+        }
+        let mut bytes=Vec::new();
+        response.take(MAX_BYTES+1).read_to_end(&mut bytes)
+            .map_err(|_|"Could not read guide reference".to_owned())?;
+        if bytes.len() as u64>MAX_BYTES{
+            return Err("Guide reference exceeded size limit".into())
+        }
+        let script=std::str::from_utf8(&bytes)
+            .map_err(|_|"Guide reference is not UTF-8".to_owned())?;
+        parse(script)
+    })();
+    let mut reference=match guide {
+        Ok(guide)=>guide,
+        Err(error)=>{
+            crate::logging::warn(&format!(
+                "Hunt Atlas guide unavailable; using game catalogs: {error}"));
+            Reference::default()
+        }
+    };
+    if reference.chart.is_empty(){reference.chart=built_in_type_chart();}
     // Only public static assets. Never send BiDi credentials or game cookies.
     // Missing optional assets do NOT prevent Atlas from loading.
     let assets=reqwest::blocking::Client::builder()
@@ -236,6 +272,9 @@ pub fn load() -> Result<Reference, String> {
         if let Ok(catalog)=serde_json::from_slice::<Value>(&body){
             merge_creature_catalog(&mut reference,&catalog);
         }
+    }
+    if reference.species.is_empty(){
+        return Err("Neither the guide nor the game's public creature catalogs could be loaded".into())
     }
     finalize_capture_stages(&mut reference);
     merge_upstream_megas(&mut reference);
@@ -529,6 +568,17 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn game_type_chart_survives_missing_third_party_guide(){
+        let chart=built_in_type_chart();
+        assert_eq!(chart.len(),18);
+        assert_eq!(chart["GHOST"]["NORMAL"],0.0);
+        assert_eq!(chart["DRAGON"]["DRAGON"],2.0);
+        assert_eq!(chart["FIRE"]["GRASS"],2.0);
+        assert_eq!(chart["ELECTRIC"]["GROUND"],0.0);
+        // Neutral entries are intentionally implicit in the compact table.
+        assert!(!chart["NORMAL"].contains_key("NORMAL"));
+    }
     #[test]
     fn public_creature_capture_rarity_is_separate_from_market_and_guide_loot(){
         let mut reference=Reference::default();
