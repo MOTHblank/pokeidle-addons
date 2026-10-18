@@ -243,7 +243,7 @@ impl HuntView {
     }
     pub fn unlocked_outland_tier(&self,tier:u8)->Option<f64>{
         let (level,mult)=self.outland_requirement(tier)?;
-        (self.trainer_level?>=level).then_some(mult)
+        (self.trainer_level? >= level).then_some(mult)
     }
 }
 /// Refuse partial, reordered or malformed tables from a remote game message.
@@ -733,9 +733,13 @@ impl HuntIntel {
                 name: item.get("nome").or_else(||item.get("name"))
                     .or_else(||item.get("n"))
                     .and_then(Value::as_str).unwrap_or(slug).to_owned(),
-                area: item.get("area").and_then(Value::as_str).unwrap_or("").to_owned(),
-                region: item.get("regiao").and_then(Value::as_str).unwrap_or("").to_owned(),
+                area: item.get("area").or_else(||item.get("a"))
+                    .and_then(Value::as_str).unwrap_or("").to_owned(),
+                region: item.get("regiao").or_else(||item.get("region"))
+                    .or_else(||item.get("r"))
+                    .and_then(Value::as_str).unwrap_or("").to_owned(),
                 level: Self::num(item, "nivel")
+                    .or_else(||Self::num(item,"level"))
                     .or_else(||Self::num(item,"nv"))
                     .unwrap_or(0).min(u32::MAX as u64) as u32,
                 total_spawns: Self::num(item, "totalSpawns").unwrap_or(0).min(u32::MAX as u64) as u32,
