@@ -346,6 +346,16 @@ impl NativeSession {
     pub fn snapshot(&self) -> NativeSnapshot {
         self.snapshot.lock().map(|status| status.clone()).unwrap_or_default()
     }
+    /// Cheap roster read for the Kick workspace. The native game snapshot
+    /// may contain much larger automation and market data.
+    pub fn official_kick_live(&self) -> Option<Vec<String>> {
+        let state = self.snapshot.lock().ok()?;
+        if state.phase != "Online" || state.last_received
+            .is_none_or(|at| at.elapsed() > Duration::from_secs(90)) {
+            return None;
+        }
+        state.kick_official_live.clone()
+    }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.twitch.stop();
