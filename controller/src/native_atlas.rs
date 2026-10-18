@@ -3,7 +3,7 @@
 //! The account's own welcome.hunts is authoritative for unlocked destinations.
 use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, gross_gold_per_kill};
 use serde_json::Value;
-use std::{collections::{BTreeMap,BTreeSet}, io::Read, time::Duration};
+use std::{collections::{BTreeMap,BTreeSet}, io::Read, sync::OnceLock, time::Duration};
 
 const URL: &str = "https://guiapokeidlehardtocapture.site/data.js?v=32";
 const HOST: &str = "guiapokeidlehardtocapture.site";
@@ -52,6 +52,35 @@ pub struct Reference {
     pub npc_sell_prices: BTreeMap<u64,f64>,
     /// Static catalog sellValue; not an observed player-to-player market average.
     pub catalog_sell_values: BTreeMap<u64,f64>,
+}
+/// Lendários, míticos e Megas seguem contratos próprios: não devem
+/// receber chances de captura normais, mesmo que apareçam em um catálogo
+/// antigo de hunts ou em uma previsão de spawn.
+pub fn special_capture_species(id:u64)->bool{
+    static IDS:OnceLock<(BTreeSet<u64>,BTreeMap<u64,u64>,BTreeSet<u64>)>=OnceLock::new();
+    let (special,forms,megas)=IDS.get_or_init(||{
+        let special=include_str!("../assets/visual/upstream-special-dex.tsv")
+            .lines().filter_map(|line|line.parse::<u64>().ok())
+            .collect::<BTreeSet<_>>();
+        let forms=include_str!("../assets/visual/upstream-form-base.tsv")
+            .lines().filter_map(|line|{
+                let (id,dex)=line.split_once('\t')?;
+                Some((id.parse::<u64>().ok()?,dex.parse::<u64>().ok()?))
+            }).collect::<BTreeMap<_,_>>();
+        let megas=include_str!("../assets/visual/upstream-megas.tsv")
+            .lines().filter_map(|line|line.split('\t').next()?.parse::<u64>().ok())
+            .collect::<BTreeSet<_>>();
+        (special,forms,megas)
+    });
+    if megas.contains(&id){return true}
+    let dex=if id>=13000{id%1000}else{forms.get(&id).copied().unwrap_or(id)};
+    special.contains(&dex)
+}
+/// A special encounter cannot borrow the old NPC-price chance as a fallback.
+pub fn capture_inputs(reference:&Reference,id:u64)->(Option<u32>,Option<f64>){
+    if special_capture_species(id){return (None,None)}
+    (reference.capture_stages.get(&id).copied(),
+     reference.capture_rarities.get(&id).copied())
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -346,8 +375,10 @@ pub fn finalize_capture_stages(reference:&mut Reference){
         };
         // Outland variants are intentionally unevolving, irrespective of
         // the national Pokémon whose art or types they may reuse.
-        reference.capture_stages.insert(id,
-            if (2001..=2047).contains(&id){100}else{cap});
+        if !special_capture_species(id){
+            reference.capture_stages.insert(id,
+                if (2001..=2047).contains(&id){100}else{cap});
+        }
     }
 }
 /// Tiny baked upstream metadata for Mega / second-Mega species. The combat
@@ -554,6 +585,22 @@ mod tests {
         assert_eq!(reference.capture_stages[&133],40);
         assert_eq!(reference.capture_stages[&134],100);
         assert_eq!(reference.capture_stages[&135],100);
+    }
+    #[test]
+    fn special_capture_exclusions_include_regional_forms_and_modern_legendaries(){
+        for id in [144,150,772,773,386,8386,5144,1001,13286,9006,9150]{
+            assert!(special_capture_species(id),"special species {id}");
+        }
+        for id in [1,19,4019,2001,1479,1000]{
+            assert!(!special_capture_species(id),"ordinary species {id}");
+        }
+        let mut reference=Reference::default();
+        reference.capture_rarities.insert(5144,15000.0);
+        reference.capture_stages.insert(5144,100);
+        assert_eq!(capture_inputs(&reference,5144),(None,None));
+        assert_eq!(capture_inputs(&reference,4019),(None,None));
+        reference.capture_stages.insert(4019,40);
+        assert_eq!(capture_inputs(&reference,4019),(Some(40),None));
     }
     #[test]
     fn mega_combat_metadata_uses_distinct_types_and_bases(){
