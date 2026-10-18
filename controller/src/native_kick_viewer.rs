@@ -5,7 +5,7 @@ use crate::native_kick_hls::{MediaRunner, MediaStatus};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tungstenite::{client_tls, client::IntoClientRequest, http::header, Message};
@@ -42,12 +42,19 @@ pub struct WatchTelemetry {
 /// Channel metadata is public. Do not send a user's site credential to
 /// the public lookup; bearer validity belongs to private point/viewer APIs.
 pub fn new_public_client() -> Result<Client, String> {
-    Client::builder()
+    // A public metadata client carries no user credentials. Share its HTTP
+    // pool across accounts/channels instead of allocating a second expensive
+    // client per Kick worker (up to 48 channel workers across four accounts).
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() { return Ok(client.clone()); }
+    let client = Client::builder()
         .timeout(Duration::from_secs(12))
         .connect_timeout(Duration::from_secs(6))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0")
         .build()
-        .map_err(|_| "Could not initialize Kick public channel lookup".to_owned())
+        .map_err(|_| "Could not initialize Kick public channel lookup".to_owned())?;
+    let _ = CLIENT.set(client.clone());
+    Ok(client)
 }
 
 pub fn new_client(token: &str) -> Result<Client, String> {
