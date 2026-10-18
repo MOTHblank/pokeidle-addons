@@ -4,9 +4,36 @@
 use serde_json::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::{Condvar, Mutex, OnceLock};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 const MARKER: &str = "\n__MOTH_KICK_HTTP_CODE__:";
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
+const MAX_CONCURRENT_REQUESTS: usize = 2;
+
+/// A very small shared pool; 7 channels must not launch 7 curl processes.
+struct Permit(&'static (Mutex<usize>, Condvar));
+impl Drop for Permit {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.0.0.lock() {
+            *active = active.saturating_sub(1);
+            self.0.1.notify_one();
+        }
+    }
+}
+fn acquire() -> Result<Permit, String> {
+    static SLOTS: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
+    let slots = SLOTS.get_or_init(|| (Mutex::new(0), Condvar::new()));
+    let mut active = slots.0.lock().map_err(|_|
+        "Kick HTTP queue unavailable".to_owned())?;
+    while *active >= MAX_CONCURRENT_REQUESTS {
+        active = slots.1.wait(active).map_err(|_|
+            "Kick HTTP queue unavailable".to_owned())?;
+    }
+    *active += 1;
+    Ok(Permit(slots))
+}
 
 /// HTTP status and JSON response; non-200 replies have a null JSON value.
 /// Kick can change these undocumented endpoints without notice.
@@ -19,8 +46,12 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
     }
     // The URL is drawn from a whitelisted slug or a fixed constant; no
     // redirects that could forward credentials to a different website.
+    let _permit = acquire()?;
     let binary = if cfg!(windows) { "curl.exe" } else { "curl" };
-    let mut child = match Command::new(binary)
+    let mut command = Command::new(binary);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let mut child = match command
         .args(["--silent", "--show-error", "--compressed",
             "--max-time", "12", "--connect-timeout", "6",
             "--max-filesize", "1048576", "--proto", "=https",
@@ -40,7 +71,9 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
         "header = \"Accept: application/json, text/plain, */*\"\n\
          header = \"Origin: https://kick.com\"\n\
          header = \"Referer: https://kick.com/\"\n\
-         header = \"User-Agent: Chatterino7\"\n");
+         header = \"X-Requested-With: XMLHttpRequest\"\n\
+         header = \"Accept-Language: en-US,en;q=0.9\"\n\
+         header = \"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\"\n");
     fn quoted(value: &str) -> Result<String, String> {
         if value.is_empty() || value.len() > 8192 ||
             value.bytes().any(|b| b.is_ascii_control()) {
@@ -52,9 +85,18 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
         config.push_str(&format!(
             "header = \"Authorization: Bearer {}\"\n", quoted(token)?
         ));
+        // A regular Kick browser also sends its first-party session cookie.
+        // Only forward it to the two exact Kick endpoint families above;
+        // never send this cookie to HLS CDNs or arbitrary redirects.
+        if token.contains('|') {
+            config.push_str(&format!(
+                "header = \"Cookie: session_token={}\"\n",
+                quoted(&token.replace('|', "%7C"))?
+            ));
+        }
     }
     for (name, value) in extra_headers {
-        if !matches!(*name, "X-Chatroom" | "X-User-Id" | "Content-Type") {
+        if !matches!(*name, "X-Chatroom" | "X-User-Id" | "Content-Type" | "X-Client-Token") {
             return Err("Unexpected Kick API header".into());
         }
         config.push_str(&format!(
