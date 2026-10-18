@@ -185,21 +185,21 @@ pub fn observe_points(status: &mut WatchTelemetry, balance: Option<u64>) {
         status.last_points = Some(Instant::now());
     }
 }
-fn viewer_token(client: &Client, meta: &ChannelMeta) -> Result<String, String> {
-    let result = client.get(TOKEN_ENDPOINT)
-        .header("X-Chatroom", meta.channel_id.to_string())
-        .header("X-User-Id", meta.user_id.to_string())
-        .send().map_err(|_| "Could not request Kick viewer token".to_owned())?;
-    match result.status().as_u16() {
+fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str) -> Result<String, String> {
+    let headers = [
+        ("X-Chatroom", meta.channel_id.to_string()),
+        ("X-User-Id", meta.user_id.to_string()),
+        ("Content-Type", "application/json".to_owned()),
+    ];
+    let (code, response) = private_get(client, TOKEN_ENDPOINT, bearer, &headers)?;
+    match code {
         200 => {},
-        401 | 403 => return Err("Kick viewer token authorization denied (401/403)".into()),
-        429 => return Err("Kick viewer token request rate-limited (429)".into()),
+        401 | 403 => return Err("Kick viewer-token authorization denied (401/403)".into()),
+        429 => return Err("Kick viewer-token request rate limited (429)".into()),
         code => return Err(format!("Kick viewer-token request failed (HTTP {code})")),
     }
-    let value: Value = result.json()
-        .map_err(|_| "Kick viewer token response invalid".to_owned())?;
     let token = ["/data/token", "/data/websocket_token", "/token", "/websocket_token"]
-        .into_iter().find_map(|key| value.pointer(key).and_then(Value::as_str))
+        .into_iter().find_map(|key| response.pointer(key).and_then(Value::as_str))
         .filter(|v| !v.is_empty() && v.len() <= 8192)
         .ok_or_else(|| "Kick viewer token missing".to_owned())?;
     Ok(token.to_owned())
@@ -252,11 +252,11 @@ fn watch_event(meta: &ChannelMeta) -> Value {
 /// as successful point earning.
 pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                   status: &Arc<Mutex<WatchTelemetry>>,
-                  stop: Arc<AtomicBool>) -> Result<(), String> {
+                  stop: Arc<AtomicBool>, bearer: &str) -> Result<(), String> {
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
-    let token = viewer_token(client, meta)?;
+    let token = viewer_token(client, meta, bearer)?;
     let mut socket = ws_connect(&token)?;
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
@@ -289,7 +289,7 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
             last_event = Instant::now();
         }
         if last_points.elapsed() >= POINTS_GAP {
-            match point_balance(client, slug) {
+            match point_balance(client, slug, bearer) {
                 Ok(balance) => {
                     if let Ok(mut state) = status.lock() {
                         observe_points(&mut state, balance);
