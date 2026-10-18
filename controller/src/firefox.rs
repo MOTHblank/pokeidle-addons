@@ -93,15 +93,19 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
     Ok((child, monitor))
 }
 
-/// Open a dedicated, ordinary Firefox window for Kick sign-in.
-/// No remote debugging/Remote Agent/BiDi, extensions, injected scripts,
-/// or the game profile's customized resource-saving user.js preferences.
-/// Its persistent profile is isolated per Moth account.
+/// Reopen the selected PokéIdle Firefox profile as an ordinary browser
+/// for Kick authentication. Keep Google cookies and the rest of the profile,
+/// but do not launch a Remote Agent, BiDi, or any browser automation.
+/// The normal PokéIdle handoff must have released the Firefox profile lock.
 pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
-    fs::create_dir_all(&config.profile_dir)
-        .map_err(|_| "Could not create the dedicated Kick Firefox profile".to_owned())?;
+    // Reuse pre-existing Google auth, including accounts with legacy Moth
+    // profile paths. Never create a blank profile for Kick as a fallback.
+    migrate_legacy_profile(config)?;
+    if !config.profile_dir.is_dir() {
+        return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
+    }
     if find_profile_process(config)?.is_some() {
-        return Err("A Kick login Firefox window is already using this profile".into());
+        return Err("The PokéIdle Firefox profile is still running. Wait for its native handoff to finish before logging into Kick.".into());
     }
     Command::new(&config.firefox_executable)
         .arg("--no-remote")
