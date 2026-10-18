@@ -223,6 +223,12 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
             let _ = browser.wait();
             return Err("Kick login cancelled".into());
         }
+        // Read the first-party session during the active login. Some
+        // browsers clear transient cookies when the window is closed.
+        if let Ok(Some(token)) = read_kick_cookie(&config.profile_dir) {
+            native_auth::save_kick_token(profile, &token)?;
+            return Ok(());
+        }
         match browser.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => thread::sleep(CHECK_INTERVAL),
