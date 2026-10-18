@@ -236,14 +236,22 @@ mod platform {
     fn kick_args(profile: GameProfile) -> [&'static str; 4] {
         ["application", KICK_APP, "profile", profile.name()]
     }
+    // secret-tool lookup exits with status 1 when no matching item exists.
+    // An absent first-run login must not be mistaken for a broken keyring.
+    // A locked/unavailable keyring typically emits a diagnostic on stderr;
+    // never log that diagnostic or any credential payload.
+    fn missing_lookup(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
+        code == Some(1) && stdout.is_empty() && stderr.is_empty()
+    }
+
     fn secret_tool(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
         let mut child = Command::new("secret-tool")
             .args(args)
             .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
-            .map_err(|_| "Desktop keyring unavailable: install/unlock Secret Service and secret-tool".to_owned())?;
+            .map_err(|_| "Desktop keyring unavailable: install libsecret-tools and unlock a Secret Service keyring".to_owned())?;
         if let Some(data) = input {
             let mut stdin = child.stdin.take()
                 .ok_or_else(|| "Could not reach desktop keyring input".to_owned())?;
@@ -254,7 +262,12 @@ mod platform {
         let output = child.wait_with_output()
             .map_err(|_| "Desktop keyring request failed".to_owned())?;
         if !output.status.success() {
-            return Err("Desktop keyring rejected native credentials".into());
+            if args.first() == Some(&"lookup")
+                && missing_lookup(output.status.code(), &output.stdout, &output.stderr)
+            {
+                return Ok(Vec::new());
+            }
+            return Err("Desktop keyring request failed: ensure Secret Service is running and unlocked".into());
         }
         if output.stdout.len() > MAX_BOOTSTRAP_BYTES + 4 {
             return Err("Desktop keyring credential response too large".into());
@@ -305,6 +318,19 @@ mod platform {
         let mut cmd = vec!["clear"];
         cmd.extend(args);
         secret_tool(&cmd, None).map(|_| ())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::missing_lookup;
+
+        #[test]
+        fn missing_item_does_not_look_like_keyring_failure() {
+            assert!(missing_lookup(Some(1), b"", b""));
+            assert!(!missing_lookup(Some(1), b"", b"keyring locked"));
+            assert!(!missing_lookup(Some(2), b"", b""));
+            assert!(!missing_lookup(Some(1), b"secret", b""));
+        }
     }
 }
 
