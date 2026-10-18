@@ -495,7 +495,7 @@ pub(super) fn draw_atlas_models(
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
                 for (label,num) in [
-                    (tr("Gross gold/h"),f.as_ref().map(|f|f.combat_gold_h)),
+                    (tr("Gross gold/h"),f.as_ref().filter(|f|f.calibrated).map(|f|f.combat_gold_h)),
                     (tr("Ball gold cost / h"),gold_cost),
                     (tr("Ball diamonds / h"),diamond_cost),
                 ]{
