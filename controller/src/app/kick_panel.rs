@@ -56,6 +56,18 @@ impl ControllerApp {
                 self.kick_discovery_available[index] = available;
                 self.kick_discovered_live[index] = channels;
             }
+            // A stored Kick login owns its supervisor automatically, even
+            // before PokéIdle has supplied the first live roster. An empty
+            // roster starts no media workers; later updates open/close them.
+            let Some(profile) = GameProfile::from_index(index) else { continue; };
+            if matches!(crate::native_kick_login::status(profile),
+                crate::native_kick_login::LoginStatus::Done)
+            {
+                self.kick_saved_login[index] = true;
+            }
+            if self.kick_saved_login[index] && self.kick_monitors[index].is_none() {
+                self.start_kick_account(index);
+            }
             let desired = if roster_changed {
                 Some(desired_kick_channels(self, index))
             } else { None };
@@ -80,11 +92,20 @@ impl ControllerApp {
         }
     }
 
-    fn persist_kick_channels(&mut self) {
+    fn persist_kick_channels(&mut self, index: usize) {
         match Config::save_kick_channels(&self.kick_channels_input) {
             Ok(()) => self.set_status(
                 kick_label(pt_br(), "Kick channels saved", "Canais Kick salvos"), false),
             Err(error) => self.set_status(error, true),
+        }
+        // Channel preferences remain editable during automatic monitoring.
+        // Apply changes immediately without restarting unaffected streams.
+        let desired = desired_kick_channels(self, index);
+        if let Some(monitor) = self.kick_monitors[index].as_mut() {
+            if let Err(error) = monitor.sync_channels(&desired) {
+                logging::warn(&format!("Kick channel synchronization failed: {error}"));
+                self.set_status(error, true);
+            }
         }
     }
     fn add_kick_channel(&mut self, index: usize) {
@@ -110,24 +131,20 @@ impl ControllerApp {
         found.sort();
         self.kick_channels_input[index] = found.join(", ");
         self.kick_channel_new[index].clear();
-        self.persist_kick_channels();
+        self.persist_kick_channels(index);
     }
     fn remove_kick_channel(&mut self, index: usize, channel: &str) {
         let mut found = stored_channel_list(self, index);
         found.retain(|slug| slug != channel);
         self.kick_channels_input[index] = found.join(", ");
-        self.persist_kick_channels();
+        self.persist_kick_channels(index);
     }
     fn start_kick_account(&mut self, index: usize) {
         if self.kick_monitors[index].is_some() { return; }
         let Some(profile) = GameProfile::from_index(index) else { return; };
         let target = desired_kick_channels(self, index);
-        if target.is_empty() && !self.kick_discovery_available[index] {
-            self.set_status(kick_label(pt_br(),
-                "Start PokéIdle or add a Kick channel first",
-                "Inicie o PokéIdle ou adicione um canal Kick primeiro"), true);
-            return;
-        }
+        // KickMonitor accepts an empty list. It will pick up official live
+        // channels when PokéIdle becomes available without a manual click.
         // Prefer a freshly typed token, otherwise use the OS vault. Failed
         // starts retain the masked field so the user can retry without copying.
         let entered = self.kick_api_token_input[index].trim().to_owned();
@@ -173,11 +190,6 @@ impl ControllerApp {
             message.push_str(&reason);
         }
         self.set_status(message, error);
-    }
-    fn stop_kick_account(&mut self, index: usize) {
-        self.kick_monitors[index].take();
-        self.set_status(kick_label(pt_br(), "Kick streams stopped",
-            "Transmissões Kick interrompidas"), false);
     }
     fn forget_kick_account(&mut self, index: usize) {
         let Some(profile) = GameProfile::from_index(index) else { return; };
@@ -459,8 +471,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         if snapshot.auth_denied {
             ui.add_space(6.0);
             ui.label(RichText::new(kick_label(br,
-                "Kick refused viewer authentication (401/403). Repeated requests are paused for this account. The saved Firefox session may not be a valid API Bearer. Stop the Kick monitor before trying a new login.",
-                "Kick recusou a autenticação do espectador (401/403). As tentativas repetidas foram suspensas nesta conta. A sessão do Firefox pode não ser um Bearer válido para a API. Pare o monitor Kick antes de tentar novo login."))
+                "Kick refused viewer authentication (401/403). Repeated requests are paused. Forget the saved Kick login, then sign in again.",
+                "Kick recusou a autenticação do espectador (401/403). As tentativas repetidas foram suspensas. Esqueça o login Kick salvo e entre novamente."))
                 .size(11.0).color(WARN));
         } else if let Some(error) = snapshot.error.as_ref()
             .or_else(|| snapshot.channels.iter().find_map(|channel| {
@@ -496,37 +508,40 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 "Entre uma vez na Kick com o Firefox deste perfil."))
                 .size(11.0).color(MUTED));
         }
-        if !running {
-            ui.horizontal_wrapped(|ui| {
-                let busy = matches!(kick_login_status,
-                    crate::native_kick_login::LoginStatus::Running);
-                if busy {
-                    ui.label(RichText::new(kick_label(br,
-                        "● Finish signing in; importing automatically…",
-                        "● Faça login na Kick; importação automática…"))
-                        .color(WARN));
-                    if ui.button(kick_label(br, "Cancel", "Cancelar")).clicked() {
-                        crate::native_kick_login::cancel(profile);
-                    }
-                } else if ui.button(kick_label(br,
+        ui.horizontal_wrapped(|ui| {
+            let busy = matches!(kick_login_status,
+                crate::native_kick_login::LoginStatus::Running);
+            if busy {
+                ui.label(RichText::new(kick_label(br,
+                    "● Finish signing in; importing automatically…",
+                    "● Faça login na Kick; importação automática…"))
+                    .color(WARN));
+                if ui.button(kick_label(br, "Cancel", "Cancelar")).clicked() {
+                    crate::native_kick_login::cancel(profile);
+                }
+            } else if !app.kick_saved_login[i] &&
+                ui.button(kick_label(br,
                     "Sign in with normal Firefox",
-                    "Entrar pelo Firefox normal")).clicked() {
-                    if let Err(error) = crate::native_kick_login::start(profile) {
-                        app.set_status(error, true);
-                    }
+                    "Entrar pelo Firefox normal")).clicked()
+            {
+                if let Err(error) = crate::native_kick_login::start(profile) {
+                    app.set_status(error, true);
                 }
-                if app.kick_saved_login[i] &&
-                    ui.small_button(kick_label(br,
-                        "Forget login", "Esquecer login")).clicked() {
-                    app.forget_kick_account(i);
-                }
-            });
-            if let crate::native_kick_login::LoginStatus::Error(message) = &kick_login_status {
-                ui.label(RichText::new(message).size(10.0).color(WARN));
             }
+            if app.kick_saved_login[i] &&
+                ui.small_button(kick_label(br,
+                    "Forget login", "Esquecer login")).clicked()
+            {
+                app.forget_kick_account(i);
+            }
+        });
+        if let crate::native_kick_login::LoginStatus::Error(message) = &kick_login_status {
+            ui.label(RichText::new(message).size(10.0).color(WARN));
+        }
+        if !app.kick_saved_login[i] {
             ui.label(RichText::new(kick_label(br,
-                "Tries the existing Kick session first. If needed, opens normal Firefox using this account's PokéIdle profile without Remote Agent. The session is imported and the login window closes automatically.",
-                "Tenta primeiro importar a sessão Kick já existente. Se necessário, abre o Firefox normal usando o mesmo perfil do PokéIdle, sem Remote Agent. A sessão é importada e a janela fecha automaticamente."))
+                "The Firefox login is imported automatically and its temporary window closes.",
+                "O login do Firefox é importado automaticamente e sua janela temporária é fechada."))
                 .size(10.0).color(DIM));
             ui.collapsing(kick_label(br, "Advanced · Manual token",
                 "Avançado · Token manual"), |ui| {
@@ -537,6 +552,12 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .desired_width(ui.available_width().min(480.0)));
                 ui.checkbox(&mut app.kick_remember_login[i],
                     kick_label(br, "Save in OS vault", "Salvar no cofre do sistema"));
+                if ui.add_enabled(!app.kick_api_token_input[i].trim().is_empty(),
+                    egui::Button::new(kick_label(br, "Use this login", "Usar este login")))
+                    .clicked()
+                {
+                    app.start_kick_account(i);
+                }
                 ui.label(RichText::new(kick_label(br,
                     "Fallback only. Never share your token.",
                     "Apenas alternativa. Nunca compartilhe seu token."))
@@ -544,8 +565,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             });
         } else {
             ui.label(RichText::new(kick_label(br,
-                "The token entry stays hidden while streaming.",
-                "O campo do token fica oculto enquanto as transmissões estão ativas."))
+                "Streams open when channels go live and close when they go offline. No manual start is needed.",
+                "As transmissões abrem quando os canais entram ao vivo e fecham quando saem do ar. Não é preciso iniciar manualmente."))
                 .size(10.0).color(MUTED));
         }
         ui.add_space(10.0);
@@ -597,8 +618,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(channel).size(11.0).color(TEXT));
-                            if ui.add_enabled(!running,
-                                egui::Button::new("×")).clicked() {
+                            if ui.button("×").clicked() {
                                 app.remove_kick_channel(i, channel);
                             }
                         });
@@ -606,39 +626,19 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
         }
-        if !running {
-            ui.horizontal_wrapped(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut app.kick_channel_new[i])
-                    .hint_text(kick_label(br, "Channel name or kick.com URL",
-                        "Nome do canal ou link kick.com"))
-                    .desired_width(ui.available_width().min(340.0)));
-                if ui.button(kick_label(br, "+ Add channel", "+ Adicionar canal")).clicked() {
-                    app.add_kick_channel(i);
-                }
-            });
-            ui.label(RichText::new(kick_label(br,
-                "Up to 12 active channels. Manual choices are saved; official live channels update automatically.",
-                "Até 12 canais ativos. Os manuais ficam salvos; oficiais ao vivo atualizam automaticamente."))
-                .size(10.0).color(DIM));
-        } else {
-            ui.label(RichText::new(kick_label(br,
-                "Stop streams before changing channel choices.",
-                "Pare as transmissões para alterar os canais."))
-                .size(10.0).color(DIM));
-        }
-        ui.add_space(10.0);
         ui.horizontal_wrapped(|ui| {
-            if running {
-                if ui.button(kick_label(br, "■ Stop streams", "■ Parar transmissões")).clicked() {
-                    app.stop_kick_account(i);
-                }
-            } else if ui.add_enabled(!desired.is_empty() || auto_available,
-                egui::Button::new(kick_label(br, "▶ Start streams", "▶ Iniciar transmissões")))
-                .clicked()
-            {
-                app.start_kick_account(i);
+            ui.add(egui::TextEdit::singleline(&mut app.kick_channel_new[i])
+                .hint_text(kick_label(br, "Channel name or kick.com URL",
+                    "Nome do canal ou link kick.com"))
+                .desired_width(ui.available_width().min(340.0)));
+            if ui.button(kick_label(br, "+ Add channel", "+ Adicionar canal")).clicked() {
+                app.add_kick_channel(i);
             }
         });
+        ui.label(RichText::new(kick_label(br,
+            "Manual choices are saved and applied immediately. Official live channels update automatically.",
+            "Canais manuais são salvos e aplicados imediatamente. Os oficiais ao vivo atualizam automaticamente."))
+            .size(10.0).color(DIM));
     });
 
     ui.add_space(12.0);
