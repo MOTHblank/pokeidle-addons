@@ -189,6 +189,14 @@ pub fn cancel(profile: GameProfile) {
         guard[profile.index()].cancelled.store(true, Ordering::Relaxed);
     }
 }
+pub fn reset(profile: GameProfile) {
+    if let Ok(mut guard) = jobs().lock() {
+        let current = &mut guard[profile.index()];
+        if !matches!(current.status, LoginStatus::Running) {
+            current.status = LoginStatus::Idle;
+        }
+    }
+}
 pub fn start(profile: GameProfile) -> Result<(), String> {
     let cancelled = {
         let mut guard = jobs().lock()
