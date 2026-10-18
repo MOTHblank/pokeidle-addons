@@ -47,6 +47,10 @@ pub fn new_client(token: &str) -> Result<Client, String> {
         reqwest::header::HeaderValue::from_static("application/json, text/plain, */*"));
     headers.insert(reqwest::header::REFERER,
         reqwest::header::HeaderValue::from_static("https://kick.com/"));
+    headers.insert(reqwest::header::USER_AGENT,
+        reqwest::header::HeaderValue::from_static(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0"
+        ));
     let authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| "Invalid Kick account credential".to_owned())?;
     headers.insert(reqwest::header::AUTHORIZATION, authorization);
@@ -79,8 +83,11 @@ pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
         .ok_or_else(|| "Kick channel user ID unavailable".to_owned())?;
     let stream = data.get("livestream").filter(|v| v.is_object());
     let stream_id = stream.and_then(|v| v.get("id")).and_then(Value::as_u64).unwrap_or(0);
+    // Kick's v2 channel endpoint may return a populated livestream object
+    // without an is_live field. The existence of a current stream ID means
+    // live unless Kick explicitly says false; absence is not false.
     let is_live = stream_id > 0 && stream.and_then(|v| v.get("is_live"))
-        .and_then(Value::as_bool).unwrap_or(false);
+        .and_then(Value::as_bool).unwrap_or(true);
     let playback_url = data.get("playback_url").and_then(Value::as_str)
         .unwrap_or_default().to_owned();
     Ok(ChannelMeta {
@@ -303,6 +310,21 @@ mod tests {
         assert_eq!(meta.viewers,Some(42));
         assert_eq!(handshake(&meta)["data"]["message"]["channelId"],123);
         assert_eq!(watch_event(&meta)["data"]["message"]["livestream_id"],789);
+    }
+    #[test]
+    fn detects_live_stream_when_kick_omits_is_live() {
+        let metadata = json!({
+            "id": 120, "user_id": 300, "playback_url": "https://example.com/live.m3u8",
+            "livestream": {"id": 456, "session_title": "streaming", "viewer_count": 20}
+        });
+        let meta = parse_meta(&metadata).unwrap();
+        assert!(meta.is_live);
+        assert_eq!(meta.stream_id, 456);
+        let explicit_offline = json!({"id":120, "user_id":300,
+            "livestream":{"id":456,"is_live":false}});
+        assert!(!parse_meta(&explicit_offline).unwrap().is_live);
+        let without_stream = json!({"id":120, "user_id":300, "livestream":null});
+        assert!(!parse_meta(&without_stream).unwrap().is_live);
     }
     #[test]
     fn points_delta_requires_numeric_confirmed_balance() {
