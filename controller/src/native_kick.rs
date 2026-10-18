@@ -39,16 +39,22 @@ impl Default for KickSnapshot {
         }
     }
 }
+// A separate cancellation flag per channel allows PokéIdle's live roster
+// to change without restarting unrelated viewer/HLS sessions or losing the
+// observed point-balance baseline for streams that stay online.
+struct KickWorker {
+    slug: String,
+    telemetry: Arc<Mutex<WatchTelemetry>>,
+    stop: Arc<AtomicBool>,
+}
 pub struct KickMonitor {
     snapshot: Arc<Mutex<KickSnapshot>>,
-    observed: Vec<(String, Arc<Mutex<WatchTelemetry>>)>,
-    stop: Arc<AtomicBool>,
+    observed: Vec<KickWorker>,
+    token: String,
 }
 impl KickMonitor {
     pub fn start(token: String, input: &str) -> Result<Self, String> {
         let slugs = normalize_channels(input)?;
-        // A Kick website account token is distinct from a Developer API
-        // access token. Never log or persist it, including failed requests.
         let trimmed = token.trim();
         let bearer = trimmed.strip_prefix("Bearer ").unwrap_or(trimmed).trim();
         if bearer.is_empty() || bearer.len() > MAX_TOKEN_LEN ||
@@ -56,47 +62,84 @@ impl KickMonitor {
         {
             return Err("A Kick account Bearer token is required".into());
         }
-        let snapshot = Arc::new(Mutex::new(KickSnapshot {
-            channels: slugs.iter().map(|slug| ChannelStatus {
-                slug: slug.clone(), live: None, title: String::new(),
-                viewers: None, watch: WatchTelemetry::default(), error: None,
-            }).collect(),
-            ..KickSnapshot::default()
-        }));
-        let stop = Arc::new(AtomicBool::new(false));
-        // One isolated supervisor per channel. Stagger connections to avoid
-        // a simultaneous burst from all four controller account profiles.
-        let mut observed = Vec::with_capacity(slugs.len());
-        for (offset, slug) in slugs.into_iter().enumerate() {
-            let state = Arc::new(Mutex::new(WatchTelemetry::default()));
-            let child_state = Arc::clone(&state);
-            let child_snapshot = Arc::clone(&snapshot);
-            let child_stop = Arc::clone(&stop);
-            let child_token = bearer.to_owned();
+        let mut monitor = Self {
+            snapshot: Arc::new(Mutex::new(KickSnapshot::default())),
+            observed: Vec::new(),
+            token: bearer.to_owned(),
+        };
+        monitor.sync_channels(&slugs)?;
+        Ok(monitor)
+    }
+
+    /// Reconcile active channels without interrupting unchanged streams.
+    /// Empty means no official live streams (unless manually selected).
+    /// Do not persist discovered channels as permanent manual preferences.
+    pub fn sync_channels(&mut self, slugs: &[String]) -> Result<(), String> {
+        let normalized = if slugs.is_empty() {
+            Vec::new()
+        } else {
+            normalize_channels(&slugs.join(","))?
+        };
+        let desired: BTreeSet<_> = normalized.iter().cloned().collect();
+        for worker in &self.observed {
+            if !desired.contains(&worker.slug) {
+                worker.stop.store(true, Ordering::Relaxed);
+            }
+        }
+        self.observed.retain(|w| desired.contains(&w.slug));
+        if let Ok(mut state) = self.snapshot.lock() {
+            state.channels.retain(|channel| desired.contains(&channel.slug));
+        }
+        for (offset, slug) in normalized.iter().enumerate() {
+            if self.observed.iter().any(|worker| worker.slug == *slug) {
+                continue;
+            }
+            let telemetry = Arc::new(Mutex::new(WatchTelemetry::default()));
+            let worker_stop = Arc::new(AtomicBool::new(false));
+            if let Ok(mut state) = self.snapshot.lock() {
+                state.channels.push(ChannelStatus {
+                    slug: slug.clone(), live: None, title: String::new(),
+                    viewers: None, watch: WatchTelemetry::default(), error: None,
+                });
+                state.channels.sort_by(|a,b| a.slug.cmp(&b.slug));
+            }
+            let child_state = Arc::clone(&telemetry);
+            let child_snapshot = Arc::clone(&self.snapshot);
+            let child_stop = Arc::clone(&worker_stop);
+            let child_token = self.token.clone();
             let child_slug = slug.clone();
-            let outcome = thread::Builder::new()
+            let result = thread::Builder::new()
                 .name("moth-kick-channel".into())
                 .spawn(move || {
-                    for _ in 0..offset.saturating_mul(7) {
+                    // A short stagger avoids bursts, without delaying already
+                    // active channels when the official list changes.
+                    for _ in 0..offset.min(5).saturating_mul(2) {
                         if child_stop.load(Ordering::Relaxed) { return; }
                         thread::sleep(Duration::from_secs(1));
                     }
                     channel_loop(child_token, child_slug, child_state,
                         child_snapshot, child_stop)
                 });
-            if outcome.is_err() {
-                stop.store(true, Ordering::Relaxed);
+            if result.is_err() {
+                worker_stop.store(true, Ordering::Relaxed);
+                if let Ok(mut state) = self.snapshot.lock() {
+                    state.channels.retain(|item| item.slug != *slug);
+                }
                 return Err("Could not start Kick channel worker".into());
             }
-            observed.push((slug, state));
+            self.observed.push(KickWorker {
+                slug: slug.clone(), telemetry, stop: worker_stop,
+            });
         }
-        Ok(Self { snapshot, observed, stop })
+        Ok(())
     }
     pub fn snapshot(&self) -> KickSnapshot {
         let mut state = self.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
         for channel in &mut state.channels {
-            if let Some((_, observed)) = self.observed.iter().find(|(slug, _)| slug == &channel.slug) {
-                if let Ok(watching) = observed.lock() {
+            if let Some(worker) = self.observed.iter()
+                .find(|worker| worker.slug == channel.slug)
+            {
+                if let Ok(watching) = worker.telemetry.lock() {
                     channel.watch = watching.clone();
                 }
             }
@@ -104,12 +147,15 @@ impl KickMonitor {
         state
     }
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        for worker in &self.observed {
+            worker.stop.store(true, Ordering::Relaxed);
+        }
     }
 }
 impl Drop for KickMonitor {
     fn drop(&mut self) { self.stop(); }
 }
+
 fn update_channel(snapshot: &Arc<Mutex<KickSnapshot>>, slug: &str,
                   action: impl FnOnce(&mut ChannelStatus)) {
     if let Ok(mut state) = snapshot.lock() {
