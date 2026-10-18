@@ -209,6 +209,7 @@ pub fn load() -> Result<Reference, String> {
         }
     }
     finalize_capture_stages(&mut reference);
+    merge_upstream_megas(&mut reference);
     Ok(reference)
 }
 /// A creature's player-market listing must never become NPC/capture rarity.
@@ -321,6 +322,39 @@ pub fn finalize_capture_stages(reference:&mut Reference){
         // the national Pokémon whose art or types they may reuse.
         reference.capture_stages.insert(id,
             if (2001..=2047).contains(&id){100}else{cap});
+    }
+}
+/// Tiny baked upstream metadata for Mega / second-Mega species. The combat
+/// reference uses the exact game types and bases. The full move catalog is
+/// unavailable as a static upstream JSON, so retain the base species moves
+/// and include the upstream Mega signature (600 power / 30-second cooldown).
+/// Game-reported combat measurements still calibrate active-hunt throughput.
+fn merge_upstream_megas(reference:&mut Reference){
+    for row in include_str!("../assets/visual/upstream-megas.tsv").lines(){
+        if row.starts_with('#')||row.is_empty(){continue}
+        let columns=row.split('\t').collect::<Vec<_>>();
+        if columns.len()!=11{continue}
+        let (Ok(id),Ok(base_id))=(columns[0].parse::<u64>(),
+            columns[1].parse::<u64>())else{continue};
+        let Some(base)=reference.species.get(&base_id).cloned()else{continue};
+        let mut stats=Vec::with_capacity(6);
+        for text in &columns[5..]{
+            let Ok(n)=text.parse::<f64>()else{break};
+            if !n.is_finite()||n<=0.0{break}
+            stats.push(n);
+        }
+        if stats.len()!=6||columns[3].is_empty(){continue}
+        let types=[columns[3],columns[4]].iter().filter(|s|!s.is_empty())
+            .map(|s|(*s).to_owned()).collect::<Vec<_>>();
+        let mut moves=base.moves;
+        moves.push(ReferenceMove{
+            move_type:columns[3].to_owned(),
+            special:stats[3]>stats[1],
+            power:600.0,cooldown:30_000.0,min_level:1,
+        });
+        reference.species.insert(id,ReferenceSpecies{
+            name:columns[2].to_owned(),types,base:stats,moves,drops:Vec::new(),
+        });
     }
 }
 fn effect(chart:&Reference, attack:&str, target:&ReferenceSpecies) -> f64 {
@@ -480,6 +514,23 @@ mod tests {
         assert_eq!(reference.capture_stages[&2001],100);
         assert_eq!(reference.species[&4019].types,vec!["DARK","NORMAL"]);
         assert_eq!(reference.species[&4019].base[0],30.0);
+    }
+    #[test]
+    fn mega_combat_metadata_uses_distinct_types_and_bases(){
+        let mut reference=Reference::default();
+        reference.species.insert(6,ReferenceSpecies{
+            name:"Charizard".into(),
+            types:vec!["FIRE".into(),"FLYING".into()],
+            base:vec![78.0,84.0,78.0,109.0,85.0,100.0],
+            moves:Vec::new(),drops:Vec::new(),
+        });
+        merge_upstream_megas(&mut reference);
+        let mega=reference.species.get(&9006).unwrap();
+        assert_eq!(mega.types,vec!["FIRE","DRAGON"]);
+        assert_eq!(mega.base[1],130.0);
+        assert_eq!(mega.moves[0].power,600.0);
+        assert_eq!(mega.moves[0].cooldown,30_000.0);
+        assert!(!reference.capture_stages.contains_key(&9006));
     }
     #[test]
     fn parses_json_only_and_rejects_executable_script(){
