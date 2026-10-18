@@ -399,8 +399,8 @@ pub(super) fn draw_atlas_models(
             });
     });
     if let Some(speed)=kills {
-        let rare=models::rare_scenarios(outland,hunt.level,scenario.tier,
-            view.trainer_level,speed,&scenario.modifiers);
+        let rare=models::rare_scenarios_with_gate(outland,hunt.level,
+            view.outland_requirement(scenario.tier),view.trainer_level,speed,&scenario.modifiers);
         if rare.is_empty(){
             ui.label(RichText::new(if outland{
                 tr("Preview tier is locked at this trainer level, or the level is unavailable.")
@@ -461,7 +461,7 @@ pub(super) fn draw_atlas_models(
                         ui.label(format!("{mult:.2}×"));
                         ui.label(format!("{:.5}%",0.0005*mult*100.0));
                         ui.label(format!("{:.6}%",0.000005*mult*100.0));
-                        ui.label(if models::unlocked_tier(tier,view.trainer_level).is_some(){
+                        ui.label(if view.unlocked_outland_tier(tier).is_some(){
                             tr("Level eligible")
                         }else{tr("Locked / unknown")});
                         ui.end_row();
