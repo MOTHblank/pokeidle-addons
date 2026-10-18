@@ -252,29 +252,40 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
         }
     }
 }
-/// Official Kick streamers reported by PokéIdle (not general Kick search).
-/// `None` means roster data was not delivered; `Some([])` means all offline.
-/// Preserve all valid live names here; active session limits are applied later.
-pub fn pokeidle_live_officials(state: &serde_json::Value) -> Option<Vec<String>> {
+/// An official Kick creator and current live status from PokéIdle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfficialKickChannel {
+    pub slug: String,
+    pub live: bool,
+}
+
+/// Preserve *all* official creators, not just live ones. Inactive creators
+/// remain visible in the Kick channel list without starting media sessions.
+pub fn pokeidle_official_roster(state: &serde_json::Value) -> Option<Vec<OfficialKickChannel>> {
     let rows = state.get("kick")?.get("oficiais")?.as_array()?;
-    let mut names = BTreeSet::new();
+    let mut channels = std::collections::BTreeMap::<String, bool>::new();
     for row in rows {
-        if row.get("aoVivo").and_then(serde_json::Value::as_bool) != Some(true) {
+        let raw = row.get("slug").and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| row.get("login").and_then(serde_json::Value::as_str));
+        let Some(raw) = raw else { continue };
+        let slug = raw.trim().to_ascii_lowercase();
+        if slug.is_empty() || slug.len() > 25 || !slug.bytes().all(|b|
+            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') {
             continue;
         }
-        let Some(raw) = row.get("slug").and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| row.get("login").and_then(serde_json::Value::as_str))
-            else { continue; };
-        // The game supplies names, not arbitrary URLs. Whitelist valid
-        // channel names before passing them to Kick requests or UI.
-        let slug = raw.trim().to_ascii_lowercase();
-        if !slug.is_empty() && slug.len() <= 25 && slug.bytes().all(|b|
-            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-') {
-            names.insert(slug);
-        }
+        let is_live = row.get("aoVivo").and_then(serde_json::Value::as_bool) == Some(true);
+        channels.entry(slug).and_modify(|live| *live |= is_live)
+            .or_insert(is_live);
     }
-    Some(names.into_iter().collect())
+    Some(channels.into_iter().map(|(slug, live)|
+        OfficialKickChannel { slug, live }).collect())
+}
+
+/// Only official creators currently broadcasting should start Kick HLS streams.
+pub fn pokeidle_live_officials(state: &serde_json::Value) -> Option<Vec<String>> {
+    Some(pokeidle_official_roster(state)?.into_iter()
+        .filter(|channel| channel.live).map(|channel| channel.slug).collect())
 }
 
 /// Keep only validated public channel slugs (and official Kick links).
@@ -316,6 +327,23 @@ mod tests {
         let monitor = KickMonitor::start("local-test-token".into(), "").unwrap();
         assert!(monitor.snapshot().channels.is_empty());
         monitor.stop();
+    }
+    #[test]
+    fn official_roster_retains_offline_creators_and_merges_duplicates() {
+        use serde_json::json;
+        let state = json!({"kick":{"oficiais":[
+            {"slug":"Offline_One","aoVivo":false},
+            {"slug":"LIVE","aoVivo":false},
+            {"login":"live","aoVivo":true},
+            {"slug":"Invalid/Name","aoVivo":true}
+        ]}});
+        assert_eq!(pokeidle_official_roster(&state), Some(vec![
+            OfficialKickChannel { slug:"live".into(),live:true },
+            OfficialKickChannel { slug:"offline_one".into(),live:false },
+        ]));
+        assert_eq!(pokeidle_live_officials(&state),Some(vec!["live".into()]));
+        assert_eq!(pokeidle_official_roster(&json!({})), None);
+        assert_eq!(pokeidle_official_roster(&json!({"kick":{"oficiais":[]}})),Some(vec![]));
     }
     #[test]
     fn official_pokeidle_kick_roster_is_live_only_and_deduplicated() {
