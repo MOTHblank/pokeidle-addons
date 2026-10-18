@@ -116,7 +116,7 @@ pub fn capture_scenario_with_stage(
         ||accepted_fraction.is_some_and(|v|!v.is_finite()||!(0.0..=1.0).contains(&v))
     {return None}
     let chance=capture_chance_for_stage(stage,rarity,efficiency,0.0)?;
-    let chance=(chance*mods.catch_factor()).min(1.0);
+    let chance=(chance*mods.catch_factor()).min(0.10);
     let accepted=kill_h*spawn_share*accepted_fraction.unwrap_or(1.0);
     let catches_h=accepted*chance;
     let shiny=if outland{None}else{Some(
@@ -221,6 +221,13 @@ mod tests {
         assert_eq!(capture_chance_for_stage(None,None,4.0,0.0),None);
         assert_eq!(capture_chance_for_stage(None,Some(12000.0),4.0,0.0),
             wiki_capture_chance(12000.0,4.0,0.0));
+        let mut boosted=Modifiers::default();
+        boosted.capture_boost=true;
+        boosted.kick_capture=true;
+        boosted.catch_event=20.0;
+        let capped=capture_scenario_with_stage(Some(20),None,8.0,100.0,1.0,
+            None,false,&boosted).unwrap();
+        assert!(capped.chance<=0.10);
         let m=Modifiers::default();
         let forecast=capture_scenario_with_stage(Some(20),None,8.0,100.0,1.0,
             None,false,&m).unwrap();
