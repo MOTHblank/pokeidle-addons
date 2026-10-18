@@ -1109,12 +1109,9 @@ fn draw_atlas_outland_tier(
                     .width(170.0)
                     .show_ui(ui,|ui|{
                         for tier in 1u8..=8{
-                            let threshold=
-                                crate::native_atlas_models::TIER_LEVELS[(tier-1) as usize];
-                            let multiplier=
-                                crate::native_atlas_models::TIER_MULTIPLIERS[(tier-1) as usize];
-                            let eligible=
-                                crate::native_atlas_models::unlocked_tier(tier,level).is_some();
+                            let Some((threshold,multiplier))=
+                                view.outland_requirement(tier) else{continue};
+                            let eligible=view.unlocked_outland_tier(tier).is_some();
                             let enabled=live && active.is_some() &&
                                 pending.is_none() && eligible && active!=Some(tier);
                             ui.add_enabled_ui(enabled,|ui|{
