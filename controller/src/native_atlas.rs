@@ -588,7 +588,7 @@ mod tests {
     }
     #[test]
     fn special_capture_exclusions_include_regional_forms_and_modern_legendaries(){
-        for id in [144,150,772,773,386,8386,5144,1001,13286,9006,9150]{
+        for id in [144,150,772,773,386,8386,5144,1001,13386,9006,9150]{
             assert!(special_capture_species(id),"special species {id}");
         }
         for id in [1,19,4019,2001,1479,1000]{
