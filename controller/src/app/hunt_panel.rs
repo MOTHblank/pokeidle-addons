@@ -942,20 +942,17 @@ fn atlas_species_rows(
                     let efficiency=view.ball_quotes.get(&scenario.ball.id())
                         .and_then(|q|q.efficiency)
                         .unwrap_or_else(||scenario.ball.wiki_efficiency());
-                    models::capture_chance_for_stage(
-                        r.capture_stages.get(&spawn.id).copied(),
-                        r.capture_rarities.get(&spawn.id).copied(),
-                        efficiency,0.0)
+                    let (stage,rarity)=native_atlas::capture_inputs(r,spawn.id);
+                    models::capture_chance_for_stage(stage,rarity,efficiency,0.0)
                 }).map(|chance|(chance*scenario.modifiers.catch_factor()).min(0.10)),
                 AtlasSort::ShinyCaught=>forecast.as_ref()
                     .and_then(|f|reference.and_then(|r|{
                         let efficiency=view.ball_quotes.get(&scenario.ball.id())
                             .and_then(|q|q.efficiency)
                             .unwrap_or_else(||scenario.ball.wiki_efficiency());
+                        let (stage,rarity)=native_atlas::capture_inputs(r,spawn.id);
                         models::capture_scenario_with_stage(
-                            r.capture_stages.get(&spawn.id).copied(),
-                            r.capture_rarities.get(&spawn.id).copied(),
-                            efficiency,f.kills_h,share,
+                            stage,rarity,efficiency,f.kills_h,share,
                             scenario.accepted_fraction_override,
                             hunt.area.eq_ignore_ascii_case("outland"),
                             &scenario.modifiers)
