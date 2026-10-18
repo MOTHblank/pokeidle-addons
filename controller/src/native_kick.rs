@@ -336,16 +336,14 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 pause(&stop, Duration::from_secs(delay));
             },
             Err(error) => {
-                // Public metadata requests do not authenticate. A 401/403
-                // here can be an API/Cloudflare challenge, not proof that the
-                // user's saved Kick session has expired. Retry with backoff.
-                let login_expired = false;
+                // Public metadata requests cannot prove that an account's
+                // saved login has expired. A 401/403 can also be a network
+                // challenge, so retain errors and retry with backoff.
                 update_channel(&snapshot, &slug, |c| {
                     c.error = Some(error);
                     c.live = None;
                     c.viewers = None;
                 });
-                if login_expired { break; }
                 failures = failures.saturating_add(1);
                 pause(&stop, Duration::from_secs(
                     (10_u64.saturating_mul(2_u64.pow(failures.min(4)))).min(180)));
