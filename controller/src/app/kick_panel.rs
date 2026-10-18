@@ -319,7 +319,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let running = monitor.is_some();
     let configured = stored_channel_list(app, i);
     let desired = desired_kick_channels(app, i);
-    let discovered = &app.kick_discovered_live[i];
+    let discovered = app.kick_discovered_live[i].clone();
     let auto_available = app.kick_discovery_available[i];
     let online = monitor.as_ref().map(|snapshot|
         snapshot.channels.iter().filter(|c| c.live == Some(true)).count()).unwrap_or(0);
@@ -414,7 +414,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
         if !discovered.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                for slug in discovered {
+                for slug in &discovered {
                     ui.label(RichText::new(format!("● {slug}"))
                         .size(11.0).color(GOOD));
                 }
