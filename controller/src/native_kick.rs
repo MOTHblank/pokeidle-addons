@@ -309,9 +309,11 @@ mod tests {
             .collect::<Vec<_>>().join(",")).is_err());
     }
     #[test]
-    fn empty_live_roster_does_not_trigger_channel_validation_error() {
-        assert!(normalize_channels("").is_err()); // manual channel input
-        assert_eq!(Vec::<String>::new().len(), 0); // startup may wait for auto discovery
+    fn can_start_waiting_for_official_kick_lives() {
+        assert!(normalize_channels("").is_err()); // empty manual input
+        let monitor = KickMonitor::start("local-test-token".into(), "").unwrap();
+        assert!(monitor.snapshot().channels.is_empty());
+        monitor.stop();
     }
     #[test]
     fn official_pokeidle_kick_roster_is_live_only_and_deduplicated() {
