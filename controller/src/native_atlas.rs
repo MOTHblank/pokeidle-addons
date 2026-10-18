@@ -292,9 +292,22 @@ pub fn finalize_capture_stages(reference:&mut Reference){
     let mut before:BTreeMap<u64,u32>=reference.capture_catalog_ids.iter()
         .map(|id|(*id,0)).collect();
     let mut after=before.clone();
+    let mut links=reference.capture_evolutions.iter()
+        .map(|(&from,&to)|(from,to)).collect::<Vec<_>>();
+    // Include upstream branched evolutions (Eevee, Tyrogue, regional forms,
+    // clone lines). evolvesToId alone does not describe these families.
+    for line in include_str!("../assets/visual/upstream-evolution-branches.tsv").lines(){
+        if line.starts_with('#'){continue}
+        let mut values=line.split('\t');
+        if let (Some(from),Some(to))=(values.next(),values.next()){
+            if let (Ok(from),Ok(to))=(from.parse::<u64>(),to.parse::<u64>()){
+                links.push((from,to));
+            }
+        }
+    }
     for _ in 0..8 {
         let mut changed=false;
-        for (&from,&to) in &reference.capture_evolutions {
+        for &(from,to) in &links {
             if !reference.capture_catalog_ids.contains(&from)
                 ||!reference.capture_catalog_ids.contains(&to)||from==to{continue}
             let previous=before.get(&from).copied().unwrap_or(0);
@@ -514,6 +527,20 @@ mod tests {
         assert_eq!(reference.capture_stages[&2001],100);
         assert_eq!(reference.species[&4019].types,vec!["DARK","NORMAL"]);
         assert_eq!(reference.species[&4019].base[0],30.0);
+    }
+    #[test]
+    fn branched_evolutions_keep_eevee_at_the_middle_stage(){
+        let mut reference=Reference::default();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[
+                {"pokeId":133,"name":"Eevee"},
+                {"pokeId":134,"name":"Vaporeon"},
+                {"pokeId":135,"name":"Jolteon"}
+            ]}));
+        finalize_capture_stages(&mut reference);
+        assert_eq!(reference.capture_stages[&133],40);
+        assert_eq!(reference.capture_stages[&134],100);
+        assert_eq!(reference.capture_stages[&135],100);
     }
     #[test]
     fn mega_combat_metadata_uses_distinct_types_and_bases(){
