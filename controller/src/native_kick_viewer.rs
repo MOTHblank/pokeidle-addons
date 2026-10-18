@@ -388,6 +388,31 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
 mod tests {
     use super::*;
     #[test]
+    fn denied_viewer_auth_stops_all_followup_attempts() {
+        let gate = AuthGate::default();
+        let rejected = gate.checked(|| Err::<(), String>(
+            "Kick viewer-token refused access, possibly challenge (403)".into()));
+        assert!(rejected.is_err());
+        assert!(gate.denied());
+        let mut attempted = false;
+        let second = gate.checked(|| {
+            attempted = true;
+            Ok(())
+        });
+        assert!(second.is_err());
+        assert!(!attempted, "no more private calls after 403");
+    }
+
+    #[test]
+    fn transient_network_errors_do_not_permanently_block_authentication() {
+        let gate = AuthGate::default();
+        let outcome = gate.checked(|| Err::<(), String>("network timeout".into()));
+        assert!(outcome.is_err());
+        assert!(!gate.denied());
+        assert_eq!(gate.checked(|| Ok::<u8, String>(7)).unwrap(), 7);
+    }
+
+    #[test]
     fn parses_live_stream_and_media_url() {
         let source=json!({"id":123,"user_id":456,"playback_url":"https://edge.playback.live-video.net/x.m3u8",
             "livestream":{"id":789,"is_live":true,"viewer_count":42,"session_title":"Hello"}});
