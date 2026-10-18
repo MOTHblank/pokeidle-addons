@@ -90,7 +90,19 @@ fn get_value(client: &Client, url: &str) -> Result<Value, String> {
     }
 }
 pub fn channel_meta(client: &Client, slug: &str) -> Result<ChannelMeta, String> {
-    let data = get_value(client, &format!("https://kick.com/api/v2/channels/{slug}"))?;
+    let url = format!("https://kick.com/api/v2/channels/{slug}");
+    // Kick's unofficial v2 endpoints can reject reqwest TLS even when a
+    // browser succeeds. Use short-lived system curl for the metadata read.
+    let data = match crate::native_kick_http::get(&url, None, &[]) {
+        Ok((200, data)) => data,
+        Ok((401 | 403, _)) => return Err(
+            "Kick channel metadata blocked (HTTP 401/403; HTTP client or site challenge)".into()),
+        Ok((404, _)) => return Err("Kick channel not found (404)".into()),
+        Ok((429, _)) => return Err("Kick channel metadata rate limited (429)".into()),
+        Ok((code, _)) => return Err(format!("Kick metadata returned HTTP {code}")),
+        Err(error) if error == "curl unavailable" => get_value(client, &url)?,
+        Err(error) => return Err(error),
+    };
     parse_meta(&data)
 }
 pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
@@ -99,7 +111,9 @@ pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
         .ok_or_else(|| "Kick channel ID unavailable".to_owned())?;
     let user_id = data.get("user_id").and_then(Value::as_u64)
         .or_else(|| data.pointer("/user/id").and_then(Value::as_u64))
-        .ok_or_else(|| "Kick channel user ID unavailable".to_owned())?;
+        // The official client miner falls back to channel id when Kick
+        // omits user_id. Never prevent stream detection solely for this.
+        .unwrap_or(channel_id);
     let stream = data.get("livestream").filter(|v| v.is_object());
     let stream_id = stream.and_then(|v| v.get("id")).and_then(Value::as_u64).unwrap_or(0);
     // Kick's v2 channel endpoint may return a populated livestream object
@@ -108,12 +122,14 @@ pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
     let is_live = stream_id > 0 && stream.and_then(|v| v.get("is_live"))
         .and_then(Value::as_bool).unwrap_or(true);
     let playback_url = data.get("playback_url").and_then(Value::as_str)
+        .or_else(|| stream.and_then(|v| v.get("playback_url")).and_then(Value::as_str))
         .unwrap_or_default().to_owned();
     Ok(ChannelMeta {
         channel_id, user_id, stream_id, playback_url,
         title: stream.and_then(|v| v.get("session_title")).and_then(Value::as_str)
             .unwrap_or_default().chars().take(140).collect(),
-        viewers: stream.and_then(|v| v.get("viewer_count")).and_then(Value::as_u64),
+        viewers: stream.and_then(|v| v.get("viewer_count").or_else(|| v.get("viewers")))
+            .and_then(Value::as_u64),
         is_live,
     })
 }
@@ -122,25 +138,38 @@ fn parse_points(value: &Value) -> Option<u64> {
         .into_iter()
         .find_map(|key| value.pointer(key).and_then(Value::as_u64))
 }
-pub fn point_balance(client: &Client, slug: &str) -> Result<Option<u64>, String> {
-    let url = format!("https://kick.com/api/v2/channels/{slug}/points");
-    let response = client.get(&url).send()
-        .map_err(|_| "Could not fetch Kick point balance".to_owned())?;
-    let status = response.status().as_u16();
-    if status == 404 {
-        // The channel profile fallback in some miners exposes the creator's
-        // user object, not a proven balance for our authenticated viewer.
-        // Never mistake those values for earned points.
-        return Ok(None);
-    }
-    match status {
-        200 => {
-            let value: Value = response.json()
-                .map_err(|_| "Invalid Kick points response".to_owned())?;
-            Ok(parse_points(&value))
+/// Perform authenticated website requests using the same short-lived
+/// system HTTP transport as public lookups. Only if curl is absent do we
+/// fall back to the existing reqwest client. Never expose a Bearer in argv.
+fn private_get(client: &Client, url: &str, bearer: &str,
+               extra_headers: &[(&str, String)]) -> Result<(u16, Value), String> {
+    match crate::native_kick_http::get(url, Some(bearer), extra_headers) {
+        Ok(value) => Ok(value),
+        Err(error) if error == "curl unavailable" => {
+            let mut request = client.get(url);
+            for (name, value) in extra_headers {
+                request = request.header(*name, value.as_str());
+            }
+            let response = request.send().map_err(|_| "Kick API request failed".to_owned())?;
+            let code = response.status().as_u16();
+            if code != 200 { return Ok((code, Value::Null)); }
+            let value = response.json().map_err(|_|
+                "Kick API returned invalid JSON (possibly a site challenge)".to_owned())?;
+            Ok((code, value))
         },
-        401 | 403 => Err("Kick points endpoint denied authorization (401/403)".to_owned()),
-        429 => Err("Kick points request rate-limited (429)".to_owned()),
+        Err(error) => Err(error),
+    }
+}
+pub fn point_balance(client: &Client, slug: &str, bearer: &str) -> Result<Option<u64>, String> {
+    let url = format!("https://kick.com/api/v2/channels/{slug}/points");
+    let (status, response) = private_get(client, &url, bearer, &[])?;
+    match status {
+        200 => Ok(parse_points(&response)),
+        // A channel profile contains the creator's totals, NOT the viewer's
+        // points. An unavailable private endpoint is an unknown balance.
+        404 => Ok(None),
+        401 | 403 => Err("Kick points authorization denied (401/403)".into()),
+        429 => Err("Kick points request rate limited (429)".into()),
         code => Err(format!("Kick points request failed (HTTP {code})")),
     }
 }
@@ -156,21 +185,21 @@ pub fn observe_points(status: &mut WatchTelemetry, balance: Option<u64>) {
         status.last_points = Some(Instant::now());
     }
 }
-fn viewer_token(client: &Client, meta: &ChannelMeta) -> Result<String, String> {
-    let result = client.get(TOKEN_ENDPOINT)
-        .header("X-Chatroom", meta.channel_id.to_string())
-        .header("X-User-Id", meta.user_id.to_string())
-        .send().map_err(|_| "Could not request Kick viewer token".to_owned())?;
-    match result.status().as_u16() {
+fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str) -> Result<String, String> {
+    let headers = [
+        ("X-Chatroom", meta.channel_id.to_string()),
+        ("X-User-Id", meta.user_id.to_string()),
+        ("Content-Type", "application/json".to_owned()),
+    ];
+    let (code, response) = private_get(client, TOKEN_ENDPOINT, bearer, &headers)?;
+    match code {
         200 => {},
-        401 | 403 => return Err("Kick viewer token authorization denied (401/403)".into()),
-        429 => return Err("Kick viewer token request rate-limited (429)".into()),
+        401 | 403 => return Err("Kick viewer-token authorization denied (401/403)".into()),
+        429 => return Err("Kick viewer-token request rate limited (429)".into()),
         code => return Err(format!("Kick viewer-token request failed (HTTP {code})")),
     }
-    let value: Value = result.json()
-        .map_err(|_| "Kick viewer token response invalid".to_owned())?;
     let token = ["/data/token", "/data/websocket_token", "/token", "/websocket_token"]
-        .into_iter().find_map(|key| value.pointer(key).and_then(Value::as_str))
+        .into_iter().find_map(|key| response.pointer(key).and_then(Value::as_str))
         .filter(|v| !v.is_empty() && v.len() <= 8192)
         .ok_or_else(|| "Kick viewer token missing".to_owned())?;
     Ok(token.to_owned())
@@ -223,11 +252,11 @@ fn watch_event(meta: &ChannelMeta) -> Value {
 /// as successful point earning.
 pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                   status: &Arc<Mutex<WatchTelemetry>>,
-                  stop: Arc<AtomicBool>) -> Result<(), String> {
+                  stop: Arc<AtomicBool>, bearer: &str) -> Result<(), String> {
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
-    let token = viewer_token(client, meta)?;
+    let token = viewer_token(client, meta, bearer)?;
     let mut socket = ws_connect(&token)?;
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
@@ -260,7 +289,7 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
             last_event = Instant::now();
         }
         if last_points.elapsed() >= POINTS_GAP {
-            match point_balance(client, slug) {
+            match point_balance(client, slug, bearer) {
                 Ok(balance) => {
                     if let Ok(mut state) = status.lock() {
                         observe_points(&mut state, balance);
@@ -344,6 +373,25 @@ mod tests {
         assert!(!parse_meta(&explicit_offline).unwrap().is_live);
         let without_stream = json!({"id":120, "user_id":300, "livestream":null});
         assert!(!parse_meta(&without_stream).unwrap().is_live);
+    }
+    #[test]
+    fn parses_optional_user_id_and_nested_hls_source() {
+        let data = json!({
+            "data": {
+                "id": 2300,
+                "livestream": {
+                    "id": 987,
+                    "session_title": "Live",
+                    "viewers": 45,
+                    "playback_url": "https://live-video.net/example.m3u8"
+                }
+            }
+        });
+        let channel = parse_meta(&data).unwrap();
+        assert!(channel.is_live);
+        assert_eq!(channel.user_id, 2300);
+        assert_eq!(channel.viewers, Some(45));
+        assert_eq!(channel.playback_url, "https://live-video.net/example.m3u8");
     }
     #[test]
     fn points_delta_requires_numeric_confirmed_balance() {
