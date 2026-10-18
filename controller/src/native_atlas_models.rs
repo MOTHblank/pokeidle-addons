@@ -171,13 +171,17 @@ fn rare_row(kind:RareKind,chance:f64,kills_h:f64,mods:&Modifiers)->Option<RareFo
         craft_hours:if units_h>0.0{kind.craft as f64/units_h}else{f64::INFINITY},
         chance_24h:at_least_one(p,24.0*kills_h)?,})
 }
-pub fn rare_scenarios(
-    outland:bool,hunt_level:u32,tier:u8,trainer_level:Option<u32>,
-    kills_h:f64,mods:&Modifiers
+/// Exact server-provided Outland gate when available; fallback is handled
+/// by the caller's HuntView. Never present locked-tier rare yields.
+pub fn rare_scenarios_with_gate(
+    outland:bool,hunt_level:u32,gate:Option<(u32,f64)>,
+    trainer_level:Option<u32>,kills_h:f64,mods:&Modifiers
 )->Vec<RareForecast>{
     if !mods.valid()||!kills_h.is_finite()||kills_h<0.0{return vec![]}
     if outland{
-        let Some(mult)=unlocked_tier(tier,trainer_level) else{return vec![]};
+        let Some((required,mult))=gate else{return vec![]};
+        if trainer_level.is_none_or(|n|n<required) ||
+            !mult.is_finite()||mult<=0.0{return vec![]}
         OUTLAND_RARES.iter().filter_map(|kind|
             rare_row(*kind,kind.base*mult,kills_h,mods)).collect()
     }else{
@@ -185,6 +189,17 @@ pub fn rare_scenarios(
         rare_row(RareKind{id:70017,name:"Shiny Egg Fragment",base:chance,craft:10},
             chance,kills_h,mods).into_iter().collect()
     }
+}
+/// Backward-compatible entry point for archived standalone forecasts.
+pub fn rare_scenarios(
+    outland:bool,hunt_level:u32,tier:u8,trainer_level:Option<u32>,
+    kills_h:f64,mods:&Modifiers
+)->Vec<RareForecast>{
+    let gate=if (1..=8).contains(&tier){
+        let index=(tier-1) as usize;
+        Some((TIER_LEVELS[index],TIER_MULTIPLIERS[index]))
+    }else{None};
+    rare_scenarios_with_gate(outland,hunt_level,gate,trainer_level,kills_h,mods)
 }
 /// Expected vendor proceeds are reference economics; player market proceeds
 /// require EXPLICIT user-supplied quote or verified completed-sale history.
@@ -253,6 +268,16 @@ mod tests {
         let outland=capture_scenario_with_stage(None,Some(12000.0),8.0,100.0,0.5,Some(0.3),true,&m).unwrap();
         assert_eq!(outland.shiny_caught_h,None);
         assert_eq!(outland.accepted_h,15.0);
+    }
+    #[test] fn server_outland_gate_affects_rare_yield(){
+        let mods=Modifiers::default();
+        assert!(rare_scenarios_with_gate(true,200,Some((2000,3.0)),
+            Some(1999),300.0,&mods).is_empty());
+        let server=rare_scenarios_with_gate(true,200,Some((2000,3.0)),
+            Some(2000),300.0,&mods);
+        let default=rare_scenarios_with_gate(true,200,Some((2000,1.5)),
+            Some(2000),300.0,&mods);
+        assert!((server[0].units_h/default[0].units_h-2.0).abs()<1e-12);
     }
     #[test] fn outland_tiers_egg_and_event_modifiers(){
         let m=Modifiers::default();
