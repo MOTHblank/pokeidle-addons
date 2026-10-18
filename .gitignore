@@ -21,3 +21,4 @@
 # Local diagnostics
 *.log
 probe.csv
+/controller/dist
