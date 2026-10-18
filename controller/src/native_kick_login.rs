@@ -18,8 +18,11 @@ const SQLITE_ROW: c_int = 100;
 const SQLITE_DONE: c_int = 101;
 const SQLITE_OPEN_READONLY: c_int = 1;
 
-// Use the operating system's SQLite (Windows ships WinSQLite3). This avoids
-// bundling another SQLite engine just to read a single signed-in cookie.
+// Windows can link against the built-in WinSQLite3 API. On Linux, resolve
+// the distro's versioned SQLite runtime at first use. This avoids requiring a
+// Linux development sysroot/libsqlite3.so during Windows -> Linux zigbuild,
+// without bundling a separate SQLite engine or reading cookies as text.
+#[cfg(not(target_os = "linux"))]
 #[cfg_attr(windows, link(name = "winsqlite3"))]
 #[cfg_attr(not(windows), link(name = "sqlite3"))]
 unsafe extern "C" {
@@ -35,14 +38,107 @@ unsafe extern "C" {
     fn sqlite3_column_int64(stmt: *mut c_void, column: c_int) -> i64;
 }
 
-struct Database(*mut c_void);
+type Open = unsafe extern "C" fn(*const c_char, *mut *mut c_void, c_int, *const c_char) -> c_int;
+type Close = unsafe extern "C" fn(*mut c_void) -> c_int;
+type Prepare = unsafe extern "C" fn(*mut c_void, *const c_char, c_int,
+    *mut *mut c_void, *mut *const c_char) -> c_int;
+type Step = unsafe extern "C" fn(*mut c_void) -> c_int;
+type Finalize = unsafe extern "C" fn(*mut c_void) -> c_int;
+type ColumnText = unsafe extern "C" fn(*mut c_void, c_int) -> *const u8;
+type ColumnBytes = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
+type ColumnInt64 = unsafe extern "C" fn(*mut c_void, c_int) -> i64;
+
+struct SqliteApi {
+    open: Open,
+    close: Close,
+    prepare: Prepare,
+    step: Step,
+    finalize: Finalize,
+    column_text: ColumnText,
+    column_bytes: ColumnBytes,
+    column_int64: ColumnInt64,
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sqlite_api() -> Result<&'static SqliteApi, String> {
+    static API: SqliteApi = SqliteApi {
+        open: sqlite3_open_v2,
+        close: sqlite3_close,
+        prepare: sqlite3_prepare_v2,
+        step: sqlite3_step,
+        finalize: sqlite3_finalize,
+        column_text: sqlite3_column_text,
+        column_bytes: sqlite3_column_bytes,
+        column_int64: sqlite3_column_int64,
+    };
+    Ok(&API)
+}
+
+#[cfg(target_os = "linux")]
+#[link(name = "dl")]
+unsafe extern "C" {
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dlclose(handle: *mut c_void) -> c_int;
+}
+
+#[cfg(target_os = "linux")]
+fn sqlite_api() -> Result<&'static SqliteApi, String> {
+    static API: OnceLock<Result<SqliteApi, &'static str>> = OnceLock::new();
+    API.get_or_init(|| {
+        // RTLD_NOW = 2 on Linux. Load the versioned SONAME available in
+        // regular runtime packages, not the unversioned -dev symlink.
+        let handle = unsafe { dlopen(c"libsqlite3.so.0".as_ptr(), 2) };
+        if handle.is_null() {
+            return Err("Kick login requires libsqlite3.so.0 (install libsqlite3-0)");
+        }
+        macro_rules! load {
+            ($name:literal, $ty:ty) => {{
+                let address = unsafe { dlsym(handle, concat!($name, "\0").as_ptr().cast()) };
+                if address.is_null() {
+                    return Err("Installed SQLite is missing required symbols");
+                }
+                // Linux/POSIX dlsym yields a C function address. Only call it
+                // with the exact ABI and signature declared for that symbol.
+                unsafe { std::mem::transmute::<*mut c_void, $ty>(address) }
+            }};
+        }
+        let loaded = (|| -> Result<SqliteApi, &'static str> {
+            Ok(SqliteApi {
+                open: load!("sqlite3_open_v2", Open),
+                close: load!("sqlite3_close", Close),
+                prepare: load!("sqlite3_prepare_v2", Prepare),
+                step: load!("sqlite3_step", Step),
+                finalize: load!("sqlite3_finalize", Finalize),
+                column_text: load!("sqlite3_column_text", ColumnText),
+                column_bytes: load!("sqlite3_column_bytes", ColumnBytes),
+                column_int64: load!("sqlite3_column_int64", ColumnInt64),
+            })
+        })();
+        if loaded.is_err() {
+            unsafe { dlclose(handle); }
+        }
+        // On success the library stays resident, keeping all function
+        // pointers valid through Database/Statement Drop and across threads.
+        loaded
+    }).as_ref().map_err(|message| (*message).to_owned())
+}
+
+struct Database {
+    raw: *mut c_void,
+    api: &'static SqliteApi,
+}
 impl Drop for Database {
-    fn drop(&mut self) { unsafe { sqlite3_close(self.0); } }
+    fn drop(&mut self) { unsafe { (self.api.close)(self.raw); } }
 }
-struct Statement(*mut c_void);
+struct Statement {
+    raw: *mut c_void,
+    api: &'static SqliteApi,
+}
 impl Drop for Statement {
-    fn drop(&mut self) { unsafe { sqlite3_finalize(self.0); } }
+    fn drop(&mut self) { unsafe { (self.api.finalize)(self.raw); } }
 }
+
 fn cookie_looks_like_kick_token(value: &str) -> bool {
     let Some((id, secret)) = value.split_once('|') else { return false };
     !id.is_empty() && id.len() <= 18 && id.bytes().all(|b| b.is_ascii_digit())
@@ -86,33 +182,34 @@ fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
     if !path.is_file() { return Ok(None); }
     let path = CString::new(path.to_string_lossy().as_bytes())
         .map_err(|_| "Invalid Kick Firefox profile path".to_owned())?;
+    let api = sqlite_api()?;
     let mut raw = ptr::null_mut();
     let rc = unsafe {
-        sqlite3_open_v2(path.as_ptr(), &mut raw, SQLITE_OPEN_READONLY, ptr::null())
+        (api.open)(path.as_ptr(), &mut raw, SQLITE_OPEN_READONLY, ptr::null())
     };
     if rc != SQLITE_OK {
-        if !raw.is_null() { unsafe { sqlite3_close(raw); } }
+        if !raw.is_null() { unsafe { (api.close)(raw); } }
         return Err("Could not open the Kick Firefox cookie database".into());
     }
-    let db = Database(raw);
+    let db = Database { raw, api };
     // Values are never used to construct SQL; restrict to the domain and the
     // specific session cookie, not Cloudflare or third-party cookies.
     let sql = c"SELECT value, expiry FROM moz_cookies WHERE name = 'session_token'         AND host IN ('kick.com', '.kick.com', 'www.kick.com', '.www.kick.com')         ORDER BY expiry DESC";
     let mut stmt = ptr::null_mut();
-    if unsafe { sqlite3_prepare_v2(db.0, sql.as_ptr(), -1, &mut stmt, ptr::null_mut()) } != SQLITE_OK {
+    if unsafe { (api.prepare)(db.raw, sql.as_ptr(), -1, &mut stmt, ptr::null_mut()) } != SQLITE_OK {
         return Err("Kick Firefox cookies database has an unsupported schema".into());
     }
-    let stmt = Statement(stmt);
+    let stmt = Statement { raw: stmt, api };
     let now = SystemTime::now().duration_since(UNIX_EPOCH)
         .unwrap_or_default().as_secs() as i64;
     loop {
-        match unsafe { sqlite3_step(stmt.0) } {
+        match unsafe { (api.step)(stmt.raw) } {
             SQLITE_ROW => {
-                let expiry = unsafe { sqlite3_column_int64(stmt.0, 1) };
+                let expiry = unsafe { (api.column_int64)(stmt.raw, 1) };
                 if expiry > 0 && expiry <= now { continue; }
-                let length = unsafe { sqlite3_column_bytes(stmt.0, 0) };
+                let length = unsafe { (api.column_bytes)(stmt.raw, 0) };
                 if !(1..=8192).contains(&length) { continue; }
-                let text = unsafe { sqlite3_column_text(stmt.0, 0) };
+                let text = unsafe { (api.column_text)(stmt.raw, 0) };
                 if text.is_null() { continue; }
                 let bytes = unsafe { std::slice::from_raw_parts(text, length as usize) };
                 if let Ok(raw) = std::str::from_utf8(bytes) {
