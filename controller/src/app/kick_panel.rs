@@ -32,12 +32,10 @@ impl ControllerApp {
     /// Browser-bridge telemetry is a fallback during sign-in only.
     pub(super) fn sync_pokeidle_kick_streamers(&mut self) {
         for index in 0..4 {
-            let native = self.games[index].native.as_ref().map(|session| session.snapshot());
-            let fresh_native = native.as_ref().is_some_and(|state|
-                state.phase == "Online" && state.last_received
-                    .is_some_and(|at| at.elapsed() <= Duration::from_secs(90)));
-            let found = if fresh_native {
-                native.and_then(|state| state.kick_official_live)
+            let native = self.games[index].native.as_ref()
+                .and_then(|session| session.official_kick_live());
+            let found = if native.is_some() {
+                native
             } else {
                 let health = self.games[index].health();
                 if health.kick_state_available && health.telemetry_is_fresh() {
