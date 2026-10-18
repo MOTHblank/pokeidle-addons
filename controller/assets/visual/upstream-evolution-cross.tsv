@@ -1,0 +1,23 @@
+# Missing cross-generation/truncated evolution edges from upstream v1.314.2.
+# Apply ONLY when the base species has no evolvesToId; from\tto
+57	979
+82	462
+108	463
+176	468
+190	424
+193	469
+198	430
+200	429
+207	472
+215	461
+217	901
+221	473
+233	474
+288	289
+296	297
+372	373
+375	376
+13288	289
+13296	297
+13372	373
+13375	376
