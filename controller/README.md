@@ -111,6 +111,16 @@ A versão Linux usa Firefox nativo, X11 ou Wayland, `libsqlite3` para importar o
 
 No arquivo Linux distribuído, execute `./check-linux-deps.sh` para identificar dependências ausentes. Consulte [as instruções Linux](../.github/release-notes/LEIA-ME-LINUX.md). Sem um chaveiro funcional, o aplicativo ainda pode pedir login pelo Firefox a cada execução; não salva credenciais em texto simples.
 
+## Cross-build Linux no Windows
+
+Com `cargo-zigbuild`, Zig e o alvo Rust `x86_64-unknown-linux-gnu` instalados, no diretório `controller/` execute:
+
+```powershell
+cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.35
+```
+
+O executável Linux é gerado em `target/x86_64-unknown-linux-gnu/release/moth-controller`. A importação de cookie Kick usa `libsqlite3.so.0` na máquina Linux de destino, sem precisar vincular SQLite ao compilar no Windows.
+
 ## Compilação
 
 No diretório `controller/`, execute:

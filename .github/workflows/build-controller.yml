@@ -85,7 +85,7 @@ jobs:
             pkg-config libssl-dev libgtk-3-dev libudev-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxkbcommon-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-dev
+            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-0
 
       - name: Instalar Rust estável
         uses: dtolnay/rust-toolchain@stable
