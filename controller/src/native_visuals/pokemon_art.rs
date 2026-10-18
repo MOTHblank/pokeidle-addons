@@ -110,6 +110,7 @@ fn species_looktype(client: &Client, root: &Path, species: u64) -> Option<u64> {
             ("creatures-base.json", "/assets/creatures.json"),
             ("creatures-current.json", "/assets/creatures-novos.json"),
             ("creatures-outland.json", "/assets/creatures-outland-novos.json"),
+            ("creatures-forms.json", "/assets/creatures-formas.json"),
         ] {
             if let Some(document) = catalog(client, root, cache, url) {
                 if document.get("creatures").is_some_and(Value::is_array) {
@@ -310,6 +311,13 @@ mod tests {
             Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/25.png"));
         assert!(static_sprite_url(Kind::Pokemon, 0).is_none());
         assert!(static_sprite_url(Kind::Pokemon, 1026).is_none());
+        // Forms and Megas have their OWN looktypes, not the national dex art.
+        assert_eq!(crate::native_hunts::game_species_looktype(4019),Some(64019));
+        assert_eq!(crate::native_hunts::game_species_looktype(5052),Some(65052));
+        assert_eq!(crate::native_hunts::game_species_looktype(9006),Some(83006));
+        assert_eq!(crate::native_hunts::game_species_looktype(3998),Some(80998));
+        assert!(static_sprite_url(Kind::Pokemon,4019).is_none());
+        assert!(static_sprite_url(Kind::Pokemon,9006).is_none());
         assert_eq!(static_sprite_url(Kind::Pokemon, 2006).as_deref(),
             Some("https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/123.png"));
         assert_eq!(static_sprite_url(Kind::Pokemon, 14009).as_deref(),
