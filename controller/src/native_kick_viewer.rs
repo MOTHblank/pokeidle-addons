@@ -90,7 +90,19 @@ fn get_value(client: &Client, url: &str) -> Result<Value, String> {
     }
 }
 pub fn channel_meta(client: &Client, slug: &str) -> Result<ChannelMeta, String> {
-    let data = get_value(client, &format!("https://kick.com/api/v2/channels/{slug}"))?;
+    let url = format!("https://kick.com/api/v2/channels/{slug}");
+    // Kick's unofficial v2 endpoints can reject reqwest TLS even when a
+    // browser succeeds. Use short-lived system curl for the metadata read.
+    let data = match crate::native_kick_http::get(&url, None, &[]) {
+        Ok((200, data)) => data,
+        Ok((401 | 403, _)) => return Err(
+            "Kick channel metadata blocked (HTTP 401/403; HTTP client or site challenge)".into()),
+        Ok((404, _)) => return Err("Kick channel not found (404)".into()),
+        Ok((429, _)) => return Err("Kick channel metadata rate limited (429)".into()),
+        Ok((code, _)) => return Err(format!("Kick metadata returned HTTP {code}")),
+        Err(error) if error == "curl unavailable" => get_value(client, &url)?,
+        Err(error) => return Err(error),
+    };
     parse_meta(&data)
 }
 pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
@@ -99,7 +111,9 @@ pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
         .ok_or_else(|| "Kick channel ID unavailable".to_owned())?;
     let user_id = data.get("user_id").and_then(Value::as_u64)
         .or_else(|| data.pointer("/user/id").and_then(Value::as_u64))
-        .ok_or_else(|| "Kick channel user ID unavailable".to_owned())?;
+        // The official client miner falls back to channel id when Kick
+        // omits user_id. Never prevent stream detection solely for this.
+        .unwrap_or(channel_id);
     let stream = data.get("livestream").filter(|v| v.is_object());
     let stream_id = stream.and_then(|v| v.get("id")).and_then(Value::as_u64).unwrap_or(0);
     // Kick's v2 channel endpoint may return a populated livestream object
@@ -108,12 +122,14 @@ pub fn parse_meta(value: &Value) -> Result<ChannelMeta, String> {
     let is_live = stream_id > 0 && stream.and_then(|v| v.get("is_live"))
         .and_then(Value::as_bool).unwrap_or(true);
     let playback_url = data.get("playback_url").and_then(Value::as_str)
+        .or_else(|| stream.and_then(|v| v.get("playback_url")).and_then(Value::as_str))
         .unwrap_or_default().to_owned();
     Ok(ChannelMeta {
         channel_id, user_id, stream_id, playback_url,
         title: stream.and_then(|v| v.get("session_title")).and_then(Value::as_str)
             .unwrap_or_default().chars().take(140).collect(),
-        viewers: stream.and_then(|v| v.get("viewer_count")).and_then(Value::as_u64),
+        viewers: stream.and_then(|v| v.get("viewer_count").or_else(|| v.get("viewers")))
+            .and_then(Value::as_u64),
         is_live,
     })
 }
