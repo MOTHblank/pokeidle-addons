@@ -119,6 +119,7 @@ impl Gameplay {
         self.catalog.clear();
         self.last_throw=None;
         self.status.queue=0;
+        self.status.deaths_without_slot=0;
         self.status.at_center=true;
         self.status.last_action="Waiting for authenticated game state".into();
         self.refresh_readiness();
@@ -356,7 +357,6 @@ impl Gameplay {
         corpse.attempts=corpse.attempts.saturating_add(1);
         self.last_throw=Some(now);
         *self.unreflected.entry(id).or_default()+=1;
-        self.refresh_readiness();
         self.status.throws=self.status.throws.saturating_add(1);
         *self.status.used_by_ball.entry(id).or_default()+=1;
         self.status.last_action=if timed_out {
@@ -364,7 +364,9 @@ impl Gameplay {
         } else if corpse.attempts>1 {
             "Trying another Poké Ball".to_string()
         } else {"Throwing a Poké Ball".to_string()};
-        Some(GameCommand::Throw{ball_id:id,slot:corpse.slot})
+        let command=GameCommand::Throw{ball_id:id,slot:corpse.slot};
+        self.refresh_readiness();
+        Some(command)
     }
     pub fn failed(&mut self,command:&GameCommand,reason:&str) {
         self.status.error=Some(reason.to_owned());
