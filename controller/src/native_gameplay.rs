@@ -238,6 +238,8 @@ impl Gameplay {
             Some("Waiting for server Poké Ball inventory")
         } else if self.last_death_untracked && self.corpses.is_empty() {
             Some("Wild death events lack capture slots; cannot target throws")
+        } else if self.pending_throws()>=MAX_PENDING_CAPTURE_THROWS {
+            Some("Waiting for in-flight capture results")
         } else if !self.priorities.iter().any(|priority|
             self.ball_id_for_priority(priority,true).is_some()) {
             if self.priorities.iter().any(|priority|
