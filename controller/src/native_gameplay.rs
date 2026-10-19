@@ -92,6 +92,7 @@ pub struct Gameplay {
     // Authoritative inventory with outstanding local sends reserved until
     // reflected in a server stock snapshot, including delayed server updates.
     balls:BTreeMap<u64,u64>,
+    ball_inventory_seen:bool,
     unreflected:BTreeMap<u64,u64>,
     catalog:BTreeMap<u64,String>,
     priorities:Vec<String>,
@@ -107,7 +108,8 @@ impl Gameplay {
         let config=CatchSettings::from_value(settings);
         Self {
             status:GameplayStatus { auto_catch:config.enabled, ..Default::default() },
-            corpses:VecDeque::new(),balls:BTreeMap::new(),unreflected:BTreeMap::new(),
+            corpses:VecDeque::new(),balls:BTreeMap::new(),ball_inventory_seen:false,
+            unreflected:BTreeMap::new(),
             catalog:BTreeMap::new(),priorities:config.priorities,
             reserves:config.reserves,
             interval:Duration::from_millis(config.interval_ms.max(MIN_THROW_INTERVAL_MS)),
@@ -127,6 +129,7 @@ impl Gameplay {
     pub fn on_disconnect(&mut self) {
         self.corpses.clear();
         self.balls.clear();
+        self.ball_inventory_seen=false;
         self.unreflected.clear();
         self.catalog.clear();
         self.last_throw=None;
@@ -164,6 +167,7 @@ impl Gameplay {
         }
         self.unreflected.retain(|id,qty|*qty>0 && fresh.contains_key(id));
         self.balls=fresh;
+        self.ball_inventory_seen=true;
         self.refresh_readiness();
     }
     fn available(&self,id:u64)->u64 {
@@ -206,7 +210,7 @@ impl Gameplay {
             Some("At center or waiting for authenticated hunt state")
         } else if self.priorities.is_empty() {
             Some("No capture ball selected")
-        } else if self.balls.is_empty() {
+        } else if !self.ball_inventory_seen {
             Some("Waiting for server Poké Ball inventory")
         } else if self.last_death_untracked && self.corpses.is_empty() {
             Some("Wild death events lack capture slots; cannot target throws")
@@ -799,6 +803,15 @@ mod tests {
     assert_eq!(g.status.catches,0);
     assert_eq!(g.status.unmatched_successes,1);
     assert_eq!(g.status.queue,2);
+ }
+ #[test]
+ fn known_empty_inventory_is_not_mislabeled_as_missing_inventory() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{}}}"#,at);
+    assert!(g.ball_inventory_seen);
+    assert_eq!(g.status.blocked_reason.as_deref(),
+        Some("No selected Poké Balls above reserve; check restock and ball priorities"));
  }
  #[test]
  fn configured_ultra_ball_uses_authoritative_stock_without_optional_catalog() {
