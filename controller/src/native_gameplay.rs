@@ -81,7 +81,10 @@ pub struct GameplayStatus {
     pub server_catches:u64, pub server_failures:u64,
     pub catches:u64, pub failures:u64, pub retries:u64,
     pub capture_resyncs:u64,
-    pub unmatched_successes:u64, pub unreflected_throws:u64,
+    pub unmatched_successes:u64,
+    /// Awaiting a battle capture result, even if inventory already reflected
+    /// the ball cost. This must not be conflated with reserved ball stock.
+    pub pending_results:u64, pub unreflected_throws:u64,
     pub at_center:bool, pub error:Option<String>,
     /// Enabled is a preference; ready requires server inventory and a usable ball.
     pub capture_ready:bool, pub blocked_reason:Option<String>,
@@ -220,6 +223,7 @@ impl Gameplay {
                 .filter(|id|allowed(*id)))
     }
     fn refresh_readiness(&mut self) {
+        self.status.pending_results=self.pending_throws() as u64;
         self.status.unreflected_throws=self.corpses.iter()
             .filter(|corpse|corpse.pending && corpse.unreflected).count() as u64;
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
@@ -780,6 +784,31 @@ mod tests {
     assert_eq!(g.status.catches,1);
     assert_eq!(g.status.queue,0);
     assert_eq!(g.available(4),4);
+ }
+ #[test]
+ fn inventory_confirmation_is_not_a_capture_result() {
+    let now=Instant::now();
+    let mut capture=Gameplay::new(Some(&json!({
+        "enabled":true,"ballPriority":["ultra"]
+    })));
+    capture.ingest(r#"{"t":"welcome","catalogoBolas":[
+        {"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":5}}}"#,now);
+    capture.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":22}]}"#,now);
+    assert!(capture.next_capture(now).is_some());
+    assert_eq!(capture.status.pending_results,1);
+    assert_eq!(capture.status.unreflected_throws,1);
+    // Stock may update without a bola event. It is NOT proof of a catch.
+    capture.ingest(r#"{"t":"estado","estado":{"balls":{"4":4}}}"#,
+        now+Duration::from_secs(1));
+    assert_eq!(capture.status.unreflected_throws,0);
+    assert_eq!(capture.status.pending_results,1);
+    capture.ingest(r#"{"t":"batalha","ev":[
+        {"k":"bola","slot":22,"ballId":4,"sucesso":true}]}"#,
+        now+Duration::from_secs(2));
+    assert_eq!(capture.status.pending_results,0);
+    assert_eq!(capture.status.catches,1);
  }
  #[test]
  fn restock_mismatch_and_empty_selected_balls_are_reported() {
