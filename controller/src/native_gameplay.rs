@@ -180,11 +180,15 @@ impl Gameplay {
     /// The game and PokeIdle Manager use stable inventory ball IDs. A server
     /// inventory object is authoritative for quantity; a descriptive shop
     /// catalog is optional and must not prevent native capture.
+    fn known_ball_id(priority:&str)->Option<u64> {
+        match priority {
+            "poke"=>Some(1),"great"=>Some(2),"super"=>Some(3),
+            "ultra"=>Some(4),"beast"=>Some(5),
+            _=>None
+        }
+    }
     fn ball_id_for_priority(&self,priority:&str,require_available:bool)->Option<u64> {
-        let known=match priority {
-            "poke"=>1,"great"=>2,"super"=>3,"ultra"=>4,"beast"=>5,
-            _=>return None
-        };
+        let known=Self::known_ball_id(priority)?;
         let reserve=self.reserves.get(priority).copied().unwrap_or(0);
         let allowed=|id:u64|self.catalog.get(&id)
             .is_none_or(|name|!name.contains("master")) &&
@@ -200,7 +204,9 @@ impl Gameplay {
             .copied().fold(0u64,u64::saturating_add);
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
             !self.priorities.iter().any(|p|
-                self.ball_id_for_priority(p,false)==Some(self.restock_ball_id));
+                Self::known_ball_id(p)==Some(self.restock_ball_id) ||
+                self.catalog.get(&self.restock_ball_id)
+                    .is_some_and(|name|Self::ball_matches(name,p)));
         self.status.warning=if mismatch {
             Some("Restock buys a ball that Auto Catch does not use".to_owned())
         } else {None};
@@ -810,6 +816,7 @@ mod tests {
     let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
     g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{}}}"#,at);
     assert!(g.ball_inventory_seen);
+    assert!(g.status.warning.is_none());
     assert_eq!(g.status.blocked_reason.as_deref(),
         Some("No selected Poké Balls above reserve; check restock and ball priorities"));
  }
