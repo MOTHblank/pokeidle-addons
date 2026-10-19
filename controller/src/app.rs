@@ -338,6 +338,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Selected Poké Balls reserved; waiting for server consumption confirmation" =>
             "Pokébolas reservadas; aguardando confirmação de consumo do servidor",
         "Confirmed by server" => "Confirmadas pelo servidor",
+        "Downed targets" => "Alvos caídos",
+        "Server failures" => "Falhas no servidor",
         "Native-matched" => "Vinculadas ao Auto Catch",
         "Unmatched receipts" => "Respostas sem correspondência",
         "Stock awaiting confirmation" => "Estoque aguardando confirmação",
@@ -4955,9 +4957,11 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     });
                 }
                 ui.label(RichText::new(format!(
-                    "{} waiting · {} throws · {} {} · {} failed · {} retries",
-                    game.native_capture_queue,capture.throws,capture.server_catches,
-                    tr("Confirmed by server"),capture.failures,capture.timeout_retries
+                    "{} {} · {} throws · {} {} · {} {} · {} retries",
+                    game.native_capture_queue,tr("Downed targets"),
+                    capture.throws,capture.server_catches,
+                    tr("Confirmed by server"),capture.server_failures,
+                    tr("Server failures"),capture.timeout_retries
                 )).size(10.0).color(DIM));
             });
 
