@@ -3958,6 +3958,12 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                     fresh && health.bridge_snapshot_ok && health.autocatch_on && capture_ready,
                 );
                 if fresh && health.bridge_snapshot_ok && health.autocatch_on {
+                    if !capture_ready {
+                        ui.label(RichText::new(format!(
+                            "{}: {}",tr("Restock"),
+                            tr(&health.autocatch_restock)
+                        )).size(10.0).color(DIM));
+                    }
                     if let Some(capture)=capture_status.as_ref() {
                         if let Some(reason)=capture.blocked_reason.as_deref() {
                             ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
@@ -4956,6 +4962,25 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             });
 
             if game.native_auto_catch {
+                let restock=&game.native_restock;
+                let selected_ball=restock.rules.iter().find(|r|r.kind=="ball");
+                let ball_detail=selected_ball.map(|ball| {
+                    format!(" · {} #{}: {}/{}",
+                        ball.name,ball.id,
+                        ball.current.map(|n|n.to_string())
+                            .unwrap_or_else(||"—".into()),ball.target)
+                }).unwrap_or_default();
+                ui.label(RichText::new(format!(
+                    "{}: {}{} · {}: {}",
+                    tr("Restock"),tr(&restock.phase),ball_detail,
+                    tr("Stock awaiting confirmation"),
+                    game.native_capture_status.unreflected_throws
+                )).size(10.0).color(
+                    if restock.last_error.is_some() {WARN} else {DIM}
+                ));
+                if let Some(error)=restock.last_error.as_deref() {
+                    ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
                 if let Some(reason)=game.native_capture_status.blocked_reason.as_deref() {
                     ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
                 }
