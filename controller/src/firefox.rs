@@ -120,7 +120,12 @@ pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
         .map_err(format_spawn_error)
 }
 
-pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
+/// Open the selected account profile in an ordinary, user-controlled Firefox
+/// window for interactive Google/PokéIdle or Twitch authentication.
+/// Do not add a BiDi/Remote Agent port, and never open sign-in URLs inside
+/// the monitored browser. Authentication is handled by the provider itself.
+pub fn launch_unmonitored(config: &Config, url: &str) -> Result<Child, String> {
+    let mut command = unmonitored_login_command(config, url)?;
     migrate_legacy_profile(config)?;
 
     fs::create_dir_all(&config.profile_dir).map_err(|error| {
@@ -135,20 +140,30 @@ pub fn launch_unmonitored(config: &Config) -> Result<Child, String> {
         "starting unmonitored visible Firefox without remote debugging: executable={} profile={} url={}",
         config.firefox_executable.display(),
         config.profile_dir.display(),
-        config.url
+        url
     ));
 
-    Command::new(&config.firefox_executable)
+    command.spawn().map_err(format_spawn_error)
+}
+
+/// Only the controller's two interactive sign-in destinations are allowed.
+/// Keeping the launch command separate lets us assert that neither path
+/// accidentally regains remote-debugging/automation flags.
+fn unmonitored_login_command(config: &Config, url: &str) -> Result<Command, String> {
+    if url != config.url.as_str() && url != crate::accounts::TWITCH_LOGIN {
+        return Err("unsupported unmonitored sign-in URL".to_owned());
+    }
+    let mut command = Command::new(&config.firefox_executable);
+    command
         .arg("--no-remote")
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
-        .arg(&config.url)
+        .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(format_spawn_error)
+        .stderr(Stdio::null());
+    Ok(command)
 }
 
 fn migrate_legacy_profile(config: &Config) -> Result<(), String> {
@@ -247,34 +262,6 @@ fn provision_profile(profile_dir: &std::path::Path) -> Result<(), String> {
 
 fn format_spawn_error(error: io::Error) -> String {
     format!("could not start Firefox: {error}")
-}
-
-/// Open user-requested game and login links with Firefox's normal URL
-/// handler rather than a BiDi-created browsing context. This leaves normal
-/// browser navigation independent of native game-session monitoring.
-pub fn open_url(config: &Config, url: &str) -> Result<(), String> {
-    if !url.starts_with("https://") {
-        return Err("refusing to open a non-HTTPS URL".to_string());
-    }
-
-    fs::create_dir_all(&config.profile_dir).map_err(|error| {
-        format!(
-            "could not create profile directory {}: {error}",
-            config.profile_dir.display()
-        )
-    })?;
-
-    Command::new(&config.firefox_executable)
-        .arg("--profile")
-        .arg(&config.profile_dir)
-        .arg("--new-tab")
-        .arg(url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(format_spawn_error)
 }
 
 /// Stop only the Firefox process started by this controller. Prefer a clean
@@ -640,5 +627,48 @@ mod lifecycle_tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("local TCP bind");
         let port = listener.local_addr().expect("listener address").port();
         assert!(ensure_debug_port_available(port).is_err());
+    }
+}
+
+#[cfg(test)]
+mod unmonitored_login_tests {
+    use super::*;
+    use crate::config::GameProfile;
+    use std::path::PathBuf;
+
+    fn config() -> Config {
+        Config {
+            firefox_executable: PathBuf::from("firefox"),
+            profile: GameProfile::Game1,
+            profile_dir: PathBuf::from("isolated-game-profile"),
+            url: "https://pokeidle.io/app".to_owned(),
+            remote_debug_port: 27701,
+        }
+    }
+
+    #[test]
+    fn both_interactive_logins_use_a_regular_non_automated_browser() {
+        let config = config();
+        for url in [&config.url[..], crate::accounts::TWITCH_LOGIN] {
+            let command = unmonitored_login_command(&config, url).unwrap();
+            let args: Vec<_> = command.get_args()
+                .map(|arg| arg.to_string_lossy().to_string()).collect();
+            assert!(args.contains(&"--no-remote".to_owned()));
+            assert!(args.contains(&"--profile".to_owned()));
+            assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
+            assert!(args.contains(&"--new-window".to_owned()));
+            assert!(args.contains(&url.to_owned()));
+            assert!(!args.iter().any(|arg| {
+                arg.contains("remote-debugging") ||
+                arg.contains("marionette") ||
+                arg.contains("headless")
+            }));
+        }
+    }
+
+    #[test]
+    fn unmonitored_login_refuses_unrelated_urls() {
+        assert!(unmonitored_login_command(&config(), "https://example.com/").is_err());
+        assert!(unmonitored_login_command(&config(), "http://www.twitch.tv/login").is_err());
     }
 }
