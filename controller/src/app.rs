@@ -334,8 +334,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for server Poké Ball inventory" => "Aguardando inventário de Pokébolas do servidor",
         "Ball-event captures" => "Capturas em eventos de bola",
         "Ball-event failures" => "Falhas em eventos de bola",
-        "Native interval: at least 1.2 s between throws, one awaiting reply" =>
-            "Intervalo nativo: pelo menos 1,2 s entre lançamentos, aguardando uma resposta por vez",
+        "Native interval: 0.6 s, with a bounded pending-throw window" =>
+            "Intervalo nativo: 0,6 s, com limite de lançamentos pendentes",
         "Capture server notice" => "Aviso do servidor sobre captura",
         "Capture resyncs" => "Reconexões para recuperar capturas",
         "Only observed ball battle events are counted; built-in VIP captures may not generate them." =>
@@ -348,6 +348,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Sem Pokébolas selecionadas acima da reserva; confira reposição e prioridades",
         "Selected Poké Balls reserved; waiting for server consumption confirmation" =>
             "Pokébolas reservadas; aguardando confirmação de consumo do servidor",
+        "Waiting for in-flight capture results" =>
+            "Aguardando resposta de capturas pendentes",
         "Confirmed by server" => "Confirmadas pelo servidor",
         "Downed targets" => "Alvos caídos",
         "Server failures" => "Falhas no servidor",
@@ -5169,12 +5171,12 @@ mod restock_selection_tests {
 
         let mut latest = CatchSettings::default();
         latest.enabled = true;
-        latest.interval_ms = 200;
+        latest.interval_ms = 800;
         copy_restock_fields(&mut latest, &staged);
         assert_eq!(latest.potion_id, 70070);
         assert_eq!(latest.revive_id, 206);
         assert!(latest.enabled);
-        assert_eq!(latest.interval_ms, 200);
+        assert_eq!(latest.interval_ms, 800);
         assert!(restock_fields_equal(&staged, &latest));
         assert_eq!(CatchSettings::from_value(Some(&latest.as_value())), latest);
 
@@ -5451,8 +5453,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
-            .range(1200..=3000).speed(100.0).suffix(" ms"));
-        ui.label(RichText::new(tr("Native interval: at least 1.2 s between throws, one awaiting reply"))
+            .range(600..=3000).speed(50.0).suffix(" ms"));
+        ui.label(RichText::new(tr("Native interval: 0.6 s, with a bounded pending-throw window"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
