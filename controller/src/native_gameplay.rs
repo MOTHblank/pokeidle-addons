@@ -861,7 +861,9 @@ mod tests {
     assert_eq!(g.status.throws,3);
     assert_eq!(g.pending_throws(),MAX_PENDING_CAPTURE_THROWS);
     assert!(g.next_capture(at+Duration::from_millis(1800)).is_none());
-    assert!(g.status.capture_ready);
+    assert!(!g.status.capture_ready);
+    assert_eq!(g.status.blocked_reason.as_deref(),
+        Some("Waiting for in-flight capture results"));
     assert_eq!(g.available(4),10); // Pending stock doesn't override restock.
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":1,"ballId":4,
         "sucesso":false}]}"#,at+Duration::from_millis(1900));
