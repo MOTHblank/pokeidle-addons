@@ -79,8 +79,9 @@ jobs:
           install -m755 controller/target/release/moth-controller dist/package/moth-controller
           install -m755 controller/linux/check-linux-deps.sh dist/package/check-linux-deps.sh
           cp .github/release-notes/LEIA-ME-LINUX.md dist/package/LEIA-ME-LINUX.md
+          cp LICENSE dist/package/LICENSE.txt
           file=moth-native-preview-linux-x86_64.tar.gz
-          tar -czf "dist/$file" -C dist/package moth-controller check-linux-deps.sh LEIA-ME-LINUX.md
+          tar -czf "dist/$file" -C dist/package moth-controller check-linux-deps.sh LEIA-ME-LINUX.md LICENSE.txt
           (cd dist && sha256sum "$file" > "$file.sha256")
       - name: Upload Linux preview (manual workflow)
         if: github.event_name == 'workflow_dispatch' && runner.os == 'Linux'
