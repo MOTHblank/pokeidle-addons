@@ -1,13 +1,6 @@
 use crate::config::{Config, GameProfile};
-use crate::firefox;
 
 pub const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
-
-pub fn open_login(profile: GameProfile, url: &str, service: &str) -> Result<String, String> {
-    let config = Config::for_profile(profile)?;
-    firefox::open_url(&config, url)?;
-    Ok(format!("{service} opened in {}.", profile.label()))
-}
 
 const SETUP_MARKER: &str = ".moth-setup-complete";
 
