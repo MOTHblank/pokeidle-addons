@@ -1,8 +1,13 @@
 name: Build e release do Moth Controller (Windows e Linux)
 
 on:
-  # Publica uma release quando uma tag vX.Y.Z corresponde ao Cargo.toml.
+  # Release da nova versão por alteração do Cargo.toml em master
+  # ou pelo envio da tag correspondente. O token do workflow não
+  # dispara uma segunda execução quando a release cria a tag.
   push:
+    branches: [master]
+    paths:
+      - 'controller/Cargo.toml'
     tags:
       - 'v*.*.*'
   # Execução manual gera artefatos; publicação é opcional e só no master.
@@ -38,6 +43,7 @@ jobs:
         shell: bash
         env:
           REQUEST_PUBLISH: ${{ inputs.publish_release || false }}
+          PREVIOUS_MASTER_SHA: ${{ github.event.before || '' }}
         run: |
           set -euo pipefail
           version="$(grep -m1 '^version = "' controller/Cargo.toml | cut -d '"' -f 2)"
@@ -54,6 +60,18 @@ jobs:
               exit 1
             fi
             publish=true
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/master ]]; then
+            # Uma edição de metadata sem aumento da versão não publica release.
+            if [[ ! "$PREVIOUS_MASTER_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Não foi possível determinar o commit anterior."
+              exit 1
+            fi
+            git fetch --no-tags --depth=1 origin "$PREVIOUS_MASTER_SHA"
+            previous="$(git show "$PREVIOUS_MASTER_SHA:controller/Cargo.toml" | grep -m1 '^version = "' | cut -d '"' -f 2)"
+            if [[ "$version" != "$previous" ]]; then
+              echo "Versão alterada: $previous -> $version. Publicação habilitada."
+              publish=true
+            fi
           elif [[ "$REQUEST_PUBLISH" == true ]]; then
             if [[ "$GITHUB_REF" != refs/heads/master ]]; then
               echo "::error::Publicação manual só é permitida a partir de master."
@@ -71,6 +89,10 @@ jobs:
     name: Windows x86_64
     needs: versao
     runs-on: windows-2022
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Obter código
         uses: actions/checkout@v4
@@ -102,6 +124,11 @@ jobs:
           $hash = (Get-FileHash "dist/$arquivo" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $arquivo" | Set-Content -Encoding ascii "dist/$arquivo.sha256"
 
+      - name: Atestar proveniência do executável Windows
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*.exe
+
       - name: Enviar artefato Windows
         uses: actions/upload-artifact@v4
         with:
@@ -114,6 +141,10 @@ jobs:
     name: Linux x86_64 (glibc 2.35)
     needs: versao
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Obter código
         uses: actions/checkout@v4
@@ -168,6 +199,11 @@ jobs:
           arquivo="moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
           (cd dist/package && zip -q "../$arquivo" moth-controller check-linux-deps.sh LEIA-ME-LINUX.md LICENSE.txt)
           (cd dist && sha256sum "$arquivo" > "$arquivo.sha256")
+
+      - name: Atestar proveniência do pacote Linux
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*.zip
 
       - name: Enviar artefato Linux
         uses: actions/upload-artifact@v4
