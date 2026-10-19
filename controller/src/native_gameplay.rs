@@ -73,7 +73,8 @@ pub struct GameplayStatus {
     /// Confirmed server success receipts. Unlike native-attributed catches,
     /// these do not require an outstanding corpse slot to still be tracked.
     pub server_catches:u64, pub server_failures:u64,
-    pub catches:u64, pub failures:u64, pub timeout_retries:u64,
+    pub catches:u64, pub failures:u64, pub retries:u64,
+    pub capture_resyncs:u64,
     pub unmatched_successes:u64, pub unreflected_throws:u64,
     pub at_center:bool, pub error:Option<String>,
     /// Enabled is a preference; ready requires server inventory and a usable ball.
@@ -413,6 +414,12 @@ impl Gameplay {
             corpse.pending && corpse.last.is_some_and(|last|
                 now.saturating_duration_since(last)>=CAPTURE_RESULT_TIMEOUT))
     }
+    pub fn record_capture_timeout(&mut self) {
+        self.status.capture_resyncs=self.status.capture_resyncs.saturating_add(1);
+        self.status.error=Some(
+            "No server response to native Poké Ball throw; refreshing game state".into()
+        );
+    }
     pub fn next_capture(&mut self,now:Instant)->Option<GameCommand> {
         self.expire_corpses(now);
         self.refresh_readiness();
@@ -442,9 +449,9 @@ impl Gameplay {
             .map(|(idx,_)|idx);
         let Some(idx)=next else {return None};
         let corpse=&mut self.corpses[idx];
-        let timed_out=corpse.pending;
-        if timed_out {
-            self.status.timeout_retries=self.status.timeout_retries.saturating_add(1);
+        let retry=corpse.attempts>0;
+        if retry {
+            self.status.retries=self.status.retries.saturating_add(1);
         }
         corpse.last=Some(now);
         corpse.last_ball=Some(id);
@@ -454,9 +461,7 @@ impl Gameplay {
         *self.unreflected.entry(id).or_default()+=1;
         self.status.throws=self.status.throws.saturating_add(1);
         *self.status.used_by_ball.entry(id).or_default()+=1;
-        self.status.last_action=if timed_out {
-            "Retrying a Poké Ball throw".to_string()
-        } else if corpse.attempts>1 {
+        self.status.last_action=if retry {
             "Trying another Poké Ball".to_string()
         } else {"Throwing a Poké Ball".to_string()};
         let command=GameCommand::Throw{ball_id:id,slot:corpse.slot};
@@ -561,6 +566,7 @@ mod tests {
     assert!(g.next_capture(at+Duration::from_millis(1219)).is_none());
     assert_eq!(g.next_capture(at+Duration::from_millis(1220)).unwrap().wire()["slot"],7);
     assert_eq!(g.status.throws,2);
+    assert_eq!(g.status.retries,1);
  }
  #[test]
  fn unanswered_throw_does_not_spam_retries_or_exhaust_stock() {
@@ -575,7 +581,7 @@ mod tests {
     assert!(g.next_capture(at+Duration::from_secs(7)).is_none());
     assert_eq!(g.status.throws,1);
     assert_eq!(g.status.unreflected_throws,1);
-    assert_eq!(g.status.timeout_retries,0);
+    assert_eq!(g.status.retries,0);
     assert!(!g.needs_capture_resync(at+Duration::from_secs(7)));
     assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
  }
