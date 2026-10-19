@@ -335,6 +335,14 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Eventos de derrota não trazem slot de captura; impossível lançar Pokébolas",
         "No selected Poké Balls above reserve; check restock and ball priorities" =>
             "Sem Pokébolas selecionadas acima da reserva; confira reposição e prioridades",
+        "Selected Poké Balls reserved; waiting for server consumption confirmation" =>
+            "Pokébolas reservadas; aguardando confirmação de consumo do servidor",
+        "Confirmed by server" => "Confirmadas pelo servidor",
+        "Native-matched" => "Vinculadas ao Auto Catch",
+        "Unmatched receipts" => "Respostas sem correspondência",
+        "Stock awaiting confirmation" => "Estoque aguardando confirmação",
+        "Server receipt totals may also include captures outside native Auto Catch." =>
+            "As confirmações do servidor também podem incluir capturas fora do Auto Catch nativo.",
         "Restock buys a ball that Auto Catch does not use" =>
             "A reposição compra uma Pokébola que a captura automática não utiliza",
         "wild death events without capture slots" =>
@@ -4941,9 +4949,9 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     });
                 }
                 ui.label(RichText::new(format!(
-                    "{} waiting · {} throws · {} caught · {} failed · {} retries",
-                    game.native_capture_queue,capture.throws,capture.catches,
-                    capture.failures,capture.timeout_retries
+                    "{} waiting · {} throws · {} {} · {} failed · {} retries",
+                    game.native_capture_queue,capture.throws,capture.server_catches,
+                    tr("Confirmed by server"),capture.failures,capture.timeout_retries
                 )).size(10.0).color(DIM));
             });
 
@@ -4970,16 +4978,31 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             }
             ui.collapsing("Auto Catch · ball statistics",|ui|{
                 let capture=&game.native_capture_status;
-                if capture.used_by_ball.is_empty() {
+                if capture.used_by_ball.is_empty() &&
+                    capture.server_caught_by_ball.is_empty() {
                     ui.label(RichText::new(tr("No Auto Catch attempts recorded yet"))
                         .size(10.0).color(DIM));
                 }
-                for (id,used) in &capture.used_by_ball {
-                    let caught=capture.caught_by_ball.get(id).copied().unwrap_or(0);
-                    ui.label(tr_dynamic(format!("Ball #{id}: {used} sent · {caught} caught")));
+                let ids=capture.used_by_ball.keys()
+                    .chain(capture.server_caught_by_ball.keys())
+                    .copied().collect::<std::collections::BTreeSet<_>>();
+                for id in ids.iter() {
+                    let sent=capture.used_by_ball.get(id).copied().unwrap_or(0);
+                    let confirmed=capture.server_caught_by_ball.get(id).copied().unwrap_or(0);
+                    let matched=capture.caught_by_ball.get(id).copied().unwrap_or(0);
+                    ui.label(RichText::new(format!(
+                        "Ball #{id}: {sent} sent · {confirmed} {} · {matched} {}",
+                        tr("Confirmed by server"),tr("Native-matched")
+                    )).size(10.0).color(MUTED));
                 }
+                ui.label(RichText::new(format!(
+                    "{}: {} · {}: {} · {}: {}",
+                    tr("Confirmed by server"),capture.server_catches,
+                    tr("Unmatched receipts"),capture.unmatched_successes,
+                    tr("Stock awaiting confirmation"),capture.unreflected_throws
+                )).size(10.0).color(DIM));
                 ui.label(RichText::new(
-                    tr("These numbers show Auto Catch only. Manual catches are included in the dashboard totals.")
+                    tr("Server receipt totals may also include captures outside native Auto Catch.")
                 ).size(10.0).color(DIM));
             });
             ui.add_space(7.0);
