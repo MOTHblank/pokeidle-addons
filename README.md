@@ -31,3 +31,15 @@ Para jogar pelo navegador, selecione **Abrir no Firefox** na conta desejada.
 ## Desenvolvimento
 
 Para compilar o aplicativo a partir do código-fonte, consulte as [instruções do controller](controller/README.md).
+
+## Releases automáticas (GitHub Actions)
+
+Os workflows usam os runners gratuitos do GitHub para repositórios públicos:
+
+- Alterações em `controller/` ou nos workflows acionam a validação Rust em Windows e Linux.
+- Para baixar um build de teste sem publicar uma versão, abra [Actions → Build e release do Moth Controller](https://github.com/MOTHblank/pokeidle-addons/actions/workflows/build-controller.yml), clique em **Run workflow** e mantenha **Publicar a release** desmarcado. Os binários ficam nos artefatos da execução por 7 dias.
+- Para publicar uma **nova** versão, atualize `version` em `controller/Cargo.toml`, faça o commit em `master` e crie/envie a tag correspondente, por exemplo `v0.1.10`. O workflow compila Windows x86_64 e Linux x86_64, verifica os SHA-256 e cria a [GitHub Release](https://github.com/MOTHblank/pokeidle-addons/releases) com os dois pacotes.
+- Também é possível iniciar o workflow manualmente em `master` e marcar **Publicar a release**; releases existentes não são sobrescritas.
+
+Os pacotes publicados são um executável `.exe` para Windows e um `.zip` para Linux (com verificação de dependências e licença MIT). A publicação só ocorre quando os dois builds são concluídos com sucesso.
+
