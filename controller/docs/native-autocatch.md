@@ -42,6 +42,29 @@ Auto Catch blocked reason, restock phase, and death-event slot diagnostics.
 An account-specific failure cannot be definitively attributed to a root cause
 without its authenticated runtime observations.
 
+## Server captures, account-specific stalls, and restock recovery
+
+The controller now separates native-attributed catches from **server-confirmed
+capture receipts**. The Automation counters and per-ball receipt totals report
+the latter, even when an event lacks a slot or the original corpse has already
+expired. A missing-slot receipt is attributed to the native throw only when
+exactly one compatible pending throw exists; ambiguous receipts are counted as
+server confirmations without falsely assigning them to a target. This also
+avoids displaying a misleading zero captures after successful catches.
+
+The account detail shows the selected restock ball's stock and target, the
+restock phase, outstanding unreconciled sends, and an explicit readiness reason
+when the queue keeps changing but no new throw can be sent. The numbers are
+per native session and require rebuilding/rerunning the controller.
+
+A confirmed `bola` receipt updates local restock ball consumption ahead of
+the next `estado.balls` snapshot. Native-matched receipts also reconcile their
+provisional ball reservations. A confirmed shop purchase must still wait for an
+authoritative inventory snapshot before another purchase. If no such snapshot
+arrives within 20 seconds, only that account's authenticated game socket
+reconnects to obtain a fresh server state rather than indefinitely blocking
+restock or blindly making duplicate purchases.
+
 ## Verification
 
 The Rust tests in `native_gameplay.rs` cover fast two-target scheduling, 1-second unanswered retries, explicit-failure retries, strict reserve behavior during stale stock patches, deduplicated/matched results and expiry/reconnect. `native_capture_config.rs` covers importing/saving interval settings and bounds. Compile and live game verification are required before claiming production-tested parity; neither was executable in the editing environment.
