@@ -623,7 +623,8 @@ mod tests {
         assert_eq!(r.status.confirmed,1);
         assert!(!r.status.pending);
         assert!(r.next(now+Duration::from_secs(31),true).is_none());
-        assert_eq!(r.status.phase,"Waiting for updated inventory");
+        // An overdue inventory patch remains blocked with an explicit status.
+        assert_eq!(r.status.phase,"Waiting for inventory");
         r.ingest(r#"{"t":"estado","estado":{"items":{"200":12},"gold":130}}"#,now);
         assert!(r.next(now+Duration::from_secs(31),true).is_none());
         assert_eq!(r.status.phase,"Stock OK");
