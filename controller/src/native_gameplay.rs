@@ -527,53 +527,57 @@ mod tests {
     assert!(g.next_capture(at+Duration::from_secs(2)).is_none());
  }
  #[test]
- fn fast_cadence_prefers_older_expiring_corpse() {
+ fn server_cooldown_prefers_older_expiring_corpse() {
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({
         "enabled":true,"ballPriority":["ultra"],"intervalMs":100
     })));
-    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
-        "estado":{"noCentro":false,"balls":{"4":20}}}"#,at);
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":20}}}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":11}]}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":22}]}"#,
         at+Duration::from_secs(5));
     assert_eq!(g.next_capture(at+Duration::from_secs(5)).unwrap().wire()["slot"],11);
-    assert!(g.next_capture(at+Duration::from_millis(5050)).is_none());
-    assert_eq!(g.next_capture(at+Duration::from_millis(5100)).unwrap().wire()["slot"],22);
+    // The second corpse must not consume another unacknowledged ball.
+    assert!(g.next_capture(at+Duration::from_millis(6500)).is_none());
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":11,
+        "ballId":4,"sucesso":true}]}"#,at+Duration::from_millis(6510));
+    assert!(g.next_capture(at+Duration::from_millis(7709)).is_none());
+    assert_eq!(g.next_capture(at+Duration::from_millis(7710)).unwrap().wire()["slot"],22);
     assert_eq!(g.status.throws,2);
-    assert_eq!(g.status.catches,0);
+    assert_eq!(g.status.catches,1);
  }
  #[test]
- fn retry_after_failed_receipt_uses_configured_fast_interval() {
+ fn retry_after_failed_receipt_honors_server_cooldown() {
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({
         "enabled":true,"ballPriority":["ultra"],"intervalMs":100
     })));
-    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
-        "estado":{"balls":{"4":5}}}"#,at);
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":5}}}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":7}]}"#,at);
-    let cmd=g.next_capture(at).unwrap();
-    assert_eq!(cmd.wire()["slot"],7);
+    assert_eq!(g.next_capture(at).unwrap().wire()["slot"],7);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":7,"ballId":4,
         "sucesso":false}]}"#,at+Duration::from_millis(20));
     assert_eq!(g.status.failures,1);
-    assert!(g.next_capture(at+Duration::from_millis(99)).is_none());
-    assert_eq!(g.next_capture(at+Duration::from_millis(100)).unwrap().wire()["slot"],7);
+    assert!(g.next_capture(at+Duration::from_millis(1219)).is_none());
+    assert_eq!(g.next_capture(at+Duration::from_millis(1220)).unwrap().wire()["slot"],7);
     assert_eq!(g.status.throws,2);
  }
  #[test]
- fn unanswered_throw_retries_after_one_second_not_three() {
+ fn unanswered_throw_does_not_spam_retries_or_exhaust_stock() {
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({
         "enabled":true,"ballPriority":["ultra"]
     })));
-    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
-        "estado":{"balls":{"4":5}}}"#,at);
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":5}}}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,at);
     assert!(g.next_capture(at).is_some());
-    assert!(g.next_capture(at+Duration::from_millis(999)).is_none());
-    assert!(g.next_capture(at+Duration::from_millis(1000)).is_some());
-    assert_eq!(g.status.timeout_retries,1);
+    assert!(g.next_capture(at+Duration::from_millis(1200)).is_none());
+    assert!(g.next_capture(at+Duration::from_secs(7)).is_none());
+    assert_eq!(g.status.throws,1);
+    assert_eq!(g.status.unreflected_throws,1);
+    assert_eq!(g.status.timeout_retries,0);
+    assert!(!g.needs_capture_resync(at+Duration::from_secs(7)));
+    assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
  }
  #[test]
  fn stale_inventory_patches_do_not_spend_ball_reserve() {
@@ -686,31 +690,24 @@ mod tests {
     assert!(g.status.capture_ready);
  }
  #[test]
- fn queue_keeps_growing_but_unconfirmed_stock_blocks_more_sends() {
-    // Reproduces the reported Account 4 symptom: a changing corpse backlog
-    // with a stationary throw counter. The UI must expose the reason instead
-    // of claiming capture is healthy.
+ fn growing_corpse_queue_cannot_create_unbounded_unconfirmed_throws() {
+    // Reproduces Account 4: changing downed targets with frozen throw count.
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({
         "enabled":true,"ballPriority":["ultra"],"reserve":{"ultra":0}
     })));
-    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
-        "estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[
         {"k":"morte","quem":"selvagem","slot":1},
         {"k":"morte","quem":"selvagem","slot":2}]}"#,at);
     assert!(g.next_capture(at).is_some());
-    assert!(g.next_capture(at+Duration::from_millis(100)).is_some());
-    g.ingest(r#"{"t":"batalha","ev":[
-        {"k":"morte","quem":"selvagem","slot":3}]}"#,
+    assert!(g.next_capture(at+Duration::from_millis(100)).is_none());
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":3}]}"#,
         at+Duration::from_millis(200));
     assert_eq!(g.status.queue,3);
-    assert_eq!(g.status.throws,2);
-    assert_eq!(g.status.unreflected_throws,2);
-    assert!(!g.status.capture_ready);
-    assert!(g.status.blocked_reason.as_deref().unwrap()
-        .contains("reserved"));
-    assert!(g.next_capture(at+Duration::from_millis(200)).is_none());
+    assert_eq!(g.status.throws,1);
+    assert_eq!(g.status.unreflected_throws,1);
+    assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
  }
  #[test]
  fn restock_mismatch_and_empty_selected_balls_are_reported() {
@@ -776,22 +773,37 @@ mod tests {
     assert_eq!(g.available(4),2);
  }
  #[test]
- fn ambiguous_missing_slot_receipt_counts_server_success_without_guessing_target() {
+ fn ambiguous_missing_slot_receipt_never_guesses_a_target() {
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
-    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
-        "estado":{"noCentro":false,"balls":{"4":100}}}"#,at);
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":100}}}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[
         {"k":"morte","quem":"selvagem","slot":5},
         {"k":"morte","quem":"selvagem","slot":6}]}"#,at);
     assert!(g.next_capture(at).is_some());
-    assert!(g.next_capture(at+Duration::from_millis(100)).is_some());
+    // Simulate two compatible older in-flight replies from the wire, even
+    // though the safer new worker never intentionally sends them together.
+    let other=g.corpses.iter_mut().find(|c|c.slot==6).unwrap();
+    other.pending=true;
+    other.attempts=1;
+    other.last_ball=Some(4);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":true}]}"#,
         at+Duration::from_millis(110));
     assert_eq!(g.status.server_catches,1);
     assert_eq!(g.status.catches,0);
     assert_eq!(g.status.unmatched_successes,1);
     assert_eq!(g.status.queue,2);
+ }
+ #[test]
+ fn configured_ultra_ball_uses_authoritative_stock_without_optional_catalog() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":3}}}"#,at);
+    assert!(g.catalog.is_empty());
+    assert!(g.status.capture_ready);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":7}]}"#,at);
+    assert_eq!(g.next_capture(at).unwrap().wire(),
+        json!({"t":"ball.throw","ballId":4,"slot":7}));
  }
  #[test]
  fn native_capture_requires_enabled_mode_catalog_and_server_corpse(){
