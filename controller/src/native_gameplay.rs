@@ -164,15 +164,9 @@ impl Gameplay {
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
             self.catalog.get(&self.restock_ball_id).is_some_and(|name|
                 !self.priorities.iter().any(|p|Self::ball_matches(name,p)));
-        let mut warnings=Vec::new();
-        if mismatch {
-            warnings.push("Restock buys a ball that Auto Catch does not use".to_owned());
-        }
-        if self.status.deaths_without_slot>0 {
-            warnings.push(format!("{} wild death(s) lacked a capture slot",
-                self.status.deaths_without_slot));
-        }
-        self.status.warning=if warnings.is_empty(){None}else{Some(warnings.join(" · "))};
+        self.status.warning=if mismatch {
+            Some("Restock buys a ball that Auto Catch does not use".to_owned())
+        } else {None};
         let reason=if !self.status.auto_catch {
             Some("Auto Catch disabled")
         } else if self.status.at_center {
