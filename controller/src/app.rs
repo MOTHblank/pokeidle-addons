@@ -4958,7 +4958,7 @@ fn auto_catch_operational_label(connected:bool,
     capture:&crate::native_gameplay::GameplayStatus)->&'static str {
     if !connected {
         "Auto Catch awaiting game connection"
-    } else if capture.unreflected_throws>0 {
+    } else if capture.pending_results>0 {
         "Auto Catch waiting for capture results"
     } else if capture.capture_ready {
         "Auto Catch ready for targets"
@@ -4983,12 +4983,12 @@ mod auto_catch_ui_state_tests {
         assert_eq!(auto_catch_setting_label(true),"Auto Catch on");
         assert_eq!(auto_catch_operational_label(true,&capture),
             "Auto Catch ready for targets");
-        capture.unreflected_throws=2;
+        capture.pending_results=2;
         assert_eq!(auto_catch_setting_label(true),"Auto Catch on");
         assert_eq!(auto_catch_operational_label(true,&capture),
             "Auto Catch waiting for capture results");
         capture.capture_ready=false;
-        capture.unreflected_throws=0;
+        capture.pending_results=0;
         assert_eq!(auto_catch_operational_label(true,&capture),
             "Auto Catch waiting for conditions");
     }
@@ -5062,7 +5062,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 let operational=auto_catch_operational_label(capture_connected,capture);
                 ui.label(RichText::new(format!("{}: {}",tr("Capture operation"),tr(operational)))
                     .size(11.0).color(if capture_connected && capture.capture_ready &&
-                        capture.unreflected_throws==0 {GOOD} else {WARN}));
+                        capture.pending_results==0 {GOOD} else {WARN}));
                 if capture_connected && !capture.capture_ready {
                     if let Some(reason)=capture.blocked_reason.as_deref() {
                         ui.label(RichText::new(tr(reason)).size(10.0).color(MUTED));
@@ -5076,7 +5076,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     ("Throws sent",capture.throws),
                     ("Auto Catch matched captures",capture.catches),
                     ("Auto Catch matched failures",capture.failures),
-                    ("Pending capture receipts",capture.unreflected_throws)
+                    ("Pending capture receipts",capture.pending_results)
                 ] {
                     ui.label(RichText::new(format!("{}: {}",tr(label),value))
                         .size(10.0).color(MUTED));
@@ -5096,7 +5096,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 ui.label(RichText::new(format!(
                     "{}: {}{} · {}: {}",
                     tr("Restock"),tr(&restock.phase),ball_detail,
-                    tr("Pending capture receipts"),
+                    tr("Stock awaiting confirmation"),
                     game.native_capture_status.unreflected_throws
                 )).size(10.0).color(
                     if restock.last_error.is_some() {WARN} else {DIM}
