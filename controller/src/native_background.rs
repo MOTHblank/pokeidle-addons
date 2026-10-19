@@ -820,6 +820,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // against an unacknowledged server slot. Refresh this
                     // account's authenticated inventory and event stream.
                     if gameplay.needs_capture_resync(Instant::now()) {
+                        gameplay.record_capture_timeout();
                         crate::logging::warn(&format!(
                             "{} native capture receipt overdue; reconnecting game socket",
                             profile.label()
