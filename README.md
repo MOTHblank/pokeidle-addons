@@ -38,8 +38,19 @@ Os workflows usam os runners gratuitos do GitHub para repositórios públicos:
 
 - Alterações em `controller/` ou nos workflows acionam a validação Rust em Windows e Linux.
 - Para baixar um build de teste sem publicar uma versão, abra [Actions → Build e release do Moth Controller](https://github.com/MOTHblank/pokeidle-addons/actions/workflows/build-controller.yml), clique em **Run workflow** e mantenha **Publicar a release** desmarcado. Os binários ficam nos artefatos da execução por 7 dias.
-- Para publicar uma **nova** versão, atualize `version` em `controller/Cargo.toml`, faça o commit em `master` e crie/envie a tag correspondente, por exemplo `v0.1.10`. O workflow compila Windows x86_64 e Linux x86_64, verifica os SHA-256 e cria a [GitHub Release](https://github.com/MOTHblank/pokeidle-addons/releases) com os dois pacotes.
+- Para publicar uma **nova** versão, atualize `version` em `controller/Cargo.toml` (e sincronize `controller/Cargo.lock`) e faça o commit em `master`. O workflow identifica a mudança de versão, compila Windows x86_64 e Linux x86_64, gera atestados de proveniência e SHA-256, e cria a [GitHub Release](https://github.com/MOTHblank/pokeidle-addons/releases) com os dois pacotes. Também aceita uma tag `vX.Y.Z` correspondente ao `Cargo.toml`.
 - Também é possível iniciar o workflow manualmente em `master` e marcar **Publicar a release**; releases existentes não são sobrescritas.
 
-Os pacotes publicados são um executável `.exe` para Windows e um `.zip` para Linux (com verificação de dependências e licença MIT). A publicação só ocorre quando os dois builds são concluídos com sucesso.
+Os pacotes publicados são um executável `.exe` para Windows e um `.zip` para Linux (com verificação de dependências e licença MIT). A publicação só ocorre quando os dois builds são concluídos com sucesso, incluindo as **atestações de proveniência geradas pelo GitHub Actions**. Essas atestações não são assinaturas Authenticode do Windows.
+
+### Como verificar a proveniência
+
+Após baixar os arquivos de uma release, instale o [GitHub CLI](https://cli.github.com/) e execute (substitua a versão pelo nome da release):
+
+```sh
+gh attestation verify moth-controller-v0.1.10-windows-x86_64.exe -R MOTHblank/pokeidle-addons
+gh attestation verify moth-controller-v0.1.10-linux-x86_64.zip -R MOTHblank/pokeidle-addons
+```
+
+A verificação confere a integridade do arquivo e a identidade do workflow/repositório que gerou a compilação. Consulte também os arquivos `.sha256` anexos para uma conferência simples de hash.
 
