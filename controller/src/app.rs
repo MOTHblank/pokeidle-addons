@@ -334,7 +334,14 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for server Poké Ball inventory" => "Aguardando inventário de Pokébolas do servidor",
         "Ball-event captures" => "Capturas em eventos de bola",
         "Ball-event failures" => "Falhas em eventos de bola",
+        "Server cooldown: at least 1.2 s between throws, one awaiting reply" =>
+            "Intervalo seguro: pelo menos 1,2 s entre lançamentos, aguardando uma resposta por vez",
         "Capture server notice" => "Aviso do servidor sobre captura",
+        "Capture resyncs" => "Reconexões para recuperar capturas",
+        "Only observed ball battle events are counted; built-in VIP captures may not generate them." =>
+            "Só são contados eventos de bola observados; capturas automáticas VIP do jogo podem não gerar esses eventos.",
+        "No server response to native Poké Ball throw; refreshing game state" =>
+            "Sem resposta do servidor ao lançamento; atualizando a sessão do jogo",
         "Wild death events lack capture slots; cannot target throws" =>
             "Eventos de derrota não trazem slot de captura; impossível lançar Pokébolas",
         "No selected Poké Balls above reserve; check restock and ball priorities" =>
@@ -4967,7 +4974,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     game.native_capture_queue,tr("Downed targets"),
                     capture.throws,capture.server_catches,
                     tr("Ball-event captures"),capture.server_failures,
-                    tr("Ball-event failures"),capture.timeout_retries
+                    tr("Ball-event failures"),capture.retries
                 )).size(10.0).color(DIM));
             });
 
@@ -4990,6 +4997,12 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 ));
                 if let Some(error)=restock.last_error.as_deref() {
                     ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
+                if game.native_capture_status.capture_resyncs>0 {
+                    ui.label(RichText::new(format!(
+                        "{}: {}",tr("Capture resyncs"),
+                        game.native_capture_status.capture_resyncs
+                    )).size(10.0).color(WARN));
                 }
                 if let Some(notice)=game.native_capture_status.last_server_notice.as_deref() {
                     ui.label(RichText::new(format!(
@@ -5042,7 +5055,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     tr("Stock awaiting confirmation"),capture.unreflected_throws
                 )).size(10.0).color(DIM));
                 ui.label(RichText::new(
-                    tr("Server receipt totals may also include captures outside native Auto Catch.")
+                    tr("Only observed ball battle events are counted; built-in VIP captures may not generate them.")
                 ).size(10.0).color(DIM));
             });
             ui.add_space(7.0);
@@ -5439,7 +5452,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
             .range(1200..=3000).speed(100.0).suffix(" ms"));
-        ui.label(RichText::new(tr("O servidor limita lançamentos a 1,2 s; um lançamento por vez"))
+        ui.label(RichText::new(tr("Server cooldown: at least 1.2 s between throws, one awaiting reply"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
