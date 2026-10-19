@@ -56,15 +56,19 @@ impl GameCommand {
 // The game exposes 30-second corpse lifetimes. Never use a late result as
 // evidence that an old slot should be revived: a new "morte" starts a new life.
 const CORPSE_LIFETIME:Duration=Duration::from_secs(30);
-// PokéIdle Manager's capture worker deliberately uses a 1.2-second cooldown.
-// A 100-ms local loop can reserve numerous unacknowledged balls while the
-// server rejects or ignores the overlapping throws.
-const SERVER_BALL_COOLDOWN:Duration=Duration::from_millis(1200);
+// A 600-ms native cadence serves dense AoE hunts. Bound unacknowledged
+// commands, and recover the account if their receipts never arrive.
+// This is a chosen application cadence, NOT a verified server cooldown.
+const MAX_PENDING_CAPTURE_THROWS:usize=3;
 const CAPTURE_RESULT_TIMEOUT:Duration=Duration::from_secs(8);
-const MIN_THROW_INTERVAL_MS:u64=1200;
+const MIN_THROW_INTERVAL_MS:u64=600;
 #[derive(Clone)]
 struct Corpse {
     slot:u64, at:Instant, last:Option<Instant>, pending:bool,
+    /// The pending throw is not reflected by estado.balls or a bola receipt.
+    /// This flag belongs to the target lifecycle; never retain old reservations
+    /// after that target is removed.
+    unreflected:bool,
     attempts:u32, last_ball:Option<u64>,
 }
 #[derive(Clone,Debug,Default)]
@@ -89,11 +93,11 @@ pub struct GameplayStatus {
 pub struct Gameplay {
     pub status:GameplayStatus,
     corpses:VecDeque<Corpse>,
-    // Authoritative inventory with outstanding local sends reserved until
-    // reflected in a server stock snapshot, including delayed server updates.
+    // Latest authoritative inventory, adjusted for confirmed ball receipts
+    // received between server stock snapshots. There is no cumulative local
+    // debit ledger: reservations exist only on active pending corpses.
     balls:BTreeMap<u64,u64>,
     ball_inventory_seen:bool,
-    unreflected:BTreeMap<u64,u64>,
     catalog:BTreeMap<u64,String>,
     priorities:Vec<String>,
     reserves:BTreeMap<String,u64>,
@@ -109,7 +113,6 @@ impl Gameplay {
         Self {
             status:GameplayStatus { auto_catch:config.enabled, ..Default::default() },
             corpses:VecDeque::new(),balls:BTreeMap::new(),ball_inventory_seen:false,
-            unreflected:BTreeMap::new(),
             catalog:BTreeMap::new(),priorities:config.priorities,
             reserves:config.reserves,
             interval:Duration::from_millis(config.interval_ms.max(MIN_THROW_INTERVAL_MS)),
@@ -121,7 +124,7 @@ impl Gameplay {
         self.status.auto_catch=config.enabled;
         self.priorities=config.priorities.clone();
         self.reserves=config.reserves.clone();
-        self.interval=Duration::from_millis(config.interval_ms.clamp(1200,3000));
+        self.interval=Duration::from_millis(config.interval_ms.clamp(600,3000));
         self.restock_ball_id=config.ball_id;
         self.restock_enabled=config.restock_enabled;
         self.refresh_readiness();
@@ -130,7 +133,6 @@ impl Gameplay {
         self.corpses.clear();
         self.balls.clear();
         self.ball_inventory_seen=false;
-        self.unreflected.clear();
         self.catalog.clear();
         self.last_throw=None;
         self.status.queue=0;
@@ -146,33 +148,49 @@ impl Gameplay {
             now.saturating_duration_since(c.at)<CORPSE_LIFETIME);
         self.status.queue=self.corpses.len();
     }
-    fn refresh_ball_inventory(&mut self, stock:&serde_json::Map<String,Value>) {
+    fn pending_for_ball(&self,id:u64)->u64 {
+        self.corpses.iter().filter(|corpse|
+            corpse.pending && corpse.unreflected &&
+            corpse.last_ball==Some(id)).count() as u64
+    }
+    fn pending_throws(&self)->usize {
+        self.corpses.iter().filter(|corpse|corpse.pending).count()
+    }
+    fn refresh_ball_inventory(&mut self,stock:&serde_json::Map<String,Value>) {
         let fresh=stock.iter().filter_map(|(id,amount)|
             Some((id.parse::<u64>().ok()?,amount.as_u64()?))
         ).collect::<BTreeMap<_,_>>();
-        // When the server reports a consumption, release the matching local
-        // provisional debit; if the patch is stale, retain that reservation.
-        for (id,current) in &fresh {
-            let was=self.balls.get(id).copied().unwrap_or(*current);
-            if *current > was {
-                // A replenished full server stock supersedes reservations from
-                // the previous generation; otherwise Auto Catch can stall forever.
-                self.unreflected.remove(id);
-            } else {
-                let reflected=was.saturating_sub(*current);
-                if let Some(held)=self.unreflected.get_mut(id) {
-                    *held=held.saturating_sub(reflected);
+        // A decrease in authoritative stock accounts for outstanding sends.
+        // Release only the corresponding pending reservations; a stale/equal
+        // patch must NOT acknowledge them. Unrelated corpses never acquire a
+        // permanent reservation.
+        for (id,previous) in &self.balls {
+            let current=fresh.get(id).copied().unwrap_or(0);
+            let mut confirmed=previous.saturating_sub(current);
+            if confirmed==0 {continue}
+            for corpse in &mut self.corpses {
+                if confirmed==0 {break}
+                if corpse.pending && corpse.unreflected && corpse.last_ball==Some(*id) {
+                    corpse.unreflected=false;
+                    confirmed-=1;
                 }
             }
         }
-        self.unreflected.retain(|id,qty|*qty>0 && fresh.contains_key(id));
         self.balls=fresh;
         self.ball_inventory_seen=true;
         self.refresh_readiness();
     }
     fn available(&self,id:u64)->u64 {
-        self.balls.get(&id).copied().unwrap_or(0)
-            .saturating_sub(self.unreflected.get(&id).copied().unwrap_or(0))
+        let stock=self.balls.get(&id).copied().unwrap_or(0);
+        // The configured restock ball is replenishable. Don't subtract
+        // speculative local sends from its usable stock: an outdated
+        // reservation should never block low-stock Auto Catch. Still require
+        // a positive actual server stock and respect explicit ball reserves.
+        if self.restock_enabled && self.restock_ball_id==id {
+            stock
+        } else {
+            stock.saturating_sub(self.pending_for_ball(id))
+        }
     }
     fn ball_matches(name:&str,priority:&str)->bool {
         name.contains(priority) || (priority=="poke" && name.contains("poké"))
@@ -200,8 +218,8 @@ impl Gameplay {
                 .filter(|id|allowed(*id)))
     }
     fn refresh_readiness(&mut self) {
-        self.status.unreflected_throws=self.unreflected.values()
-            .copied().fold(0u64,u64::saturating_add);
+        self.status.unreflected_throws=self.corpses.iter()
+            .filter(|corpse|corpse.pending && corpse.unreflected).count() as u64;
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
             !self.priorities.iter().any(|p|
                 Self::known_ball_id(p)==Some(self.restock_ball_id) ||
@@ -273,7 +291,7 @@ impl Gameplay {
                         if !self.corpses.iter().any(|corpse|corpse.slot==slot) {
                             self.corpses.push_back(Corpse {
                                 slot,at:now,last:None,pending:false,
-                                attempts:0,last_ball:None
+                                unreflected:false,attempts:0,last_ball:None
                             });
                         }
                     }
@@ -314,7 +332,7 @@ impl Gameplay {
                                 self.corpses.retain(|v|v.slot!=slot);
                                 self.corpses.push_back(Corpse {
                                     slot,at:now,last:None,pending:false,
-                                    attempts:0,last_ball:None
+                                    unreflected:false,attempts:0,last_ball:None
                                 });
                             } else {
                                 self.last_death_untracked=true;
@@ -324,9 +342,8 @@ impl Gameplay {
                         }
                         Some("bola")=>{
                             if let Some(success)=event.get("sucesso").and_then(Value::as_bool) {
-                                // All observed ball results share a single
-                                // server-side cooldown (including VIP automation).
-                                self.last_throw=Some(now);
+                                // VIP/manual results must not reset the NATIVE
+                                // send timer or starve this capture worker.
                                 // The server receipt is authoritative regardless
                                 // of slot correlation. A slot may have expired
                                 // or the reply may omit it altogether.
@@ -357,25 +374,17 @@ impl Gameplay {
                                     let own=self.corpses[idx].attempts>0;
                                     let pending=self.corpses[idx].pending;
                                     let expected_ball=self.corpses[idx].last_ball;
-                                    // Once a tracked server receipt confirms a
-                                    // throw, reflect its consumption without
-                                    // waiting indefinitely for estado.balls.
-                                    // Decrease the reserved spend and observed
-                                    // stock together: available stock does not
-                                    // increase and configured reserves stay safe.
-                                    if own && pending &&
+                                    // A receipt consumes one ball only when
+                                    // the server has not already reflected it
+                                    // in its authoritative inventory snapshot.
+                                    if own && pending && self.corpses[idx].unreflected &&
                                         (response_ball.is_none() || response_ball==expected_ball) {
                                         if let Some(id)=response_ball.or(expected_ball) {
-                                            if let Some(held)=self.unreflected.get_mut(&id) {
-                                                if *held>0 {
-                                                    *held-=1;
-                                                    if let Some(stock)=self.balls.get_mut(&id) {
-                                                        *stock=stock.saturating_sub(1);
-                                                    }
-                                                }
+                                            if let Some(stock)=self.balls.get_mut(&id) {
+                                                *stock=stock.saturating_sub(1);
                                             }
-                                            self.unreflected.retain(|_,amount|*amount>0);
                                         }
+                                        self.corpses[idx].unreflected=false;
                                     }
                                     if success {
                                         if own {
@@ -391,6 +400,7 @@ impl Gameplay {
                                         response_ball==expected_ball) {
                                         if self.corpses[idx].pending {
                                             self.corpses[idx].pending=false;
+                                            self.corpses[idx].unreflected=false;
                                             self.status.failures=self.status.failures.saturating_add(1);
                                             self.status.last_action="The Pokémon resisted; retrying".into();
                                         }
@@ -434,9 +444,9 @@ impl Gameplay {
         self.expire_corpses(now);
         self.refresh_readiness();
         if !self.status.capture_ready ||
-            self.corpses.iter().any(|c|c.pending) ||
+            self.pending_throws()>=MAX_PENDING_CAPTURE_THROWS ||
             self.last_throw.is_some_and(|v|
-                now.saturating_duration_since(v)<self.interval.max(SERVER_BALL_COOLDOWN)) {
+                now.saturating_duration_since(v)<self.interval) {
             return None;
         }
         // Prefer the primary ball down to its reserve, then the fallback.
@@ -452,7 +462,7 @@ impl Gameplay {
         };
         let next=self.corpses.iter().enumerate()
             .filter(|(_,c)|!c.pending && c.last.is_none_or(|at|
-                now.saturating_duration_since(at)>=self.interval.max(SERVER_BALL_COOLDOWN)))
+                now.saturating_duration_since(at)>=self.interval))
             // Earliest corpse expiry wins. This avoids losing a dying body
             // behind newer corpses or repeatedly serviced recent slots.
             .min_by_key(|(_,c)|(c.at,c.last.unwrap_or(c.at)))
@@ -466,9 +476,9 @@ impl Gameplay {
         corpse.last=Some(now);
         corpse.last_ball=Some(id);
         corpse.pending=true;
+        corpse.unreflected=true;
         corpse.attempts=corpse.attempts.saturating_add(1);
         self.last_throw=Some(now);
-        *self.unreflected.entry(id).or_default()+=1;
         self.status.throws=self.status.throws.saturating_add(1);
         *self.status.used_by_ball.entry(id).or_default()+=1;
         self.status.last_action=if retry {
@@ -483,13 +493,10 @@ impl Gameplay {
         if let GameCommand::Throw{ball_id,slot}=command {
             if let Some(c)=self.corpses.iter_mut().find(|c|c.slot==*slot) {
                 c.pending=false;
+                c.unreflected=false;
                 if c.attempts>0 {c.attempts-=1;}
                 // A failed socket send is not a server throw.
             }
-            if let Some(held)=self.unreflected.get_mut(ball_id){
-                *held=held.saturating_sub(1);
-            }
-            self.unreflected.retain(|_,v|*v>0);
             self.status.throws=self.status.throws.saturating_sub(1);
             if let Some(v)=self.status.used_by_ball.get_mut(ball_id) {
                 *v=v.saturating_sub(1);
