@@ -650,6 +650,33 @@ mod tests {
     assert!(g.status.capture_ready);
  }
  #[test]
+ fn queue_keeps_growing_but_unconfirmed_stock_blocks_more_sends() {
+    // Reproduces the reported Account 4 symptom: a changing corpse backlog
+    // with a stationary throw counter. The UI must expose the reason instead
+    // of claiming capture is healthy.
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({
+        "enabled":true,"ballPriority":["ultra"],"reserve":{"ultra":0}
+    })));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":1},
+        {"k":"morte","quem":"selvagem","slot":2}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert!(g.next_capture(at+Duration::from_millis(100)).is_some());
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":3}]}"#,
+        at+Duration::from_millis(200));
+    assert_eq!(g.status.queue,3);
+    assert_eq!(g.status.throws,2);
+    assert_eq!(g.status.unreflected_throws,2);
+    assert!(!g.status.capture_ready);
+    assert!(g.status.blocked_reason.as_deref().unwrap()
+        .contains("reserved"));
+    assert!(g.next_capture(at+Duration::from_millis(200)).is_none());
+ }
+ #[test]
  fn restock_mismatch_and_empty_selected_balls_are_reported() {
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"],
