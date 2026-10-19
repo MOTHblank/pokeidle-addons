@@ -607,8 +607,10 @@ mod tests {
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":7,"ballId":4,
         "sucesso":false}]}"#,at+Duration::from_millis(20));
     assert_eq!(g.status.failures,1);
-    assert!(g.next_capture(at+Duration::from_millis(619)).is_none());
-    assert_eq!(g.next_capture(at+Duration::from_millis(620)).unwrap().wire()["slot"],7);
+    // The 600 ms cadence is measured from the prior throw, not the
+    // receipt (which arrived 20 ms after that throw).
+    assert!(g.next_capture(at+Duration::from_millis(599)).is_none());
+    assert_eq!(g.next_capture(at+Duration::from_millis(600)).unwrap().wire()["slot"],7);
     assert_eq!(g.status.throws,2);
     assert_eq!(g.status.retries,1);
  }

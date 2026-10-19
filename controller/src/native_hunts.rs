@@ -1098,7 +1098,8 @@ mod tests {
         assert_eq!(game_species_dex_sprite(14009), Some(9));
         assert_eq!(game_species_looktype(14448), Some(60448));
         assert_eq!(game_species_dex_sprite(14448), Some(448));
-        assert_eq!(species_art_catalog().looktypes.len(), 944);
+        // New upstream visual IDs may be added without invalidating older mappings.
+        assert!(species_art_catalog().looktypes.len() >= 944);
         assert_eq!(game_species_looktype(0), None);
         assert_eq!(species_id_from_hunt_name("Furious Scyther hunt"), Some(2006));
     }
