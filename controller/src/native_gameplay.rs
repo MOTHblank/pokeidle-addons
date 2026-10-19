@@ -407,6 +407,7 @@ impl Gameplay {
                                             self.corpses[idx].unreflected=false;
                                             self.status.failures=self.status.failures.saturating_add(1);
                                             self.status.last_action="The Pokémon resisted; retrying".into();
+                                            self.status.error=None;
                                         }
                                     }
                                 } else if success {
@@ -496,6 +497,7 @@ impl Gameplay {
         corpse.last=Some(now);
         corpse.last_ball=Some(id);
         corpse.pending=true;
+        corpse.timeout_reported=false;
         corpse.unreflected=true;
         corpse.attempts=corpse.attempts.saturating_add(1);
         self.last_throw=Some(now);
