@@ -57,7 +57,7 @@ impl GameCommand {
 // evidence that an old slot should be revived: a new "morte" starts a new life.
 const CORPSE_LIFETIME:Duration=Duration::from_secs(30);
 // A 600-ms native cadence serves dense AoE hunts. Bound unacknowledged
-// commands, and recover the account if their receipts never arrive.
+// commands, without resetting the game connection when receipts are missing.
 // This is a chosen application cadence, NOT a verified server cooldown.
 const MAX_PENDING_CAPTURE_THROWS:usize=3;
 const CAPTURE_RESULT_TIMEOUT:Duration=Duration::from_secs(8);
@@ -69,6 +69,8 @@ struct Corpse {
     /// This flag belongs to the target lifecycle; never retain old reservations
     /// after that target is removed.
     unreflected:bool,
+    // A missing receipt is a capture-level warning, never a socket failure.
+    timeout_reported:bool,
     attempts:u32, last_ball:Option<u64>,
 }
 #[derive(Clone,Debug,Default)]
@@ -293,7 +295,7 @@ impl Gameplay {
                         if !self.corpses.iter().any(|corpse|corpse.slot==slot) {
                             self.corpses.push_back(Corpse {
                                 slot,at:now,last:None,pending:false,
-                                unreflected:false,attempts:0,last_ball:None
+                                unreflected:false,timeout_reported:false,attempts:0,last_ball:None
                             });
                         }
                     }
@@ -334,7 +336,7 @@ impl Gameplay {
                                 self.corpses.retain(|v|v.slot!=slot);
                                 self.corpses.push_back(Corpse {
                                     slot,at:now,last:None,pending:false,
-                                    unreflected:false,attempts:0,last_ball:None
+                                    unreflected:false,timeout_reported:false,attempts:0,last_ball:None
                                 });
                             } else {
                                 self.last_death_untracked=true;
@@ -429,18 +431,34 @@ impl Gameplay {
         self.expire_corpses(now);
         self.refresh_readiness();
     }
-    /// Do not keep spending provisional ball stock if the server has not
-    /// acknowledged a throw. Refresh the socket and authoritative inventory.
-    pub fn needs_capture_resync(&self, now:Instant)->bool {
+    /// A missing capture receipt does not imply a dead game connection.
+    /// Keep pending throws and their reserved inventory until the actual result,
+    /// authoritative slot removal or corpse expiration, without replaying them.
+    pub fn has_unreported_capture_timeout(&self, now:Instant)->bool {
         self.status.auto_catch && self.corpses.iter().any(|corpse|
-            corpse.pending && corpse.last.is_some_and(|last|
+            corpse.pending && !corpse.timeout_reported &&
+            corpse.last.is_some_and(|last|
                 now.saturating_duration_since(last)>=CAPTURE_RESULT_TIMEOUT))
     }
-    pub fn record_capture_timeout(&mut self) {
-        self.status.capture_resyncs=self.status.capture_resyncs.saturating_add(1);
-        self.status.error=Some(
-            "No server response to native Poké Ball throw; refreshing game state".into()
-        );
+    pub fn report_capture_timeouts(&mut self, now:Instant)->usize {
+        let mut newly_timed_out=0usize;
+        for corpse in &mut self.corpses {
+            if corpse.pending && !corpse.timeout_reported &&
+                corpse.last.is_some_and(|last|
+                    now.saturating_duration_since(last)>=CAPTURE_RESULT_TIMEOUT) {
+                corpse.timeout_reported=true;
+                newly_timed_out+=1;
+            }
+        }
+        if newly_timed_out>0 {
+            self.status.capture_resyncs=self.status.capture_resyncs
+                .saturating_add(newly_timed_out as u64);
+            self.status.error=Some(
+                "Native capture receipt overdue; waiting without disconnecting".into()
+            );
+            self.status.last_action="Waiting for delayed capture results".into();
+        }
+        newly_timed_out
     }
     pub fn next_capture(&mut self,now:Instant)->Option<GameCommand> {
         self.expire_corpses(now);
@@ -602,8 +620,8 @@ mod tests {
     assert_eq!(g.status.throws,1);
     assert_eq!(g.status.unreflected_throws,1);
     assert_eq!(g.status.retries,0);
-    assert!(!g.needs_capture_resync(at+Duration::from_secs(7)));
-    assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
+    assert!(!g.has_unreported_capture_timeout(at+Duration::from_secs(7)));
+    assert!(g.has_unreported_capture_timeout(at+Duration::from_secs(8)));
  }
  #[test]
  fn stale_inventory_patches_do_not_spend_ball_reserve() {
@@ -734,7 +752,32 @@ mod tests {
     assert_eq!(g.status.queue,3);
     assert_eq!(g.status.throws,1);
     assert_eq!(g.status.unreflected_throws,1);
-    assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
+    assert!(g.has_unreported_capture_timeout(at+Duration::from_secs(8)));
+ }
+ #[test]
+ fn missing_capture_receipt_does_not_reset_account_or_rethrow_same_slot() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({
+        "enabled":true,"ballPriority":["ultra"]
+    })));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":5}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":12}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert!(g.has_unreported_capture_timeout(at+Duration::from_secs(8)));
+    assert_eq!(g.report_capture_timeouts(at+Duration::from_secs(8)),1);
+    assert!(!g.has_unreported_capture_timeout(at+Duration::from_secs(9)));
+    assert_eq!(g.report_capture_timeouts(at+Duration::from_secs(9)),0);
+    assert_eq!(g.status.capture_resyncs,1);
+    assert_eq!(g.available(4),4);
+    assert_eq!(g.pending_throws(),1);
+    assert!(g.next_capture(at+Duration::from_secs(9)).is_none());
+    // An actual receipt reconciles it while the session stays connected.
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":12,
+        "ballId":4,"sucesso":true}]}"#,at+Duration::from_secs(10));
+    assert_eq!(g.status.catches,1);
+    assert_eq!(g.status.queue,0);
+    assert_eq!(g.available(4),4);
  }
  #[test]
  fn restock_mismatch_and_empty_selected_balls_are_reported() {
@@ -909,7 +952,7 @@ mod tests {
     assert!(g.next_capture(at+Duration::from_millis(1200)).is_none());
     assert_eq!(g.status.throws,2);
     assert_eq!(g.status.unreflected_throws,2);
-    assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
+    assert!(g.has_unreported_capture_timeout(at+Duration::from_secs(8)));
  }
  #[test]
  fn unrelated_vip_ball_receipts_do_not_reset_native_send_timer() {
