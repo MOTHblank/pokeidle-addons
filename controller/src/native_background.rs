@@ -805,27 +805,23 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
-                    // A confirmed shop receipt with no following full
-                    // inventory patch cannot safely be repeated. Refresh the
-                    // authenticated game state with a new welcome instead of
-                    // indefinitely freezing restock on just this account.
-                    if restock.needs_inventory_reconnect(Instant::now()) {
+                    // Missing post-purchase inventory must pause *restock*,
+                    // not disconnect this account's otherwise healthy socket.
+                    // Restock keeps the unresolved order guarded until a fresh
+                    // authoritative stock snapshot arrives; never buy twice
+                    // based on a guessed inventory count.
+                    // A delayed Poké Ball receipt is NOT proof the authenticated
+                    // game socket is unhealthy. Keep receiving hunts, account
+                    // balances and other automation events. Gameplay holds the
+                    // pending slot and ball reservation until server reconciliation
+                    // or corpse expiration, so the throw cannot be blindly replayed.
+                    let capture_now=Instant::now();
+                    if gameplay.has_unreported_capture_timeout(capture_now) {
+                        let count=gameplay.report_capture_timeouts(capture_now);
                         crate::logging::warn(&format!(
-                            "{} native restock inventory confirmation overdue; reconnecting game socket",
-                            profile.label()
+                            "{} has {} delayed native capture receipt(s); game socket kept online",
+                            profile.label(),count
                         ));
-                        break;
-                    }
-                    // Manager parity: never replay repeated ball.throw frames
-                    // against an unacknowledged server slot. Refresh this
-                    // account's authenticated inventory and event stream.
-                    if gameplay.needs_capture_resync(Instant::now()) {
-                        gameplay.record_capture_timeout();
-                        crate::logging::warn(&format!(
-                            "{} native capture receipt overdue; reconnecting game socket",
-                            profile.label()
-                        ));
-                        break;
                     }
                     while let Ok(sample)=forecast_rx.try_recv(){
                         history_recorder.record_forecast(sample);
