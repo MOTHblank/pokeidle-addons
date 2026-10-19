@@ -348,6 +348,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Sem Pokébolas selecionadas acima da reserva; confira reposição e prioridades",
         "Selected Poké Balls reserved; waiting for server consumption confirmation" =>
             "Pokébolas reservadas; aguardando confirmação de consumo do servidor",
+        "Waiting for in-flight capture results" =>
+            "Aguardando resposta de capturas pendentes",
         "Confirmed by server" => "Confirmadas pelo servidor",
         "Downed targets" => "Alvos caídos",
         "Server failures" => "Falhas no servidor",
