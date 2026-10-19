@@ -56,7 +56,11 @@ impl GameCommand {
 // The game exposes 30-second corpse lifetimes. Never use a late result as
 // evidence that an old slot should be revived: a new "morte" starts a new life.
 const CORPSE_LIFETIME:Duration=Duration::from_secs(30);
-const CAPTURE_RESULT_TIMEOUT:Duration=Duration::from_millis(1000);
+// PokéIdle Manager's capture worker uses a 1.2-second ball cooldown.
+// A 100-ms local loop can reserve numerous unacknowledged balls while the
+// server rejects or ignores the overlapping throws.
+const SERVER_BALL_COOLDOWN:Duration=Duration::from_millis(1200);
+const CAPTURE_RESULT_TIMEOUT:Duration=Duration::from_secs(8);
 const MIN_THROW_INTERVAL_MS:u64=100;
 #[derive(Clone)]
 struct Corpse {
@@ -75,6 +79,7 @@ pub struct GameplayStatus {
     /// Enabled is a preference; ready requires server inventory and a usable ball.
     pub capture_ready:bool, pub blocked_reason:Option<String>,
     pub warning:Option<String>, pub deaths_without_slot:u64,
+    pub last_server_notice:Option<String>,
     pub last_action:String,
     pub used_by_ball:BTreeMap<u64,u64>,
     pub caught_by_ball:BTreeMap<u64,u64>,
@@ -126,6 +131,7 @@ impl Gameplay {
         self.last_throw=None;
         self.status.queue=0;
         self.status.deaths_without_slot=0;
+        self.status.last_server_notice=None;
         self.last_death_untracked=false;
         self.status.at_center=true;
         self.status.last_action="Waiting for authenticated game state".into();
@@ -166,12 +172,30 @@ impl Gameplay {
     fn ball_matches(name:&str,priority:&str)->bool {
         name.contains(priority) || (priority=="poke" && name.contains("poké"))
     }
+    /// The game and PokeIdle Manager use stable inventory ball IDs. A server
+    /// inventory object is authoritative for quantity; a descriptive shop
+    /// catalog is optional and must not prevent native capture.
+    fn ball_id_for_priority(&self,priority:&str,require_available:bool)->Option<u64> {
+        let known=match priority {
+            "poke"=>1,"great"=>2,"super"=>3,"ultra"=>4,"beast"=>5,
+            _=>return None
+        };
+        let reserve=self.reserves.get(priority).copied().unwrap_or(0);
+        let allowed=|id:u64|self.catalog.get(&id)
+            .is_none_or(|name|!name.contains("master")) &&
+            (!require_available || self.available(id)>reserve);
+        self.catalog.iter()
+            .find(|(id,name)|Self::ball_matches(name,priority) && allowed(**id))
+            .map(|(id,_)|*id)
+            .or_else(||self.balls.contains_key(&known).then_some(known)
+                .filter(|id|allowed(*id)))
+    }
     fn refresh_readiness(&mut self) {
         self.status.unreflected_throws=self.unreflected.values()
             .copied().fold(0u64,u64::saturating_add);
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
-            self.catalog.get(&self.restock_ball_id).is_some_and(|name|
-                !self.priorities.iter().any(|p|Self::ball_matches(name,p)));
+            !self.priorities.iter().any(|p|
+                self.ball_id_for_priority(p,false)==Some(self.restock_ball_id));
         self.status.warning=if mismatch {
             Some("Restock buys a ball that Auto Catch does not use".to_owned())
         } else {None};
@@ -181,18 +205,15 @@ impl Gameplay {
             Some("At center or waiting for authenticated hunt state")
         } else if self.priorities.is_empty() {
             Some("No capture ball selected")
-        } else if self.catalog.is_empty() {
-            Some("Waiting for server Poké Ball catalog")
+        } else if self.balls.is_empty() {
+            Some("Waiting for server Poké Ball inventory")
         } else if self.last_death_untracked && self.corpses.is_empty() {
             Some("Wild death events lack capture slots; cannot target throws")
         } else if !self.priorities.iter().any(|priority|
-            self.catalog.iter().any(|(id,name)|
-                !name.contains("master") && Self::ball_matches(name,priority) &&
-                self.available(*id)>self.reserves.get(priority).copied().unwrap_or(0))) {
+            self.ball_id_for_priority(priority,true).is_some()) {
             if self.priorities.iter().any(|priority|
-                self.catalog.iter().any(|(id,name)|
-                    !name.contains("master") && Self::ball_matches(name,priority) &&
-                    self.balls.get(id).copied().unwrap_or(0)>
+                self.ball_id_for_priority(priority,false).is_some_and(|id|
+                    self.balls.get(&id).copied().unwrap_or(0)>
                         self.reserves.get(priority).copied().unwrap_or(0))) {
                 Some("Selected Poké Balls reserved; waiting for server consumption confirmation")
             } else {
@@ -265,6 +286,17 @@ impl Gameplay {
                 for event in events {
                     let slot=event.get("slot").and_then(Value::as_u64);
                     match event.get("k").and_then(Value::as_str) {
+                        Some("aviso")=>{
+                            if let Some(message)=event.get("msg").and_then(Value::as_str) {
+                                let lower=message.to_lowercase();
+                                if ["bola","ball","captur","throw","slot"].iter()
+                                    .any(|word|lower.contains(word)) {
+                                    self.status.last_server_notice=Some(
+                                        message.chars().take(150).collect()
+                                    );
+                                }
+                            }
+                        }
                         Some("morte") if event.get("quem").and_then(Value::as_str)==Some("selvagem")=>{
                             if let Some(slot)=slot {
                                 self.last_death_untracked=false;
@@ -281,6 +313,9 @@ impl Gameplay {
                         }
                         Some("bola")=>{
                             if let Some(success)=event.get("sucesso").and_then(Value::as_bool) {
+                                // All observed ball results share a single
+                                // server-side cooldown (including VIP automation).
+                                self.last_throw=Some(now);
                                 // The server receipt is authoritative regardless
                                 // of slot correlation. A slot may have expired
                                 // or the reply may omit it altogether.
@@ -371,23 +406,27 @@ impl Gameplay {
         self.expire_corpses(now);
         self.refresh_readiness();
     }
+    /// Do not keep spending provisional ball stock if the server has not
+    /// acknowledged a throw. Refresh the socket and authoritative inventory.
+    pub fn needs_capture_resync(&self, now:Instant)->bool {
+        self.status.auto_catch && self.corpses.iter().any(|corpse|
+            corpse.pending && corpse.last.is_some_and(|last|
+                now.saturating_duration_since(last)>=CAPTURE_RESULT_TIMEOUT))
+    }
     pub fn next_capture(&mut self,now:Instant)->Option<GameCommand> {
         self.expire_corpses(now);
         self.refresh_readiness();
         if !self.status.capture_ready ||
-            self.last_throw.is_some_and(|v|now.saturating_duration_since(v)<self.interval) {
+            self.corpses.iter().any(|c|c.pending) ||
+            self.last_throw.is_some_and(|v|
+                now.saturating_duration_since(v)<self.interval.max(SERVER_BALL_COOLDOWN)) {
             return None;
         }
         // Prefer the primary ball down to its reserve, then the fallback.
-        // Never spend a Master Ball, guess a catalog identity, or act on a
-        // stale inventory snapshot without accounting for in-flight throws.
-        let selected=self.priorities.iter().find_map(|priority|
-            self.catalog.iter().find(|(id,name)|
-                !name.contains("master") &&
-                Self::ball_matches(name,priority) &&
-                self.available(**id)>
-                    self.reserves.get(priority).copied().unwrap_or(0))
-                .map(|(id,_)|*id));
+        // Use server inventory counts and the same stable ball IDs used by
+        // the Manager; do not require optional shop metadata.
+        let selected=self.priorities.iter()
+            .find_map(|priority|self.ball_id_for_priority(priority,true));
         let Some(id)=selected else {
             if !self.corpses.is_empty() {
                 self.status.last_action="Waiting for allowed balls above reserves".into();
@@ -395,11 +434,8 @@ impl Gameplay {
             return None;
         };
         let next=self.corpses.iter().enumerate()
-            .filter(|(_,c)|c.last.is_none_or(|at|{
-                let elapsed=now.saturating_duration_since(at);
-                if c.pending {elapsed>=CAPTURE_RESULT_TIMEOUT}
-                else {elapsed>=self.interval}
-            }))
+            .filter(|(_,c)|!c.pending && c.last.is_none_or(|at|
+                now.saturating_duration_since(at)>=self.interval.max(SERVER_BALL_COOLDOWN)))
             // Earliest corpse expiry wins. This avoids losing a dying body
             // behind newer corpses or repeatedly serviced recent slots.
             .min_by_key(|(_,c)|(c.at,c.last.unwrap_or(c.at)))
