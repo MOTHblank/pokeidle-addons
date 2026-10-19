@@ -43,6 +43,40 @@ pub fn clear(profile: GameProfile) -> Result<(), String> {
     platform::clear(profile)
 }
 
+#[cfg(test)]
+mod capture_handoff_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn login_refresh_preserves_native_auto_catch_for_account_four() {
+        let native=json!({
+            "bootstrap":{"hello":"previous login"},
+            "autocatch":{"enabled":true,"ballPriority":["ultra"],
+                "restock":{"enabled":true,"selectedBallId":4}}
+        });
+        let firefox=json!({
+            "bootstrap":{"hello":"new login"},
+            "cookies":[],
+            "autocatch":{"enabled":false,"ballPriority":["poke"],
+                "restock":{"enabled":false,"selectedBallId":1}}
+        });
+        let merged=preserve_native_capture_preferences(&firefox,Some(&native));
+        assert_eq!(merged["bootstrap"]["hello"],"new login");
+        assert_eq!(merged["autocatch"],native["autocatch"]);
+        assert_eq!(merged["autocatch"]["restock"]["selectedBallId"],4);
+        assert_eq!(merged["autocatch"]["enabled"],true);
+    }
+
+    #[test]
+    fn first_login_imports_the_browser_settings() {
+        let firefox=json!({"autocatch":{"enabled":true,"ballPriority":["ultra"]}});
+        assert_eq!(preserve_native_capture_preferences(&firefox,None),firefox);
+        let no_old_settings=json!({"bootstrap":{"hello":"old"}});
+        assert_eq!(preserve_native_capture_preferences(&firefox,Some(&no_old_settings)),firefox);
+    }
+}
+
 /// Kick uses a dedicated OS-vault entry, never the PokeIdle/Twitch cache.
 /// No plaintext fallback and no Kick credentials written to accounts.json.
 const MAX_KICK_TOKEN_BYTES: usize = 8192;
@@ -75,6 +109,41 @@ pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
 // Serialize the read-modify-encrypt-write cycle so one toggle never silently
 // overwrites the other; no credentials are exposed outside OS vault storage.
 static PREFERENCE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Keep each profile's controller-edited capture settings authoritative when
+/// Firefox is used again to refresh an expired or missing game login. A fresh
+/// browser localStorage value is an import source only, never an implicit reset.
+fn preserve_native_capture_preferences(fresh: &Value, prior: Option<&Value>) -> Value {
+    let mut merged=fresh.clone();
+    if let Some(settings)=prior.and_then(|v|v.get("autocatch"))
+        .filter(|value|value.is_object()) {
+        merged["autocatch"]=settings.clone();
+    }
+    merged
+}
+
+/// Refresh credentials and preserve Auto Catch/Restock preferences using the
+/// same write lock as native UI edits. Return the merged bootstrap for the
+/// imminent game connection as well as for future cached starts.
+pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
+    -> (Value, Option<String>) {
+    let _guard=match PREFERENCE_WRITE.lock() {
+        Ok(guard)=>guard,
+        Err(_)=>return (fresh.clone(), Some("Native settings writer unavailable".into()))
+    };
+    let (prior,read_error)=match load(profile) {
+        Ok(prior)=>(prior,None),
+        Err(error)=>(None,Some(error))
+    };
+    let merged=preserve_native_capture_preferences(fresh,prior.as_ref());
+    let saved=save(profile,&merged);
+    let warning=match saved {
+        Err(error)=>Some(error),
+        Ok(())=>read_error,
+    };
+    (merged,warning)
+}
+
 
 fn set_native_preference(profile: GameProfile, path: &[&str], enabled: bool)
     -> Result<(), String> {

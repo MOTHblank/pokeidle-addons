@@ -99,7 +99,7 @@ impl Restock {
             .and_then(Value::as_u64).unwrap_or(fallback);
         let mut rules = Vec::new();
         for (kind, id_field, low_field, target_field, default_id, default_low, default_to) in [
-            ("ball", "selectedBallId", "ballAt", "ballTo", 1, 50, 500),
+            ("ball", "selectedBallId", "ballAt", "ballTo", 4, 50, 500),
             ("item", "selectedPotionId", "potionAt", "potionTo", 200, 10, 50),
             ("item", "selectedReviveId", "reviveAt", "reviveTo", 0, 1, 5),
         ] {
@@ -653,7 +653,7 @@ mod tests {
         assert!(r.status.enabled);
         assert!(r.status.configured);
         assert_eq!(r.rules.len(), 2);
-        assert_eq!(r.rules[0].id, 1);
+        assert_eq!(r.rules[0].id, 4);
         assert_eq!(r.rules[0].low, 50);
         assert_eq!(r.rules[0].target, 500);
         assert_eq!(r.rules[1].id, 200);
