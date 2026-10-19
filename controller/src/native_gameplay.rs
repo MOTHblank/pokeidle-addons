@@ -463,9 +463,9 @@ impl Gameplay {
         let next=self.corpses.iter().enumerate()
             .filter(|(_,c)|!c.pending && c.last.is_none_or(|at|
                 now.saturating_duration_since(at)>=self.interval))
-            // Earliest corpse expiry wins. This avoids losing a dying body
-            // behind newer corpses or repeatedly serviced recent slots.
-            .min_by_key(|(_,c)|(c.at,c.last.unwrap_or(c.at)))
+            // Oldest corpse expiry wins; among equally old targets, serve
+            // unattempted AoE bodies before retrying a previous failure.
+            .min_by_key(|(_,c)|(c.at,c.attempts>0,c.last.unwrap_or(c.at)))
             .map(|(idx,_)|idx);
         let Some(idx)=next else {return None};
         let corpse=&mut self.corpses[idx];
@@ -871,6 +871,40 @@ mod tests {
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":4,"ballId":4,
         "sucesso":true}]}"#,at+Duration::from_millis(2000));
     assert!(g.status.server_catches>0);
+ }
+ #[test]
+ fn restock_does_not_invent_balls_when_server_says_zero() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({
+        "enabled":true,"ballPriority":["ultra"],
+        "restock":{"enabled":true,"selectedBallId":4,"ballAt":10,"ballTo":40}
+    })));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":0}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":1}]}"#,at);
+    assert!(!g.status.capture_ready);
+    assert!(g.next_capture(at).is_none());
+    g.ingest(r#"{"t":"estado","estado":{"balls":{"4":30}}}"#,
+        at+Duration::from_millis(30));
+    assert!(g.status.capture_ready);
+    assert_eq!(g.next_capture(at+Duration::from_millis(30)).unwrap().wire()["ballId"],4);
+ }
+ #[test]
+ fn bounded_pending_window_never_reserves_more_than_small_nonrestocked_stock() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({
+        "enabled":true,"ballPriority":["ultra"],"reserve":{"ultra":0}
+    })));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":1},
+        {"k":"morte","quem":"selvagem","slot":2},
+        {"k":"morte","quem":"selvagem","slot":3}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert!(g.next_capture(at+Duration::from_millis(600)).is_some());
+    assert!(g.next_capture(at+Duration::from_millis(1200)).is_none());
+    assert_eq!(g.status.throws,2);
+    assert_eq!(g.status.unreflected_throws,2);
+    assert!(g.needs_capture_resync(at+Duration::from_secs(8)));
  }
  #[test]
  fn unrelated_vip_ball_receipts_do_not_reset_native_send_timer() {
