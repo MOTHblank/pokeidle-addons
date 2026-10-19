@@ -270,6 +270,8 @@ fn localize_status(message: String) -> String {
         ("Opened profile folder", "Pasta do perfil aberta"),
         ("Opened game", "Jogo aberto"),
         (" opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.", " abriu o Firefox sem depuração remota para login do Google. Após entrar, feche essa janela e inicie esta conta normalmente pelo painel."),
+        (" opened Firefox without remote debugging for Twitch sign-in. After signing in, close that window and launch this account normally from the dashboard.", " abriu o Firefox sem depuração remota para login da Twitch. Após entrar, feche essa janela e inicie esta conta normalmente pelo painel."),
+        ("Sign-in is still finishing. Try again after it completes.", "O login ainda está sendo concluído. Tente novamente após a finalização."),
         ("Opened profile folder", "Pasta do perfil aberta"),
         ("Opened ", "Aberto: "),
         ("Could not ", "Não foi possível "),
@@ -2887,14 +2889,25 @@ impl ControllerApp {
         }
     }
 
-    fn open_game_for_google_sign_in(&mut self, profile: GameProfile) {
+    /// Use the same non-automated, visible Firefox for BOTH provider logins.
+    /// Never send the Twitch login URL to a monitored BiDi profile.
+    fn open_unmonitored_sign_in(&mut self, profile: GameProfile, action: ProfileAction) {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
         self.refresh_processes();
 
-        // Google may reject authentication in a browser launched with a remote
-        // debugging/automation endpoint. Open a visible, non-debuggable window
-        // solely for the user to complete sign-in; normal launches keep BiDi.
+        // A native handoff still owns the profile until its cleanup finishes.
+        // stop_one intentionally cancels it asynchronously, so do not launch
+        // another Firefox against the same locked profile during that window.
+        if self.native_verifying[index] || self.games[index].handoff_closing {
+            self.set_status(format!(
+                "{account_name}: Sign-in is still finishing. Try again after it completes."
+            ), true);
+            return;
+        }
+
+        // Stop the native game/Twitch sockets and any monitored Firefox so
+        // authentication runs solely in an ordinary user-controlled browser.
         if !self.stop_one(profile) {
             return;
         }
@@ -2907,8 +2920,8 @@ impl ControllerApp {
             }
         };
 
-        // Google sign-in uses the same profile with debugging disabled; it
-        // still must not race another Firefox that owns that profile.
+        // Preserve the existing per-account cookies, but do not share an
+        // active Firefox process or debugger with either sign-in provider.
         match firefox::find_profile_process(&config) {
             Ok(Some(pid)) => {
                 self.games[index].orphaned_pid = Some(pid);
@@ -2925,29 +2938,42 @@ impl ControllerApp {
             }
         }
 
-        match firefox::launch_unmonitored(&config) {
+        let (service, url, status_suffix) = match action {
+            ProfileAction::GoogleSignIn => (
+                "Google",
+                config.url.as_str(),
+                " opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
+            ),
+            ProfileAction::Twitch => (
+                "Twitch",
+                accounts::TWITCH_LOGIN,
+                " opened Firefox without remote debugging for Twitch sign-in. After signing in, close that window and launch this account normally from the dashboard.",
+            ),
+            ProfileAction::Folder => return,
+        };
+
+        match firefox::launch_unmonitored(&config, url) {
             Ok(child) => {
                 let pid = child.id();
                 self.games[index].child = Some(child);
                 self.games[index].monitor = None;
                 self.games[index].orphaned_pid = None;
+                self.games[index].browser_only = true;
                 self.games[index].headless = false;
+                // After the user closes this window, refresh browser auth
+                // before returning to native mode instead of trusting stale
+                // cached Twitch or game login credentials.
+                self.require_browser_login[index] = true;
                 logging::info(&format!(
-                    "{} Firefox spawned for Google sign-in without remote debugging (PID {})",
-                    account_name, pid
+                    "{} Firefox spawned for {} sign-in without remote debugging (PID {})",
+                    account_name, service, pid
                 ));
-                self.set_status(
-                    format!(
-                        "{} opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
-                        account_name
-                    ),
-                    false,
-                );
+                self.set_status(format!("{account_name}{status_suffix}"), false);
             }
             Err(error) => {
                 logging::error(&format!(
-                    "{} Google sign-in launch failed: {}",
-                    account_name, error
+                    "{} {} sign-in launch failed: {}",
+                    account_name, service, error
                 ));
                 self.set_status(format!("{}: {}", account_name, error), true);
             }
@@ -2956,11 +2982,10 @@ impl ControllerApp {
 
     fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
         let result = match action {
-            ProfileAction::GoogleSignIn => {
-                self.open_game_for_google_sign_in(profile);
+            ProfileAction::GoogleSignIn | ProfileAction::Twitch => {
+                self.open_unmonitored_sign_in(profile, action);
                 return;
             }
-            ProfileAction::Twitch => accounts::open_login(profile, accounts::TWITCH_LOGIN, "Twitch"),
             ProfileAction::Folder => accounts::open_profile_folder(profile).map(|_| "Opened profile folder".to_string()),
         };
 
