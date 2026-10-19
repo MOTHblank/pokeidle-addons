@@ -5438,8 +5438,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
-            .range(100..=3000).speed(10.0).suffix(" ms"));
-        ui.label(RichText::new(tr("100 ms matches Auto Catch+; unanswered throws retry after 1 s"))
+            .range(1200..=3000).speed(100.0).suffix(" ms"));
+        ui.label(RichText::new(tr("O servidor limita lançamentos a 1,2 s; um lançamento por vez"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
