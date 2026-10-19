@@ -328,6 +328,28 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "No live connection" => "Sem conexão ativa",
         "Blocked" => "Bloqueada",
         "Auto Catch disabled" => "Captura automática desligada",
+        "Auto Catch on" => "Ligado",
+        "Auto Catch off" => "Desligado",
+        "Capture operation" => "Situação da captura",
+        "Auto Catch awaiting game connection" => "Aguardando conexão com o jogo",
+        "Auto Catch waiting for capture results" => "Aguardando resposta de capturas pendentes",
+        "Auto Catch ready for targets" => "Pronto para capturar",
+        "Auto Catch waiting for conditions" => "Aguardando condições de captura",
+        "Throws sent" => "Arremessos enviados",
+        "Auto Catch matched captures" => "Capturas vinculadas",
+        "Auto Catch matched failures" => "Falhas vinculadas",
+        "Pending capture receipts" => "Arremessos sem resposta",
+        "Saving Auto Catch settings" => "Salvando configurações de captura",
+        "Capture diagnostics" => "Diagnóstico da captura",
+        "Auto Catch · ball statistics" => "Captura automática · estatísticas por bola",
+        "Native capture receipt overdue; waiting without disconnecting" =>
+            "Resposta da captura atrasada; mantendo conexão com o jogo",
+        "Waiting for delayed capture results" => "Aguardando resultados de capturas atrasadas",
+        "Waiting for authenticated game state" => "Aguardando estado autenticado do jogo",
+        "Pokémon captured" => "Pokémon capturado",
+        "The Pokémon resisted; retrying" => "Pokémon resistiu; tentando novamente",
+        "Throwing a Poké Ball" => "Arremessando Pokébola",
+        "Trying another Poké Ball" => "Tentando outra Pokébola",
         "At center or waiting for authenticated hunt state" => "No centro ou aguardando hunt autenticada",
         "No capture ball selected" => "Nenhuma Pokébola escolhida",
         "Waiting for server Poké Ball catalog" => "Aguardando catálogo de Pokébolas do servidor",
@@ -338,6 +360,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Intervalo nativo: 0,6 s, com limite de lançamentos pendentes",
         "Capture server notice" => "Aviso do servidor sobre captura",
         "Capture resyncs" => "Reconexões para recuperar capturas",
+        "Capture timeouts" => "Capturas com resposta atrasada",
         "Only observed ball battle events are counted; built-in VIP captures may not generate them." =>
             "Só são contados eventos de bola observados; capturas automáticas VIP do jogo podem não gerar esses eventos.",
         "No server response to native Poké Ball throw; refreshing game state" =>
@@ -1641,6 +1664,8 @@ enum HuntRanking { TrainerXp, PokemonXp, Gold }
 struct CaptureSavedEvent {
     index:usize,
     config:CatchSettings,
+    // A switch-only save must not discard unsaved editor changes.
+    toggle_only:bool,
     result:Result<(),String>
 }
 pub struct ControllerApp {
@@ -2028,7 +2053,13 @@ impl ControllerApp {
                             continue;
                         }
                     }
-                    self.capture_drafts[event.index]=None;
+                    if event.toggle_only {
+                        if let Some(draft)=self.capture_drafts[event.index].as_mut() {
+                            draft.enabled=event.config.enabled;
+                        }
+                    } else {
+                        self.capture_drafts[event.index]=None;
+                    }
                     if self.restock_drafts[event.index].as_ref()
                         .is_some_and(|draft| restock_fields_equal(draft, &event.config))
                     {
@@ -3968,39 +3999,17 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
 
             ui.add_space(9.0);
             ui.horizontal_wrapped(|ui| {
-                let capture_status=app.games[index].native.as_ref()
-                    .map(|native|native.capture_status());
-                let capture_ready=capture_status.as_ref()
-                    .is_some_and(|status|status.capture_ready);
-                let catch_status = if !fresh || !health.bridge_snapshot_ok {
-                    tr("Not checked")
-                } else if !health.autocatch_on {
-                    tr("Off")
-                } else if capture_ready {
-                    tr("Active")
-                } else {
-                    tr("Waiting")
-                };
+                // Overview reports the saved Auto Catch switch, NOT temporary
+                // throw readiness, inventory state or receipt timing. Those
+                // operational diagnostics belong exclusively to Automation.
+                let catch_enabled = app.games[index].native.as_ref()
+                    .map(|native|native.capture_settings().enabled)
+                    .unwrap_or(health.autocatch_on);
                 automation_badge(
-                    ui, "Auto Catch", catch_status,
-                    fresh && health.bridge_snapshot_ok && health.autocatch_on && capture_ready,
+                    ui, "Auto Catch",
+                    tr(auto_catch_setting_label(catch_enabled)),
+                    catch_enabled,
                 );
-                if fresh && health.bridge_snapshot_ok && health.autocatch_on {
-                    if !capture_ready {
-                        ui.label(RichText::new(format!(
-                            "{}: {}",tr("Restock"),
-                            tr(&health.autocatch_restock)
-                        )).size(10.0).color(DIM));
-                    }
-                    if let Some(capture)=capture_status.as_ref() {
-                        if let Some(reason)=capture.blocked_reason.as_deref() {
-                            ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
-                        }
-                        if let Some(warning)=capture.warning.as_deref() {
-                            ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
-                        }
-                    }
-                }
                 let bonus_confirmed = fresh && health.bridge_snapshot_ok
                     && health.stream_bonus_pct > 0.0 && !health.stream_watching.is_empty();
                 let bonus_text = if bonus_confirmed {
@@ -4938,6 +4947,53 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
 }
 
+// The Overview never infers this setting from temporary capture readiness.
+fn auto_catch_setting_label(enabled:bool)->&'static str {
+    if enabled {"Auto Catch on"} else {"Auto Catch off"}
+}
+
+// A separate, concrete operational signal for Automation only.
+// Ready means the next valid target can be thrown at, not proof of a capture.
+fn auto_catch_operational_label(connected:bool,
+    capture:&crate::native_gameplay::GameplayStatus)->&'static str {
+    if !connected {
+        "Auto Catch awaiting game connection"
+    } else if capture.pending_results>0 {
+        "Auto Catch waiting for capture results"
+    } else if capture.capture_ready {
+        "Auto Catch ready for targets"
+    } else {
+        "Auto Catch waiting for conditions"
+    }
+}
+
+#[cfg(test)]
+mod auto_catch_ui_state_tests {
+    use super::{auto_catch_setting_label,auto_catch_operational_label};
+    use crate::native_gameplay::GameplayStatus;
+
+    #[test]
+    fn setting_is_independent_of_temporary_capture_readiness() {
+        let mut capture=GameplayStatus::default();
+        assert_eq!(auto_catch_setting_label(true),"Auto Catch on");
+        assert_eq!(auto_catch_setting_label(false),"Auto Catch off");
+        assert_eq!(auto_catch_operational_label(false,&capture),
+            "Auto Catch awaiting game connection");
+        capture.capture_ready=true;
+        assert_eq!(auto_catch_setting_label(true),"Auto Catch on");
+        assert_eq!(auto_catch_operational_label(true,&capture),
+            "Auto Catch ready for targets");
+        capture.pending_results=2;
+        assert_eq!(auto_catch_setting_label(true),"Auto Catch on");
+        assert_eq!(auto_catch_operational_label(true,&capture),
+            "Auto Catch waiting for capture results");
+        capture.capture_ready=false;
+        capture.pending_results=0;
+        assert_eq!(auto_catch_operational_label(true,&capture),
+            "Auto Catch waiting for conditions");
+    }
+}
+
 fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     let profile = app.games[index].profile;
     let Some(native) = app.games[index].native.as_ref() else { return; };
@@ -4958,47 +5014,77 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             ui.separator();
             ui.add_space(6.0);
 
-            // The native capture switch belongs to Automation, not the
-            // overview card footer beside the account's Stop button.
+            // The switch is a saved preference. Operational readiness is
+            // independent and shown only on this Automation page.
+            let capture_enabled=native.capture_settings().enabled;
+            let capture=&game.native_capture_status;
+            let capture_connected=game.phase=="Online";
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("Auto Catch")).strong().size(11.0).color(TEXT));
-                let capture=&game.native_capture_status;
-                let capture_ready=game.phase=="Online" && capture.capture_ready;
-                ui.label(RichText::new(if !game.native_auto_catch {
-                    tr("Off")
-                } else if capture_ready {
-                    tr("Active")
-                } else {
-                    tr("Waiting")
-                }).size(10.0).color(if capture_ready {GOOD} else if game.native_auto_catch {WARN} else {MUTED}));
+                ui.label(RichText::new(tr(auto_catch_setting_label(capture_enabled)))
+                    .size(11.0).strong()
+                    .color(if capture_enabled {GOOD} else {MUTED}));
                 ui.add_space(8.0);
-                if ui.small_button(tr(if game.native_auto_catch { "Disable" } else { "Enable" }))
+                if ui.add_enabled(!app.capture_save_busy[index],
+                    egui::Button::new(tr(if capture_enabled {"Disable"} else {"Enable"})))
                     .on_hover_text(tr("Turn Auto Catch on or off for this account"))
                     .clicked()
                 {
-                    let enabled = !game.native_auto_catch;
-                    native.set_auto_catch(enabled);
-                    std::thread::spawn(move || {
-                        if let Err(error) = crate::native_auth::set_catch_enabled(profile, enabled) {
-                            crate::logging::warn(&format!(
-                                "{} could not save native Auto Catch preference: {error}",
-                                profile.label()
-                            ));
-                        }
-                    });
+                    // Use the same confirmed save/event flow as the editor.
+                    // A failed vault write must not silently change the switch.
+                    // Toggle ONLY the current saved switch. Do not silently
+                    // commit unrelated unsaved changes in the editor.
+                    let mut next=native.capture_settings();
+                    next.enabled=!capture_enabled;
+                    if let Err(error)=next.validate() {
+                        app.capture_save_error[index]=Some(error);
+                    } else {
+                        app.capture_save_error[index]=None;
+                        app.capture_save_busy[index]=true;
+                        let tx=app.capture_save_tx.clone();
+                        std::thread::spawn(move || {
+                            let result=std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(||
+                                    crate::native_auth::set_capture_settings(profile,&next)))
+                                .unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
+                            let _=tx.send(CaptureSavedEvent{
+                                index,config:next,toggle_only:true,result
+                            });
+                        });
+                    }
                 }
-                // A VIP/game-owned automatic catch may not emit a ball.throw
-                // receipt. These are socket-observed battle ball results only.
-                ui.label(RichText::new(format!(
-                    "{} {} · {} throws · {} {} · {} {} · {} retries",
-                    game.native_capture_queue,tr("Downed targets"),
-                    capture.throws,capture.server_catches,
-                    tr("Ball-event captures"),capture.server_failures,
-                    tr("Ball-event failures"),capture.retries
-                )).size(10.0).color(DIM));
+                if app.capture_save_busy[index] {
+                    ui.label(RichText::new(tr("Saving Auto Catch settings"))
+                        .size(10.0).color(WARN));
+                }
+            });
+            if capture_enabled {
+                let operational=auto_catch_operational_label(capture_connected,capture);
+                ui.label(RichText::new(format!("{}: {}",tr("Capture operation"),tr(operational)))
+                    .size(11.0).color(if capture_connected && capture.capture_ready &&
+                        capture.pending_results==0 {GOOD} else {WARN}));
+                if capture_connected && !capture.capture_ready {
+                    if let Some(reason)=capture.blocked_reason.as_deref() {
+                        ui.label(RichText::new(tr(reason)).size(10.0).color(MUTED));
+                    }
+                }
+            }
+            // Only native-matched results are attributed to Auto Catch.
+            // The server's broader ball-event totals may include VIP/manual.
+            ui.horizontal_wrapped(|ui| {
+                for (label,value) in [
+                    ("Throws sent",capture.throws),
+                    ("Auto Catch matched captures",capture.catches),
+                    ("Auto Catch matched failures",capture.failures),
+                    ("Pending capture receipts",capture.pending_results)
+                ] {
+                    ui.label(RichText::new(format!("{}: {}",tr(label),value))
+                        .size(10.0).color(MUTED));
+                }
             });
 
-            if game.native_auto_catch {
+            ui.collapsing(tr("Capture diagnostics"),|ui| {
+            if capture_enabled {
                 let restock=&game.native_restock;
                 let selected_ball=restock.rules.iter().find(|r|r.kind=="ball");
                 let ball_detail=selected_ball.map(|ball| {
@@ -5029,9 +5115,6 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                         "{}: {}",tr("Capture server notice"),notice
                     )).size(10.0).color(WARN));
                 }
-                if let Some(reason)=game.native_capture_status.blocked_reason.as_deref() {
-                    ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
-                }
                 if let Some(warning)=game.native_capture_status.warning.as_deref() {
                     ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
                 }
@@ -5043,13 +5126,14 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     .size(10.0).color(WARN));
             }
             if !game.native_capture_status.last_action.is_empty() {
-                ui.label(RichText::new(&game.native_capture_status.last_action)
+                ui.label(RichText::new(tr(&game.native_capture_status.last_action))
                     .size(10.0).color(MUTED));
             }
             if let Some(error)=game.native_capture_status.error.as_deref() {
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
             }
-            ui.collapsing("Auto Catch · ball statistics",|ui|{
+            }); // Capture diagnostics: keep transient messages off account cards.
+            ui.collapsing(tr("Auto Catch · ball statistics"),|ui|{
                 let capture=&game.native_capture_status;
                 if capture.used_by_ball.is_empty() &&
                     capture.server_caught_by_ball.is_empty() {
@@ -5454,7 +5538,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                     std::panic::AssertUnwindSafe(||
                         crate::native_auth::set_capture_settings(profile, &next)))
                     .unwrap_or_else(|_| Err("Encrypted restock save panicked".into()));
-                let _ = tx.send(CaptureSavedEvent { index, config: next, result });
+                let _ = tx.send(CaptureSavedEvent { index, config: next, toggle_only:false, result });
             });
         }
     }
@@ -5467,7 +5551,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         app.capture_drafts[index]=Some(native.capture_settings());
     }
     let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
-    ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
+    ui.add_enabled(!app.capture_save_busy[index],
+        egui::Checkbox::new(&mut cfg.enabled,tr("Enable Auto Catch")));
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
@@ -5527,7 +5612,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                         std::panic::AssertUnwindSafe(||
                             crate::native_auth::set_capture_settings(profile,&to_save))
                     ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
-                    let _=tx.send(CaptureSavedEvent{index,config:to_save,result});
+                    let _=tx.send(CaptureSavedEvent{index,config:to_save,toggle_only:false,result});
                 });
             }
         }
