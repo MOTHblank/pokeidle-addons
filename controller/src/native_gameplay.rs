@@ -309,7 +309,28 @@ impl Gameplay {
                                     });
                                 if let Some(idx)=matched {
                                     let own=self.corpses[idx].attempts>0;
+                                    let pending=self.corpses[idx].pending;
                                     let expected_ball=self.corpses[idx].last_ball;
+                                    // Once a tracked server receipt confirms a
+                                    // throw, reflect its consumption without
+                                    // waiting indefinitely for estado.balls.
+                                    // Decrease the reserved spend and observed
+                                    // stock together: available stock does not
+                                    // increase and configured reserves stay safe.
+                                    if own && pending &&
+                                        (response_ball.is_none() || response_ball==expected_ball) {
+                                        if let Some(id)=response_ball.or(expected_ball) {
+                                            if let Some(held)=self.unreflected.get_mut(&id) {
+                                                if *held>0 {
+                                                    *held-=1;
+                                                    if let Some(stock)=self.balls.get_mut(&id) {
+                                                        *stock=stock.saturating_sub(1);
+                                                    }
+                                                }
+                                            }
+                                            self.unreflected.retain(|_,amount|*amount>0);
+                                        }
+                                    }
                                     if success {
                                         if own {
                                             self.status.catches=self.status.catches.saturating_add(1);
@@ -670,6 +691,26 @@ mod tests {
     assert_eq!(g.status.catches,1);
     assert_eq!(g.status.queue,0);
     assert_eq!(g.status.unmatched_successes,0);
+ }
+ #[test]
+ fn matching_ball_result_reconciles_local_spend_without_stock_patch() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":3}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":11}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert_eq!(g.available(4),2);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":11,"ballId":4,
+        "sucesso":false}]}"#,at+Duration::from_millis(15));
+    assert_eq!(g.balls[&4],2);
+    assert_eq!(g.available(4),2);
+    assert_eq!(g.status.unreflected_throws,0);
+    assert_eq!(g.status.server_failures,1);
+    // A delayed authoritative inventory matches the confirmed consumption.
+    g.ingest(r#"{"t":"estado","estado":{"balls":{"4":2}}}"#,
+        at+Duration::from_millis(50));
+    assert_eq!(g.available(4),2);
  }
  #[test]
  fn ambiguous_missing_slot_receipt_counts_server_success_without_guessing_target() {
