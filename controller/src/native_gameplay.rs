@@ -56,12 +56,12 @@ impl GameCommand {
 // The game exposes 30-second corpse lifetimes. Never use a late result as
 // evidence that an old slot should be revived: a new "morte" starts a new life.
 const CORPSE_LIFETIME:Duration=Duration::from_secs(30);
-// PokéIdle Manager's capture worker uses a 1.2-second ball cooldown.
+// PokéIdle Manager's capture worker deliberately uses a 1.2-second cooldown.
 // A 100-ms local loop can reserve numerous unacknowledged balls while the
 // server rejects or ignores the overlapping throws.
 const SERVER_BALL_COOLDOWN:Duration=Duration::from_millis(1200);
 const CAPTURE_RESULT_TIMEOUT:Duration=Duration::from_secs(8);
-const MIN_THROW_INTERVAL_MS:u64=100;
+const MIN_THROW_INTERVAL_MS:u64=1200;
 #[derive(Clone)]
 struct Corpse {
     slot:u64, at:Instant, last:Option<Instant>, pending:bool,
@@ -825,7 +825,7 @@ mod tests {
         json!({"t":"ball.throw","ballId":4,"slot":7}));
  }
  #[test]
- fn native_capture_requires_enabled_mode_catalog_and_server_corpse(){
+ fn native_capture_requires_enabled_mode_inventory_and_server_corpse(){
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
     g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],"estado":{"balls":{"4":3}}}"#,at);
