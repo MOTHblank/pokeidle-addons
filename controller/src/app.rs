@@ -2465,16 +2465,18 @@ impl ControllerApp {
         let result = std::thread::Builder::new()
             .name(format!("moth-handoff-{}", profile.name()))
             .spawn(move || {
-                let result = monitor.native_bootstrap(Duration::from_secs(18));
-                // Keep browser auth in memory, but cache *valid* credentials
-                // under the OS user account for future entirely native starts.
-                // Secret Service / DPAPI I/O stays outside the egui thread.
+                let mut result = monitor.native_bootstrap(Duration::from_secs(18));
+                // Firefox provides fresh authentication, not authoritative
+                // native preferences. Preserve this account's saved Auto Catch
+                // configuration, even after the browser login is renewed.
+                // Cache and worker must receive the SAME merged bootstrap.
                 let mut cache_warning = None;
-                if let Ok(value) = &result {
+                if let Ok(value) = &mut result {
                     if crate::native_background::validate_bootstrap(value).is_ok() {
-                        if let Err(error) = crate::native_auth::save(profile, value) {
-                            cache_warning = Some(error);
-                        }
+                        let (merged,warning) =
+                            crate::native_auth::cache_browser_handoff(profile,value);
+                        *value=merged;
+                        cache_warning=warning;
                     }
                 }
                 let _ = tx.send(NativeHandoffEvent { index, result, cache_warning });
