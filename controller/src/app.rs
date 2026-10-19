@@ -331,6 +331,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "At center or waiting for authenticated hunt state" => "No centro ou aguardando hunt autenticada",
         "No capture ball selected" => "Nenhuma Pokébola escolhida",
         "Waiting for server Poké Ball catalog" => "Aguardando catálogo de Pokébolas do servidor",
+        "Wild death events lack capture slots; cannot target throws" =>
+            "Eventos de derrota não trazem slot de captura; impossível lançar Pokébolas",
         "No selected Poké Balls above reserve; check restock and ball priorities" =>
             "Sem Pokébolas selecionadas acima da reserva; confira reposição e prioridades",
         "Restock buys a ball that Auto Catch does not use" =>
