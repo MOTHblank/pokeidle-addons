@@ -8,6 +8,8 @@ on:
     branches: [master]
     paths:
       - 'controller/Cargo.toml'
+      # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
+      - '.github/workflows/build-controller.yml'
     tags:
       - 'v*.*.*'
   # Execução manual gera artefatos; publicação é opcional e só no master.
@@ -44,6 +46,7 @@ jobs:
         env:
           REQUEST_PUBLISH: ${{ inputs.publish_release || false }}
           PREVIOUS_MASTER_SHA: ${{ github.event.before || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(grep -m1 '^version = "' controller/Cargo.toml | cut -d '"' -f 2)"
@@ -70,6 +73,13 @@ jobs:
             previous="$(git show "$PREVIOUS_MASTER_SHA:controller/Cargo.toml" | grep -m1 '^version = "' | cut -d '"' -f 2)"
             if [[ "$version" != "$previous" ]]; then
               echo "Versão alterada: $previous -> $version. Publicação habilitada."
+              publish=true
+            elif gh release view "$tag" >/dev/null 2>&1; then
+              echo "Release $tag já existe; apenas validando os binários."
+            else
+              # Um ajuste ao workflow permite recuperar a publicação depois
+              # de uma execução que falhou, sem inventar uma nova versão.
+              echo "Release $tag ainda não publicada; nova tentativa habilitada."
               publish=true
             fi
           elif [[ "$REQUEST_PUBLISH" == true ]]; then
