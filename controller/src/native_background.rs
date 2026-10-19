@@ -805,17 +805,11 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
-                    // A confirmed shop receipt with no following full
-                    // inventory patch cannot safely be repeated. Refresh the
-                    // authenticated game state with a new welcome instead of
-                    // indefinitely freezing restock on just this account.
-                    if restock.needs_inventory_reconnect(Instant::now()) {
-                        crate::logging::warn(&format!(
-                            "{} native restock inventory confirmation overdue; reconnecting game socket",
-                            profile.label()
-                        ));
-                        break;
-                    }
+                    // Missing post-purchase inventory must pause *restock*,
+                    // not disconnect this account's otherwise healthy socket.
+                    // Restock keeps the unresolved order guarded until a fresh
+                    // authoritative stock snapshot arrives; never buy twice
+                    // based on a guessed inventory count.
                     // A delayed Poké Ball receipt is NOT proof the authenticated
                     // game socket is unhealthy. Keep receiving hunts, account
                     // balances and other automation events. Gameplay holds the
