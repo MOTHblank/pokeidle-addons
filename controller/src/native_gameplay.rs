@@ -710,7 +710,8 @@ mod tests {
     assert_eq!(g.available(4),1);
     g.ingest(r#"{"t":"estado","estado":{"balls":{"4":100}}}"#,
         at+Duration::from_millis(1));
-    assert_eq!(g.available(4),100);
+    // Non-restocked balls still protect the single unacknowledged spend.
+    assert_eq!(g.available(4),99);
     assert!(g.status.capture_ready);
  }
  #[test]
