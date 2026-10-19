@@ -1,36 +1,75 @@
-name: Publicar release v0.1.7 (Windows e Linux)
+name: Build e release do Moth Controller (Windows e Linux)
 
-# Only run this workflow when explicitly requested.
 on:
+  # Publica uma release quando uma tag vX.Y.Z corresponde ao Cargo.toml.
+  push:
+    tags:
+      - 'v*.*.*'
+  # Execução manual gera artefatos; publicação é opcional e só no master.
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publicar a release da versão atual (somente master)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: publicar-release-v0.1.7
+  group: controller-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  validar:
-    name: Conferir versão e notas
+  versao:
+    name: Conferir versão e modo de publicação
     runs-on: ubuntu-22.04
-    if: github.ref == 'refs/heads/master'
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      publish: ${{ steps.metadata.outputs.publish }}
     steps:
       - name: Obter código
         uses: actions/checkout@v4
 
-      - name: Verificar a versão do Cargo
+      - name: Conferir Cargo.toml e tag
+        id: metadata
         shell: bash
+        env:
+          REQUEST_PUBLISH: ${{ inputs.publish_release || false }}
         run: |
           set -euo pipefail
-          versao="$(grep -m1 '^version = ' controller/Cargo.toml | cut -d '"' -f 2)"
-          test "$versao" = "0.1.7" || { echo "Cargo.toml deve estar em 0.1.7, não $versao"; exit 1; }
-          test -s .github/release-notes/v0.1.7.md || { echo "Notas de lançamento ausentes"; exit 1; }
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("controller/Cargo.toml", "rb"))["package"]["version"])')"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::A versão do Cargo.toml deve seguir X.Y.Z: $version"
+            exit 1
+          fi
+          tag="v$version"
+          publish=false
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [[ "$GITHUB_REF_NAME" != "$tag" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME não corresponde ao Cargo.toml ($tag)"
+              exit 1
+            fi
+            publish=true
+          elif [[ "$REQUEST_PUBLISH" == true ]]; then
+            if [[ "$GITHUB_REF" != refs/heads/master ]]; then
+              echo "::error::Publicação manual só é permitida a partir de master."
+              exit 1
+            fi
+            publish=true
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Versão $tag; publicar=$publish"
 
   windows:
     name: Windows x86_64
-    needs: validar
+    needs: versao
     runs-on: windows-2022
     steps:
       - name: Obter código
@@ -44,19 +83,21 @@ jobs:
         with:
           workspaces: controller -> target
 
-      - name: Executar testes Rust
+      - name: Executar testes
         working-directory: controller
         run: cargo test --locked
 
-      - name: Compilar release Windows
+      - name: Compilar release
         working-directory: controller
         run: cargo build --release --locked
 
       - name: Preparar executável e SHA-256
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $arquivo = 'moth-controller-v0.1.7-windows-x86_64.exe'
+          $arquivo = "moth-controller-v$env:RELEASE_VERSION-windows-x86_64.exe"
           Copy-Item 'controller/target/release/moth-controller.exe' "dist/$arquivo"
           $hash = (Get-FileHash "dist/$arquivo" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $arquivo" | Set-Content -Encoding ascii "dist/$arquivo.sha256"
@@ -64,20 +105,20 @@ jobs:
       - name: Enviar artefato Windows
         uses: actions/upload-artifact@v4
         with:
-          name: moth-controller-v0.1.7-windows
+          name: moth-controller-windows
           path: dist/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
   linux:
-    name: Linux x86_64
-    needs: validar
+    name: Linux x86_64 (glibc 2.35)
+    needs: versao
     runs-on: ubuntu-22.04
     steps:
       - name: Obter código
         uses: actions/checkout@v4
 
-      - name: Instalar dependências do Linux
+      - name: Instalar dependências Linux
         shell: bash
         run: |
           sudo apt-get update
@@ -85,7 +126,7 @@ jobs:
             pkg-config libssl-dev libgtk-3-dev libudev-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
             libxinerama-dev libxkbcommon-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-0
+            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-0 zip
 
       - name: Instalar Rust estável
         uses: dtolnay/rust-toolchain@stable
@@ -95,81 +136,96 @@ jobs:
         with:
           workspaces: controller -> target
 
-      - name: Executar testes Rust
+      - name: Executar testes
         working-directory: controller
         run: cargo test --locked
 
-      - name: Compilar release Linux
+      - name: Compilar release
         working-directory: controller
         run: cargo build --release --locked
 
-      - name: Preparar arquivo Linux e SHA-256
+      - name: Verificar bibliotecas compartilhadas
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist pacote
-          install -m755 controller/target/release/moth-controller pacote/moth-controller
-          cp .github/release-notes/LEIA-ME-LINUX.md pacote/LEIA-ME-LINUX.md
-          install -m755 controller/linux/check-linux-deps.sh pacote/check-linux-deps.sh
-          arquivo=moth-controller-v0.1.7-linux-x86_64.tar.gz
-          tar -czf "dist/$arquivo" -C pacote moth-controller check-linux-deps.sh LEIA-ME-LINUX.md
+          ldd controller/target/release/moth-controller | tee /tmp/moth-controller-ldd.txt
+          if grep -q 'not found' /tmp/moth-controller-ldd.txt; then
+            echo "::error::O executável Linux tem dependências ausentes"
+            exit 1
+          fi
+
+      - name: Preparar ZIP Linux e SHA-256
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.versao.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/package
+          install -m755 controller/target/release/moth-controller dist/package/moth-controller
+          install -m755 controller/linux/check-linux-deps.sh dist/package/check-linux-deps.sh
+          cp .github/release-notes/LEIA-ME-LINUX.md dist/package/LEIA-ME-LINUX.md
+          cp LICENSE dist/package/LICENSE.txt
+          arquivo="moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
+          (cd dist/package && zip -q "../$arquivo" moth-controller check-linux-deps.sh LEIA-ME-LINUX.md LICENSE.txt)
           (cd dist && sha256sum "$arquivo" > "$arquivo.sha256")
 
       - name: Enviar artefato Linux
         uses: actions/upload-artifact@v4
         with:
-          name: moth-controller-v0.1.7-linux
-          path: dist/*
+          name: moth-controller-linux
+          path: |
+            dist/*.zip
+            dist/*.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
   publicar:
-    name: Publicar release após validação
-    needs: [validar, windows, linux]
+    name: Publicar GitHub Release
+    needs: [versao, windows, linux]
+    if: needs.versao.outputs.publish == 'true'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
-      - name: Obter notas de lançamento
+      - name: Obter código e notas
         uses: actions/checkout@v4
 
-      - name: Baixar os dois pacotes
+      - name: Baixar binários Windows e Linux
         uses: actions/download-artifact@v4
         with:
-          pattern: moth-controller-v0.1.7-*
+          pattern: moth-controller-*
           path: dist
           merge-multiple: true
 
-      - name: Conferir arquivos e checksums
+      - name: Conferir binários e checksums
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           set -euo pipefail
-          test -s dist/moth-controller-v0.1.7-windows-x86_64.exe
-          test -s dist/moth-controller-v0.1.7-linux-x86_64.tar.gz
-          (cd dist && for arquivo in *.sha256; do sed -i 's/\r$//' "$arquivo"; done && sha256sum -c ./*.sha256)
+          test -s "dist/moth-controller-v$RELEASE_VERSION-windows-x86_64.exe"
+          test -s "dist/moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
+          (cd dist && for checksum in *.sha256; do sed -i 's/\r$//' "$checksum"; done && sha256sum -c ./*.sha256)
+          cp LICENSE dist/LICENSE.txt
 
-      - name: Publicar v0.1.7 somente após testes e checksums
+      - name: Publicar sem sobrescrever versões existentes
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.versao.outputs.tag }}
         run: |
           set -euo pipefail
-          tag=v0.1.7
-          notas=.github/release-notes/v0.1.7.md
-          titulo='Moth Controller v0.1.7 — Windows e Linux'
-          # A Windows-only tag may already exist. Attach ONLY a missing Linux
-          # artifact; never overwrite either platform's published binaries.
+          tag="$RELEASE_TAG"
           if gh release view "$tag" >/dev/null 2>&1; then
-            linux=moth-controller-v0.1.7-linux-x86_64.tar.gz
-            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fxq "$linux"; then
-              echo "O pacote Linux já existe em $tag; nenhum arquivo foi sobrescrito."
-              exit 0
-            fi
-            gh release upload "$tag" "dist/$linux" "dist/$linux.sha256"
-            echo "Pacote Linux adicionado à release existente $tag."
-            exit 0
+            echo "::error::Release $tag já existe. Atualize a versão antes de publicar outra release."
+            exit 1
           fi
-          gh release create "$tag" dist/* \
-            --target "$GITHUB_SHA" \
-            --title "$titulo" --notes-file "$notas"
-          echo "Release $tag publicada com Windows, Linux e checksums."
+
+          notes=".github/release-notes/$tag.md"
+          title="Moth Controller $tag — Windows e Linux"
+          if [[ -s "$notes" ]]; then
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --notes-file "$notes"
+          else
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --generate-notes
+          fi
+          echo "Release $tag publicada com Windows, Linux, licença e checksums."
