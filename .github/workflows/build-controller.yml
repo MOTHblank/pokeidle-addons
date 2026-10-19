@@ -97,7 +97,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $arquivo = "moth-controller-v$env:RELEASE_VERSION-windows-x86_64.exe"
+          $arquivo = "moth-controller-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
           Copy-Item 'controller/target/release/moth-controller.exe' "dist/$arquivo"
           $hash = (Get-FileHash "dist/$arquivo" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $arquivo" | Set-Content -Encoding ascii "dist/$arquivo.sha256"
