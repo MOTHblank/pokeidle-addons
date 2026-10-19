@@ -1,16 +1,29 @@
-name: Manual native Moth Controller validation
+name: Validate native Moth Controller (Windows e Linux)
 
-# Run only when explicitly requested. Ordinary merges must not consume
-# Windows/Linux runner minutes or block the separate release workflow.
+# Run checks on relevant changes; produce downloadable preview binaries manually.
 on:
+  push:
+    branches: [master]
+    paths:
+      - 'controller/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'controller/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: native-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rust-prototype:
-    name: Native WS experiment / ${{ matrix.os }}
+    name: Check controller / ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,22 +46,23 @@ jobs:
             libgl1-mesa-dev libegl1-mesa-dev libsqlite3-0
       - name: Test native controller
         working-directory: controller
-        run: cargo test
+        run: cargo test --locked
       - name: Check native controller
         working-directory: controller
-        run: cargo check
-      - name: Build native controller
+        run: cargo check --locked
+      - name: Build native preview (manual only)
+        if: github.event_name == 'workflow_dispatch'
         working-directory: controller
-        run: cargo build --release
+        run: cargo build --release --locked
       - name: Upload Windows preview (branch only)
-        if: runner.os == 'Windows'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: moth-native-preview-windows
           path: controller/target/release/moth-controller.exe
           if-no-files-found: error
       - name: Check Linux shared-library links
-        if: runner.os == 'Linux'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Linux'
         shell: bash
         run: |
           ldd controller/target/release/moth-controller | tee /tmp/moth-linux-ldd.txt
@@ -57,7 +71,7 @@ jobs:
             exit 1
           fi
       - name: Package Linux preview
-        if: runner.os == 'Linux'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +83,7 @@ jobs:
           tar -czf "dist/$file" -C dist/package moth-controller check-linux-deps.sh LEIA-ME-LINUX.md
           (cd dist && sha256sum "$file" > "$file.sha256")
       - name: Upload Linux preview (manual workflow)
-        if: runner.os == 'Linux'
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: moth-native-preview-linux
