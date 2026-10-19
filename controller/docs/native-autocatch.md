@@ -6,7 +6,7 @@ The native controller uses the already authenticated game WebSocket to select fr
 
 ## Cadence and ordering (0.1.7-native.29)
 
-- Configurable throw interval: 100–3000 ms, default 100 ms, imported from Auto Catch+ `intervalMs`. Only one throw is issued per native worker cycle; actual pacing also depends on the shared game socket.
+- Configurable native throw interval: 1200–3000 ms, default 1200 ms. Legacy imported intervals below 1200 ms are upgraded on load. The reference Manager also uses a 1.2-second ball cooldown. Only one native throw can be outstanding at once; actual pacing also depends on the shared game socket.
 - For each `batalha.ev` `morte` with `quem = selvagem`, the slot is tracked for at most 30 seconds. When multiple corpses are eligible, the oldest observed death is served first (earliest estimated expiration). A reused slot is a new corpse lifecycle.
 - A server `bola` success closes that slot; a failed result releases it for an immediate *configured-interval* retry. An unanswered send remains pending until 1,000 ms have elapsed, then the same slot may be retried. A later failure must not reopen an already captured/removed slot.
 - A subsequent hunt/center transition and a disconnected/reconnected session invalidate all tracked corpses. `next_capture` checks expiry even without incoming battle frames, preventing stale sends.
@@ -18,7 +18,7 @@ Native sends count on actual dispatch rather than on all received `bola` events.
 
 ## Capture readiness and recovery
 
-The UI no longer equates an enabled Auto Catch preference with a worker that can throw. Each account reports an actionable blocked reason when it is at center, has no game ball catalog, has no selected ball above its reserve, or the latest wild death has no server capture slot. A separate warning detects the common mismatch between restocking Poké Balls and configuring Auto Catch to throw Beast/Ultra Balls. Captures still require actual server-identified downed slots; no slot is invented.
+The UI no longer equates an enabled Auto Catch preference with a worker that can throw. Each account reports a waiting reason without equating lack of an immediate eligible throw to failure when it is at center, has no game ball catalog, has no selected ball above its reserve, or the latest wild death has no server capture slot. A separate warning detects the common mismatch between restocking Poké Balls and configuring Auto Catch to throw Beast/Ultra Balls. Captures still require actual server-identified downed slots; no slot is invented.
 
 Slot 0 is accepted as a legitimate server identifier. When the server includes a complete `estado.caidos` list, the worker can recover targets even if an earlier `morte` event omitted its slot. A fresh increased server stock supersedes old provisional local ball debits, avoiding indefinite capture stalls following replenishment while unchanged stale stock still protects configured reserves.
 
@@ -64,6 +64,34 @@ authoritative inventory snapshot before another purchase. If no such snapshot
 arrives within 20 seconds, only that account's authenticated game socket
 reconnects to obtain a fresh server state rather than indefinitely blocking
 restock or blindly making duplicate purchases.
+
+## Manager parity and receipt limitations
+
+The desktop Auto Catch worker now follows the reference
+`DiuleJR/pokeidle-manager`'s conservative 1.2-second send cadence.
+It also allows only **one unanswered native `ball.throw` at a time**.
+Previously the 100-ms loop could reserve many unacknowledged Ultra Balls
+while waiting for server results, exhausting its local usable stock and
+making an account appear frozen even as new wild deaths entered its queue.
+
+The shop's descriptive `catalogoBolas` is optional. The worker uses
+stable PokéIdle inventory ball IDs (Poké 1, Great 2, Super 3, Ultra 4,
+Beast 5), the selected priority and authoritative `estado.balls` counts.
+Master Balls are excluded. A received empty inventory is distinguished
+from an inventory snapshot that has not yet arrived.
+
+If an already-sent ball never receives a result for eight seconds,
+the affected native game socket reconnects for fresh server state
+instead of sending blind retries. The Automation view shows the
+per-account recovery count and any capture-related server notice.
+
+The capture statistic labeled **Ball-event captures** counts observed
+`batalha.ev[k="bola"]` success receipts. It does **not** claim to count
+every Pokémon obtained by the game's built-in VIP capture automation,
+which may not emit those events. Native-attributed catches are a
+separate subset. An enabled preference with no currently eligible
+throw shows *Waiting*, not *Blocked*; waiting reasons still identify
+zero stock, missing inventory, center, and pending reservations.
 
 ## Verification
 

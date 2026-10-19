@@ -331,6 +331,17 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "At center or waiting for authenticated hunt state" => "No centro ou aguardando hunt autenticada",
         "No capture ball selected" => "Nenhuma Pokébola escolhida",
         "Waiting for server Poké Ball catalog" => "Aguardando catálogo de Pokébolas do servidor",
+        "Waiting for server Poké Ball inventory" => "Aguardando inventário de Pokébolas do servidor",
+        "Ball-event captures" => "Capturas em eventos de bola",
+        "Ball-event failures" => "Falhas em eventos de bola",
+        "Native interval: at least 1.2 s between throws, one awaiting reply" =>
+            "Intervalo nativo: pelo menos 1,2 s entre lançamentos, aguardando uma resposta por vez",
+        "Capture server notice" => "Aviso do servidor sobre captura",
+        "Capture resyncs" => "Reconexões para recuperar capturas",
+        "Only observed ball battle events are counted; built-in VIP captures may not generate them." =>
+            "Só são contados eventos de bola observados; capturas automáticas VIP do jogo podem não gerar esses eventos.",
+        "No server response to native Poké Ball throw; refreshing game state" =>
+            "Sem resposta do servidor ao lançamento; atualizando a sessão do jogo",
         "Wild death events lack capture slots; cannot target throws" =>
             "Eventos de derrota não trazem slot de captura; impossível lançar Pokébolas",
         "No selected Poké Balls above reserve; check restock and ball priorities" =>
@@ -3953,7 +3964,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 } else if capture_ready {
                     tr("Active")
                 } else {
-                    tr("Blocked")
+                    tr("Waiting")
                 };
                 automation_badge(
                     ui, "Auto Catch", catch_status,
@@ -4938,7 +4949,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 } else if capture_ready {
                     tr("Active")
                 } else {
-                    tr("Blocked")
+                    tr("Waiting")
                 }).size(10.0).color(if capture_ready {GOOD} else if game.native_auto_catch {WARN} else {MUTED}));
                 ui.add_space(8.0);
                 if ui.small_button(tr(if game.native_auto_catch { "Disable" } else { "Enable" }))
@@ -4956,12 +4967,14 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                         }
                     });
                 }
+                // A VIP/game-owned automatic catch may not emit a ball.throw
+                // receipt. These are socket-observed battle ball results only.
                 ui.label(RichText::new(format!(
                     "{} {} · {} throws · {} {} · {} {} · {} retries",
                     game.native_capture_queue,tr("Downed targets"),
                     capture.throws,capture.server_catches,
-                    tr("Confirmed by server"),capture.server_failures,
-                    tr("Server failures"),capture.timeout_retries
+                    tr("Ball-event captures"),capture.server_failures,
+                    tr("Ball-event failures"),capture.retries
                 )).size(10.0).color(DIM));
             });
 
@@ -4984,6 +4997,17 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 ));
                 if let Some(error)=restock.last_error.as_deref() {
                     ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
+                if game.native_capture_status.capture_resyncs>0 {
+                    ui.label(RichText::new(format!(
+                        "{}: {}",tr("Capture resyncs"),
+                        game.native_capture_status.capture_resyncs
+                    )).size(10.0).color(WARN));
+                }
+                if let Some(notice)=game.native_capture_status.last_server_notice.as_deref() {
+                    ui.label(RichText::new(format!(
+                        "{}: {}",tr("Capture server notice"),notice
+                    )).size(10.0).color(WARN));
                 }
                 if let Some(reason)=game.native_capture_status.blocked_reason.as_deref() {
                     ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
@@ -5021,17 +5045,17 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     let matched=capture.caught_by_ball.get(id).copied().unwrap_or(0);
                     ui.label(RichText::new(format!(
                         "Ball #{id}: {sent} sent · {confirmed} {} · {matched} {}",
-                        tr("Confirmed by server"),tr("Native-matched")
+                        tr("Ball-event captures"),tr("Native-matched")
                     )).size(10.0).color(MUTED));
                 }
                 ui.label(RichText::new(format!(
                     "{}: {} · {}: {} · {}: {}",
-                    tr("Confirmed by server"),capture.server_catches,
+                    tr("Ball-event captures"),capture.server_catches,
                     tr("Unmatched receipts"),capture.unmatched_successes,
                     tr("Stock awaiting confirmation"),capture.unreflected_throws
                 )).size(10.0).color(DIM));
                 ui.label(RichText::new(
-                    tr("Server receipt totals may also include captures outside native Auto Catch.")
+                    tr("Only observed ball battle events are counted; built-in VIP captures may not generate them.")
                 ).size(10.0).color(DIM));
             });
             ui.add_space(7.0);
@@ -5427,8 +5451,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
-            .range(100..=3000).speed(10.0).suffix(" ms"));
-        ui.label(RichText::new(tr("100 ms matches Auto Catch+; unanswered throws retry after 1 s"))
+            .range(1200..=3000).speed(100.0).suffix(" ms"));
+        ui.label(RichText::new(tr("Native interval: at least 1.2 s between throws, one awaiting reply"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
