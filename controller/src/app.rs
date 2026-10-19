@@ -326,6 +326,15 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for combat" => "Aguardando combate",
         "No combat activity" => "Sem atividade de combate",
         "No live connection" => "Sem conexão ativa",
+        "Blocked" => "Bloqueada",
+        "Auto Catch disabled" => "Captura automática desligada",
+        "At center or waiting for authenticated hunt state" => "No centro ou aguardando hunt autenticada",
+        "No capture ball selected" => "Nenhuma Pokébola escolhida",
+        "Waiting for server Poké Ball catalog" => "Aguardando catálogo de Pokébolas do servidor",
+        "No selected Poké Balls above reserve; check restock and ball priorities" =>
+            "Sem Pokébolas selecionadas acima da reserva; confira reposição e prioridades",
+        "Restock buys a ball that Auto Catch does not use" =>
+            "A reposição compra uma Pokébola que a captura automática não utiliza",
         "Last combat activity" => "Último combate",
         "Gold/h" => "Ouro/h",
         "XP/h" => "XP/h",
@@ -3917,17 +3926,33 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
 
             ui.add_space(9.0);
             ui.horizontal_wrapped(|ui| {
+                let capture_status=app.games[index].native.as_ref()
+                    .map(|native|native.snapshot().native_capture_status);
+                let capture_ready=capture_status.as_ref()
+                    .is_some_and(|status|status.capture_ready);
                 let catch_status = if !fresh || !health.bridge_snapshot_ok {
                     tr("Not checked")
-                } else if health.autocatch_on {
+                } else if !health.autocatch_on {
+                    tr("Off")
+                } else if capture_ready {
                     tr("Active")
                 } else {
-                    tr("Off")
+                    tr("Blocked")
                 };
                 automation_badge(
                     ui, "Auto Catch", catch_status,
-                    fresh && health.bridge_snapshot_ok && health.autocatch_on,
+                    fresh && health.bridge_snapshot_ok && health.autocatch_on && capture_ready,
                 );
+                if fresh && health.bridge_snapshot_ok && health.autocatch_on {
+                    if let Some(capture)=capture_status.as_ref() {
+                        if let Some(reason)=capture.blocked_reason.as_deref() {
+                            ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
+                        }
+                        if let Some(warning)=capture.warning.as_deref() {
+                            ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
+                        }
+                    }
+                }
                 let bonus_confirmed = fresh && health.bridge_snapshot_ok
                     && health.stream_bonus_pct > 0.0 && !health.stream_watching.is_empty();
                 let bonus_text = if bonus_confirmed {
@@ -4884,11 +4909,15 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             // overview card footer beside the account's Stop button.
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("Auto Catch")).strong().size(11.0).color(TEXT));
-                ui.label(RichText::new(if game.native_auto_catch {
+                let capture=&game.native_capture_status;
+                let capture_ready=game.phase=="Online" && capture.capture_ready;
+                ui.label(RichText::new(if !game.native_auto_catch {
+                    tr("Off")
+                } else if capture_ready {
                     tr("Active")
                 } else {
-                    tr("Off")
-                }).size(10.0).color(if game.native_auto_catch { GOOD } else { MUTED }));
+                    tr("Blocked")
+                }).size(10.0).color(if capture_ready {GOOD} else if game.native_auto_catch {WARN} else {MUTED}));
                 ui.add_space(8.0);
                 if ui.small_button(tr(if game.native_auto_catch { "Disable" } else { "Enable" }))
                     .on_hover_text(tr("Turn Auto Catch on or off for this account"))
@@ -4905,7 +4934,6 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                         }
                     });
                 }
-                let capture=&game.native_capture_status;
                 ui.label(RichText::new(format!(
                     "{} waiting · {} throws · {} caught · {} failed · {} retries",
                     game.native_capture_queue,capture.throws,capture.catches,
@@ -4913,6 +4941,14 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 )).size(10.0).color(DIM));
             });
 
+            if game.native_auto_catch {
+                if let Some(reason)=game.native_capture_status.blocked_reason.as_deref() {
+                    ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
+                }
+                if let Some(warning)=game.native_capture_status.warning.as_deref() {
+                    ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
+                }
+            }
             if !game.native_capture_status.last_action.is_empty() {
                 ui.label(RichText::new(&game.native_capture_status.last_action)
                     .size(10.0).color(MUTED));
