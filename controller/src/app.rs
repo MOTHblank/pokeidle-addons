@@ -1047,6 +1047,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Auto Catch settings saved" => "Configurações de captura automática salvas",
         "Loading game automation settings" => "Carregando configurações de automação do jogo",
         "Sign-in checklist" => "Verificação de login",
+        "Use the buttons below to open Firefox without monitoring. After signing in, close Firefox and start the account to verify both logins." =>
+            "Use os botões abaixo para abrir o Firefox sem monitoramento. Após entrar, feche o Firefox e inicie a conta para verificar os dois logins.",
+        "Twitch sign-in (unmonitored)" => "Entrar na Twitch (sem monitoramento)",
+        "PokéIdle / Google sign-in (unmonitored)" => "Entrar no PokéIdle / Google (sem monitoramento)",
         "Twitch login" => "Login da Twitch",
         "Sign-in required" => "Login necessário",
         "Waiting for Twitch sign-in" => "Aguardando login na Twitch",
@@ -1756,7 +1760,6 @@ pub struct ControllerApp {
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
-    show_setup_guide: [bool; 4],
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
     tab_url_input: [String; 4],
@@ -1895,7 +1898,6 @@ impl ControllerApp {
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
-            show_setup_guide: [false; 4],
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
             tab_url_input: std::array::from_fn(|_| String::new()),
@@ -4050,7 +4052,6 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 if ui.small_button(RichText::new(tr("Setup needed")).color(WARN)).clicked() {
                     app.select_workspace_account(index);
                     app.panel_tab = PanelTab::Accounts;
-                    app.show_setup_guide[index] = true;
                 }
             }
             if idle_warning {
@@ -6940,8 +6941,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             } else if running { tr("Waiting for Twitch sign-in") }
             else { tr("Not verified") };
         ui.horizontal_wrapped(|ui| {
-            status_chip(ui, "PokéIdle", game_label, game_online);
             status_chip(ui, "Twitch", twitch_label, twitch_online);
+            status_chip(ui, "PokéIdle", game_label, game_online);
         });
         if let Some(state) = twitch_phase.as_ref() {
             if twitch_online {
@@ -6968,16 +6969,6 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             {
                 app.launch_one(profile);
             }
-            if ui.small_button(tr("Open in Firefox")).clicked() {
-                app.open_in_firefox(profile);
-            }
-            if ui.small_button(tr("Configure automation"))
-                .on_hover_text(tr("Open Auto Catch settings for this account")).clicked()
-            {
-                app.select_workspace_account(index);
-                app.automation_section = AutomationSection::Capture;
-                app.panel_tab = PanelTab::Automation;
-            }
         });
 
         // Keep game/Twitch profile cards compact; Kick has its own workspace.
@@ -6995,53 +6986,40 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        let show_guide = !setup.setup_complete || app.show_setup_guide[index];
-        ui.add_space(6.0);
-        if setup.setup_complete &&
-            ui.small_button(if show_guide { tr("Hide setup guide") }
-                else { tr("Show setup guide") }).clicked()
-        {
-            app.show_setup_guide[index] = !show_guide;
+        // Sign-in is a primary account setup action, not a collapsible guide:
+        // keep the checklist visible even after setup completes or a slot
+        // is disabled. This makes the ordinary, unmonitored login path clear.
+        ui.add_space(7.0);
+        if ui.small_button(tr("Profile folder")).clicked() {
+            app.profile_action(profile, ProfileAction::Folder);
         }
-        if show_guide && enabled {
-            egui::Frame::new().fill(PANEL).corner_radius(6.0)
-                .inner_margin(10.0).show(ui, |ui| {
-                ui.label(RichText::new(tr("Sign-in checklist")).strong().color(TEXT));
-                status_chip(ui, "Firefox profile",
-                    if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
-                    setup.profile_ready);
-                status_chip(ui, "PokéIdle login", game_label, game_online);
-                status_chip(ui, "Twitch login", twitch_label, twitch_online);
-                if !game_online {
-                    ui.label(RichText::new(tr(
-                        "Start the account, then sign in to PokéIdle in the Firefox window."
-                    )).size(10.0).color(MUTED));
-                } else if !twitch_online {
-                    ui.label(RichText::new(tr(
-                        "PokéIdle is ready. Sign in to Twitch in the same Firefox profile; both connections are required to finish setup."
-                    )).size(10.0).color(MUTED));
-                } else {
-                    ui.label(RichText::new(tr(
-                        "Both logins are connected. Future starts can reuse your saved login."
-                    )).size(10.0).color(GOOD));
-                }
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button(tr("Twitch sign-in")).clicked() {
-                        app.profile_action(profile, ProfileAction::Twitch);
-                    }
-                    if ui.small_button(tr("Google sign-in")).clicked() {
-                        app.profile_action(profile, ProfileAction::GoogleSignIn);
-                    }
-                });
-            });
-        }
-        ui.collapsing(tr("Login and profile tools"), |ui| {
+        ui.add_space(8.0);
+        egui::Frame::new().fill(PANEL).corner_radius(6.0)
+            .inner_margin(10.0).show(ui, |ui| {
+            ui.label(RichText::new(tr("Sign-in checklist")).strong().color(TEXT));
+            ui.add_space(5.0);
+            status_chip(ui, "Firefox profile",
+                if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
+                setup.profile_ready);
+            status_chip(ui, "Twitch login", twitch_label, twitch_online);
+            status_chip(ui, "PokéIdle login", game_label, game_online);
+            ui.add_space(7.0);
+            if game_online && twitch_online {
+                ui.label(RichText::new(tr(
+                    "Both logins are connected. Future starts can reuse your saved login."
+                )).size(10.0).color(GOOD));
+            } else {
+                ui.label(RichText::new(tr(
+                    "Use the buttons below to open Firefox without monitoring. After signing in, close Firefox and start the account to verify both logins."
+                )).size(10.0).color(MUTED));
+            }
+            ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                if ui.small_button(tr("Twitch")).clicked() {
+                if ui.button(tr("Twitch sign-in (unmonitored)")).clicked() {
                     app.profile_action(profile, ProfileAction::Twitch);
                 }
-                if ui.small_button(tr("Profile folder")).clicked() {
-                    app.profile_action(profile, ProfileAction::Folder);
+                if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
+                    app.profile_action(profile, ProfileAction::GoogleSignIn);
                 }
             });
         });
