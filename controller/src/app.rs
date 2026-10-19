@@ -644,6 +644,10 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Restarts Firefox in the selected mode; the game and streams will briefly disconnect." => "Reinicia o Firefox no modo escolhido; o jogo e as streams serão desconectados temporariamente.",
         "NO READINGS" => "SEM LEITURAS",
         "CONNECTION UNCONFIRMED" => "CONEXÃO NÃO CONFIRMADA",
+        "RECONNECTING" => "RECONECTANDO",
+        "UPDATES DELAYED" => "ATUALIZAÇÕES ATRASADAS",
+        "Last confirmed data; reconnecting" => "Últimos dados recebidos; reconectando",
+        "Capture timeouts" => "Capturas sem resposta",
         "FIREFOX CONNECTION BLOCKED" => "SESSÃO BIDI BLOQUEADA",
         "Restart Firefox to reconnect" => "Reiniciar Firefox para reconectar",
         "Restarts Firefox for this account. The game will disconnect briefly." => "Reinicia o Firefox desta conta. O jogo será desconectado brevemente.",
@@ -3909,12 +3913,16 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             });
             ui.add_space(8.0);
 
-            // Present the actual lead versus the live wild Pokémon in both
-            // Summary and Session, rather than hiding combat in Session mode.
+            // Preserve the last confirmed account snapshot through a temporary
+            // transport outage. Never portray it as fresh live activity.
+            if !fresh && native_view.is_some() && health.last_successful_probe_at.is_some() {
+                ui.label(RichText::new(tr("Last confirmed data; reconnecting"))
+                    .size(10.0).color(WARN));
+            }
             draw_overview_matchup(app, ui, &health, fresh, native_view.as_ref());
             ui.add_space(6.0);
             if app.dashboard_session_view {
-                draw_overview_session(ui, native_view.as_ref().filter(|_| fresh));
+                draw_overview_session(ui, native_view.as_ref());
             } else {
                 draw_overview_account_summary(app, ui, index, fresh,
                     xp_per_hour, native_view.as_ref());
@@ -3939,17 +3947,22 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 let verified = fresh && health.bridge_snapshot_ok;
                 let balances = app.games[index].native.as_ref()
                     .map(|native| native.snapshot());
-                let gold = if !verified { None } else if let Some(view) = native_view.as_ref() {
+                let cached_native = running && native_view.is_some()
+                    && balances.as_ref().is_some_and(|s| s.last_received.is_some());
+                let gold = if let Some(view) = native_view.as_ref().filter(|_| verified || cached_native) {
                     view.gold.or_else(|| balances.as_ref().and_then(|s| s.gold))
-                } else { Some(health.gold) };
-                let gems = if !verified { None } else if let Some(view) = native_view.as_ref() {
+                } else if verified { Some(health.gold) } else { None };
+                let gems = if let Some(view) = native_view.as_ref().filter(|_| verified || cached_native) {
                     view.orbs.or_else(|| balances.as_ref().and_then(|s| s.orbs))
-                } else { Some(health.orbs) };
-                ui.label(RichText::new(format!("◆ {}: {}",
-                    tr("Gold"), gold.map(format_number).unwrap_or_else(|| "—".into())))
+                } else if verified { Some(health.orbs) } else { None };
+                let suffix = if cached_native && !verified {
+                    " · último dado"
+                } else { "" };
+                ui.label(RichText::new(format!("◆ {}: {}{}",
+                    tr("Gold"), gold.map(format_number).unwrap_or_else(|| "—".into()), suffix))
                     .size(10.0).color(WARN));
-                ui.label(RichText::new(format!("◇ {}: {}",
-                    tr("Gems"), gems.map(format_number).unwrap_or_else(|| "—".into())))
+                ui.label(RichText::new(format!("◇ {}: {}{}",
+                    tr("Gems"), gems.map(format_number).unwrap_or_else(|| "—".into()), suffix))
                     .size(10.0).color(ACCENT));
             });
 
@@ -4295,12 +4308,13 @@ fn draw_overview_matchup(
     fresh: bool,
     view: Option<&HuntView>,
 ) {
-    let pokemon = if fresh { view.and_then(|v|v.active_pokemon.as_ref()) } else { None };
-    let hunt = view.filter(|_| fresh).filter(|v| !v.in_center)
-        .and_then(overview_hunt);
-    let hunt_species = view.filter(|_| fresh).filter(|v| !v.in_center)
+    // Preserve the last confirmed identity and artwork during a reconnect.
+    // Connectivity and combat activity below still require fresh telemetry.
+    let pokemon = view.and_then(|v|v.active_pokemon.as_ref());
+    let hunt = view.filter(|v| !v.in_center).and_then(overview_hunt);
+    let hunt_species = view.filter(|v| !v.in_center)
         .and_then(overview_hunt_art_species);
-    let hunt_looktype = view.filter(|_| fresh).filter(|v| !v.in_center)
+    let hunt_looktype = view.filter(|v| !v.in_center)
         .and_then(overview_hunt_art_looktype);
     let pokemon_name = pokemon.map(|p|p.name.as_str())
         .filter(|name|!name.is_empty())
@@ -4385,23 +4399,27 @@ fn draw_overview_account_summary(
     xp_per_hour: Option<f64>,
     view: Option<&HuntView>,
 ) {
-    let gold_h = view.filter(|_|fresh).and_then(|v|
+    // Cached native measurements remain visible while marked as historical;
+    // they must never contribute to the live aggregate totals.
+    let showing_last_known = !fresh && view.is_some();
+    let gold_h = view.and_then(|v|
         v.measurements.valid_gold.then_some(v.measurements.gold_net_h));
     // The restock editor stages selections while the encrypted save runs.
     // Use those staged IDs immediately so the icon and count always agree.
     let restock_selection = app.restock_drafts[index].as_ref().cloned()
         .or_else(|| app.games[index].native.as_ref().map(|n| n.capture_settings()))
         .unwrap_or_default();
-    let balls = view.filter(|_| fresh).and_then(|v|
+    let balls = view.and_then(|v|
         selected_restock_stock(v.balls.as_ref(), restock_selection.ball_id));
-    let potions = view.filter(|_| fresh).and_then(|v|
+    let potions = view.and_then(|v|
         selected_restock_stock(v.items.as_ref(), restock_selection.potion_id));
-    let revives = view.filter(|_| fresh).and_then(|v|
+    let revives = view.and_then(|v|
         selected_restock_stock(v.items.as_ref(), restock_selection.revive_id));
     ui.columns(2, |cols| {
         overview_stat_tile(&mut cols[0],"XP/h",
-            &if fresh {xp_per_hour.map(format_hunt_amount)
-                .unwrap_or_else(||"—".into())}else{"—".into()},ACCENT);
+            &if fresh || showing_last_known {xp_per_hour.map(format_hunt_amount)
+                .unwrap_or_else(||"—".into())}else{"—".into()},
+            if showing_last_known { DIM } else { ACCENT });
         overview_stat_tile(&mut cols[1],"Gold/h",
             &gold_h.map(format_hunt_amount)
                 .unwrap_or_else(||"—".into()),WARN);
@@ -5002,7 +5020,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 }
                 if game.native_capture_status.capture_resyncs>0 {
                     ui.label(RichText::new(format!(
-                        "{}: {}",tr("Capture resyncs"),
+                        "{}: {}",tr("Capture timeouts"),
                         game.native_capture_status.capture_resyncs
                     )).size(10.0).color(WARN));
                 }
@@ -6947,7 +6965,7 @@ fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::
 fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
     // Loss of browser monitoring does not imply that the game stopped.
     // Keep the state accessible without a constantly growing, alarm-colored warning.
-    let no_readings = running
+    let no_readings = running && health.state == "Running"
         && health.last_heartbeat_at.is_some()
         && !health.heartbeat_is_fresh();
     let session_blocked = running && health.last_error.as_deref()
@@ -6956,8 +6974,10 @@ fn status_badge(ui: &mut egui::Ui, health: &Health, running: bool) {
         ("STOPPED", DIM)
     } else if session_blocked {
         ("FIREFOX CONNECTION BLOCKED", WARN)
+    } else if health.state == "Reconnecting" {
+        ("RECONNECTING", WARN)
     } else if no_readings {
-        ("CONNECTION UNCONFIRMED", DIM)
+        ("UPDATES DELAYED", DIM)
     } else if health.telemetry_is_fresh()
         && health.heartbeat_is_fresh()
         && health.logged_in
