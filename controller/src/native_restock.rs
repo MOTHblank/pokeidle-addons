@@ -88,6 +88,7 @@ pub struct Restock {
     settle_until: Option<Instant>,
     blocked_until: Option<Instant>,
     awaiting_inventory: Option<&'static str>,
+    awaiting_inventory_since: Option<Instant>,
 }
 impl Restock {
     pub fn new(settings: Option<&Value>) -> Self {
@@ -126,7 +127,7 @@ impl Restock {
             stock: BTreeMap::new(),
             known_stock: [false, false], gold: None, pending: None,
             settle_until: None, blocked_until: None,
-            awaiting_inventory: None,
+            awaiting_inventory: None,awaiting_inventory_since: None,
         };
         worker.seed_reference_items();
         worker
@@ -272,6 +273,7 @@ impl Restock {
         self.stock.clear();
         self.gold = None;
         self.awaiting_inventory = None;
+        self.awaiting_inventory_since = None;
         self.known_stock = [false, false];
         self.status.pending = false;
     }
@@ -291,6 +293,7 @@ impl Restock {
             self.stock.clear();
             self.gold = None;
             self.awaiting_inventory = None;
+            self.awaiting_inventory_since = None;
             self.known_stock = [false, false];
         }
         // The live shop may be refreshed independently of welcome, including
@@ -382,6 +385,7 @@ impl Restock {
             // but wait for fresh stock before considering another purchase.
             if let Some(order) = &self.pending {
                 self.awaiting_inventory = Some(order.kind);
+                self.awaiting_inventory_since = Some(now);
             }
             self.confirm(now);
             self.status.phase = "Waiting for updated inventory".into();
@@ -402,6 +406,7 @@ impl Restock {
                     self.known_stock[Self::idx(kind)] = true;
                     if self.awaiting_inventory == Some(kind) {
                         self.awaiting_inventory = None;
+                        self.awaiting_inventory_since = None;
                         if self.pending.is_none() {
                             self.status.phase = "Stock synced".into();
                         }
@@ -435,6 +440,14 @@ impl Restock {
             self.settle_until = Some(now + SETTLE);
             self.status.pending = false;
         }
+    }
+    /// After a confirmed purchase, a full stock snapshot must arrive before
+    /// another order. If it never arrives, reconnect to obtain a fresh welcome
+    /// rather than waiting forever or guessing the stock to buy again.
+    pub fn needs_inventory_reconnect(&self, now: Instant) -> bool {
+        self.status.enabled && self.awaiting_inventory.is_some() &&
+            self.awaiting_inventory_since.is_some_and(|at|
+                now.saturating_duration_since(at)>=ACK_STOCK_TIMEOUT)
     }
     pub fn next(&mut self, now: Instant, catch_enabled: bool) -> Option<GameCommand> {
         if !catch_enabled || !self.status.enabled {
@@ -471,7 +484,14 @@ impl Restock {
             return None;
         }
         if self.awaiting_inventory.is_some() {
-            self.status.phase = "Waiting for updated inventory".into();
+            if self.needs_inventory_reconnect(now) {
+                self.status.phase = "Resyncing inventory".into();
+                self.status.last_error = Some(
+                    "Purchase confirmed but stock update never arrived; reconnecting".into()
+                );
+            } else {
+                self.status.phase = "Waiting for updated inventory".into();
+            }
             return None;
         }
         let Some(gold) = self.gold else {
@@ -663,6 +683,23 @@ mod tests {
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},"items":{"200":1}}}"#, now);
         assert_eq!(r.next(now, true).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
+    }
+    #[test]
+    fn stale_inventory_after_confirmed_purchase_requests_safe_reconnect() {
+        let now=Instant::now();
+        let mut r=configured();
+        r.ingest(r#"{"t":"welcome","catalogoBolas":[
+            {"id":4,"nome":"Ultra Ball","compravel":true,"preco":10}],
+            "estado":{"gold":10000,"balls":{"4":4},"items":{"200":20}}}"#,now);
+        assert!(r.next(now,true).is_some());
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
+            "nome":"Ultra Ball","qtd":16,"gasto":160}]}"#,
+            now+Duration::from_millis(100));
+        assert!(!r.needs_inventory_reconnect(now+Duration::from_secs(10)));
+        assert!(r.next(now+Duration::from_secs(21),true).is_none());
+        assert!(r.needs_inventory_reconnect(now+Duration::from_secs(21)));
+        r.on_disconnect(now+Duration::from_secs(21));
+        assert!(!r.needs_inventory_reconnect(now+Duration::from_secs(22)));
     }
     #[test]
     fn confirmed_ball_receipts_update_restock_stock_before_state_patch() {
