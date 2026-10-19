@@ -40,7 +40,7 @@ jobs:
           REQUEST_PUBLISH: ${{ inputs.publish_release || false }}
         run: |
           set -euo pipefail
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("controller/Cargo.toml", "rb"))["package"]["version"])')"
+          version="$(grep -m1 '^version = "' controller/Cargo.toml | cut -d '"' -f 2)"
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::A versão do Cargo.toml deve seguir X.Y.Z: $version"
             exit 1
