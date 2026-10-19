@@ -118,7 +118,7 @@ impl Gameplay {
         self.status.auto_catch=config.enabled;
         self.priorities=config.priorities.clone();
         self.reserves=config.reserves.clone();
-        self.interval=Duration::from_millis(config.interval_ms.clamp(100,3000));
+        self.interval=Duration::from_millis(config.interval_ms.clamp(1200,3000));
         self.restock_ball_id=config.ball_id;
         self.restock_enabled=config.restock_enabled;
         self.refresh_readiness();
@@ -619,7 +619,7 @@ mod tests {
     ]}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":2,"sucesso":true}]}"#,at);
     assert_eq!(g.status.catches,0);
-    let cmd=g.next_capture(at).unwrap();
+    let cmd=g.next_capture(at+Duration::from_millis(1200)).unwrap();
     assert_eq!(cmd.wire()["slot"],1);
     g.ingest(r#"{"t":"batalha","ev":[
         {"k":"bola","slot":1,"ballId":4,"sucesso":true},
