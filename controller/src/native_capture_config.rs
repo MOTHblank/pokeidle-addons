@@ -27,10 +27,10 @@ pub struct CatchSettings {
 impl Default for CatchSettings {
     fn default() -> Self {
         Self {
-            enabled:false, priorities:vec!["beast".into(),"ultra".into()], interval_ms:100,
+            enabled:false, priorities:vec!["ultra".into()], interval_ms:100,
             reserves:BALLS.iter().map(|key|(key.to_string(),0)).collect(),
             restock_enabled:false,gold_reserve:0,
-            ball_id:1,potion_id:200,revive_id:0,
+            ball_id:4,potion_id:200,revive_id:0,
             ball_at:50,ball_to:500,potion_at:10,potion_to:50,
             revive_at:1,revive_to:5
         }
@@ -127,6 +127,23 @@ impl CatchSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ultra_ball_is_default_without_overwriting_saved_preferences() {
+        let defaults=CatchSettings::default();
+        assert_eq!(defaults.priorities,vec!["ultra".to_owned()]);
+        assert_eq!(defaults.ball_id,4);
+        let partial=CatchSettings::from_value(Some(&json!({
+            "enabled":true,"restock":{"enabled":true}
+        })));
+        assert_eq!(partial.priorities,vec!["ultra".to_owned()]);
+        assert_eq!(partial.ball_id,4);
+        let customized=CatchSettings::from_value(Some(&json!({
+            "enabled":true,"ballPriority":["beast","great"],
+            "restock":{"selectedBallId":2}
+        })));
+        assert_eq!(customized.priorities,vec!["beast".to_owned(),"great".to_owned()]);
+        assert_eq!(customized.ball_id,2);
+    }
     #[test]
     fn legacy_settings_round_trip_and_reserve_survives() {
         let old=json!({"enabled":true,"ballPriority":["beast","ultra"],

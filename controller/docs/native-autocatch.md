@@ -22,6 +22,26 @@ The UI no longer equates an enabled Auto Catch preference with a worker that can
 
 Slot 0 is accepted as a legitimate server identifier. When the server includes a complete `estado.caidos` list, the worker can recover targets even if an earlier `morte` event omitted its slot. A fresh increased server stock supersedes old provisional local ball debits, avoiding indefinite capture stalls following replenishment while unchanged stale stock still protects configured reserves.
 
+## Ultra Ball defaults and account isolation
+
+Fresh native Auto Catch settings now select only Ultra Ball (catalog ID 4)
+and native restock also selects Ultra Ball (ID 4). Explicit saved choices
+remain unchanged. The optional Auto Catch+ userscript uses the same defaults.
+
+Each account uses its own Game1–Game4 credentials and settings vault entry;
+Game 4 is disabled in the account launcher by default, but has the same native
+capture algorithm once enabled. When Firefox reauthentication refreshes an
+existing native session, the controller preserves that profile's stored native
+Auto Catch/restock preferences instead of replacing them with older browser
+localStorage values. The merged configuration is used immediately and saved
+for subsequent native launches. First-time accounts still import browser
+settings as before.
+
+If one account stops capturing, compare its selected ball stock and reserve,
+Auto Catch blocked reason, restock phase, and death-event slot diagnostics.
+An account-specific failure cannot be definitively attributed to a root cause
+without its authenticated runtime observations.
+
 ## Verification
 
 The Rust tests in `native_gameplay.rs` cover fast two-target scheduling, 1-second unanswered retries, explicit-failure retries, strict reserve behavior during stale stock patches, deduplicated/matched results and expiry/reconnect. `native_capture_config.rs` covers importing/saving interval settings and bounds. Compile and live game verification are required before claiming production-tested parity; neither was executable in the editing environment.

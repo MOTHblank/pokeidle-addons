@@ -64,6 +64,27 @@ impl GameProfile {
     }
 }
 
+#[cfg(test)]
+mod game_profile_isolation_tests {
+    use super::*;
+    #[test]
+    fn four_account_slots_have_distinct_profile_and_native_vault_keys() {
+        let mut names=std::collections::BTreeSet::new();
+        let mut legacy=std::collections::BTreeSet::new();
+        for (index,profile) in GameProfile::ALL.iter().enumerate() {
+            assert_eq!(profile.index(),index);
+            assert_eq!(GameProfile::from_index(index),Some(*profile));
+            assert!(names.insert(profile.name()));
+            assert!(legacy.insert(profile.legacy_name()));
+        }
+        assert_eq!(GameProfile::Game4.name(),"Game4");
+        assert_eq!(GameProfile::Game4.index(),3);
+        // Account 4 starts opt-in, but once enabled it has no different
+        // capture protocol, settings, or restock worker from any other slot.
+        assert!(!GameProfile::Game4.default_enabled());
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AccountConfig {
     pub name: String,
