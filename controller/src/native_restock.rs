@@ -441,10 +441,9 @@ impl Restock {
             self.status.pending = false;
         }
     }
-    /// After a confirmed purchase, a full stock snapshot must arrive before
-    /// another order. If it never arrives, reconnect to obtain a fresh welcome
-    /// rather than waiting forever or guessing the stock to buy again.
-    pub fn needs_inventory_reconnect(&self, now: Instant) -> bool {
+    /// If the stock update is overdue, pause restock without disconnecting the
+    /// game. Only a server-authoritative inventory can authorize the next buy.
+    pub fn inventory_update_overdue(&self, now: Instant) -> bool {
         self.status.enabled && self.awaiting_inventory.is_some() &&
             self.awaiting_inventory_since.is_some_and(|at|
                 now.saturating_duration_since(at)>=ACK_STOCK_TIMEOUT)
@@ -484,10 +483,10 @@ impl Restock {
             return None;
         }
         if self.awaiting_inventory.is_some() {
-            if self.needs_inventory_reconnect(now) {
-                self.status.phase = "Resyncing inventory".into();
+            if self.inventory_update_overdue(now) {
+                self.status.phase = "Waiting for inventory".into();
                 self.status.last_error = Some(
-                    "Purchase confirmed but stock update never arrived; reconnecting".into()
+                    "Purchase confirmed; stock update overdue. Restock paused, game still connected".into()
                 );
             } else {
                 self.status.phase = "Waiting for updated inventory".into();
@@ -685,7 +684,7 @@ mod tests {
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
     }
     #[test]
-    fn stale_inventory_after_confirmed_purchase_requests_safe_reconnect() {
+    fn stale_inventory_after_purchase_pauses_only_restock() {
         let now=Instant::now();
         let mut r=configured();
         r.ingest(r#"{"t":"welcome","catalogoBolas":[
@@ -695,11 +694,14 @@ mod tests {
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "nome":"Ultra Ball","qtd":16,"gasto":160}]}"#,
             now+Duration::from_millis(100));
-        assert!(!r.needs_inventory_reconnect(now+Duration::from_secs(10)));
+        assert!(!r.inventory_update_overdue(now+Duration::from_secs(10)));
         assert!(r.next(now+Duration::from_secs(21),true).is_none());
-        assert!(r.needs_inventory_reconnect(now+Duration::from_secs(21)));
-        r.on_disconnect(now+Duration::from_secs(21));
-        assert!(!r.needs_inventory_reconnect(now+Duration::from_secs(22)));
+        assert!(r.inventory_update_overdue(now+Duration::from_secs(21)));
+        // The purchase is guarded, even if no fresh stock patch is received.
+        // Never reconnect or issue a duplicate buy just to clear this state.
+        assert!(r.inventory_update_overdue(now+Duration::from_secs(22)));
+        assert!(r.next(now+Duration::from_secs(22),true).is_none());
+        assert_eq!(r.status.phase,"Waiting for inventory");
     }
     #[test]
     fn confirmed_ball_receipts_update_restock_stock_before_state_patch() {
