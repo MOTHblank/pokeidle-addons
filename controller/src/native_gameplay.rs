@@ -87,6 +87,7 @@ pub struct Gameplay {
     reserves:BTreeMap<String,u64>,
     interval:Duration,
     restock_ball_id:u64, restock_enabled:bool,
+    last_death_untracked:bool,
     last_throw:Option<Instant>,
     pub server_auto:serde_json::Map<String,Value>,
 }
@@ -100,7 +101,7 @@ impl Gameplay {
             reserves:config.reserves,
             interval:Duration::from_millis(config.interval_ms.max(MIN_THROW_INTERVAL_MS)),
             restock_ball_id:config.ball_id,restock_enabled:config.restock_enabled,
-            last_throw:None,server_auto:serde_json::Map::new()
+            last_death_untracked:false,last_throw:None,server_auto:serde_json::Map::new()
         }
     }
     pub fn configure(&mut self, config:&CatchSettings) {
@@ -120,6 +121,7 @@ impl Gameplay {
         self.last_throw=None;
         self.status.queue=0;
         self.status.deaths_without_slot=0;
+        self.last_death_untracked=false;
         self.status.at_center=true;
         self.status.last_action="Waiting for authenticated game state".into();
         self.refresh_readiness();
@@ -179,6 +181,8 @@ impl Gameplay {
             Some("No capture ball selected")
         } else if self.catalog.is_empty() {
             Some("Waiting for server Poké Ball catalog")
+        } else if self.last_death_untracked && self.corpses.is_empty() {
+            Some("Wild death events lack capture slots; cannot target throws")
         } else if !self.priorities.iter().any(|priority|
             self.catalog.iter().any(|(id,name)|
                 !name.contains("master") && Self::ball_matches(name,priority) &&
@@ -222,6 +226,7 @@ impl Gameplay {
                         entry.get("slot").and_then(Value::as_u64)
                             .or_else(||entry.as_u64())).collect::<Vec<_>>();
                     self.corpses.retain(|corpse|slots.contains(&corpse.slot));
+                    if !slots.is_empty(){ self.last_death_untracked=false; }
                     for slot in slots {
                         if !self.corpses.iter().any(|corpse|corpse.slot==slot) {
                             self.corpses.push_back(Corpse {
@@ -252,12 +257,14 @@ impl Gameplay {
                     match event.get("k").and_then(Value::as_str) {
                         Some("morte") if event.get("quem").and_then(Value::as_str)==Some("selvagem")=>{
                             if let Some(slot)=slot {
+                                self.last_death_untracked=false;
                                 self.corpses.retain(|v|v.slot!=slot);
                                 self.corpses.push_back(Corpse {
                                     slot,at:now,last:None,pending:false,
                                     attempts:0,last_ball:None
                                 });
                             } else {
+                                self.last_death_untracked=true;
                                 self.status.deaths_without_slot=
                                     self.status.deaths_without_slot.saturating_add(1);
                             }
@@ -569,9 +576,11 @@ mod tests {
         "estado":{"noCentro":false,"balls":{"4":8}}}"#,at);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem"}]}"#,at);
     assert_eq!(g.status.deaths_without_slot,1);
+    assert!(!g.status.capture_ready);
     assert!(g.next_capture(at).is_none());
     g.ingest(r#"{"t":"estado","estado":{"caidos":[{"slot":7}]}}"#,
         at+Duration::from_millis(20));
+    assert!(g.status.capture_ready);
     assert_eq!(g.next_capture(at+Duration::from_millis(20)).unwrap().wire()["slot"],7);
  }
  #[test]
