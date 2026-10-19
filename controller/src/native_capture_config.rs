@@ -27,7 +27,7 @@ pub struct CatchSettings {
 impl Default for CatchSettings {
     fn default() -> Self {
         Self {
-            enabled:false, priorities:vec!["ultra".into()], interval_ms:100,
+            enabled:false, priorities:vec!["ultra".into()], interval_ms:1200,
             reserves:BALLS.iter().map(|key|(key.to_string(),0)).collect(),
             restock_enabled:false,gold_reserve:0,
             ball_id:4,potion_id:200,revive_id:0,
@@ -41,7 +41,7 @@ impl CatchSettings {
         let mut cfg=Self::default();
         let Some(v)=value else {return cfg};
         cfg.enabled=v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-        cfg.interval_ms=v.get("intervalMs").and_then(Value::as_u64).unwrap_or(100).clamp(100,3000);
+        cfg.interval_ms=v.get("intervalMs").and_then(Value::as_u64).unwrap_or(1200).clamp(1200,3000);
         if let Some(list)=v.get("ballPriority").and_then(Value::as_array) {
             cfg.priorities=list.iter().filter_map(Value::as_str)
                 .map(str::to_lowercase).filter(|p|BALLS.contains(&p.as_str()))
@@ -73,8 +73,8 @@ impl CatchSettings {
         cfg
     }
     pub fn validate(&self)->Result<(),String> {
-        if !(100..=3000).contains(&self.interval_ms) {
-            return Err("Auto Catch interval must be 100–3000 ms".into());
+        if !(1200..=3000).contains(&self.interval_ms) {
+            return Err("Auto Catch interval must be 1200–3000 ms".into());
         }
         if self.priorities.len()>2 || self.priorities.iter().any(|p|!BALLS.contains(&p.as_str())) ||
             (self.priorities.len()==2 && self.priorities[0]==self.priorities[1]) {
@@ -158,16 +158,16 @@ mod tests {
     #[test]
     fn interval_round_trip_and_bounds() {
         let config=CatchSettings::from_value(Some(&json!({
-            "enabled":true,"intervalMs":150,"ballPriority":["ultra"]
+            "enabled":true,"intervalMs":1500,"ballPriority":["ultra"]
         })));
-        assert_eq!(config.interval_ms,150);
-        assert_eq!(config.as_value()["intervalMs"],150);
+        assert_eq!(config.interval_ms,1500);
+        assert_eq!(config.as_value()["intervalMs"],1500);
         let mut invalid=config.clone();
         invalid.interval_ms=0;
         assert!(invalid.validate().is_err());
         invalid.interval_ms=3001;
         assert!(invalid.validate().is_err());
-        assert_eq!(CatchSettings::from_value(Some(&json!({"intervalMs":20}))).interval_ms,100);
+        assert_eq!(CatchSettings::from_value(Some(&json!({"intervalMs":20}))).interval_ms,1200);
     }
     #[test]
     fn golden_potion_selection_cannot_overwrite_revive_selection() {
