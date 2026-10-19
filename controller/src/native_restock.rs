@@ -302,6 +302,25 @@ impl Restock {
             self.read_catalog("ball", state.get("catalogoBolas"));
             self.read_catalog("item", state.get("itensCompraveis"));
         }
+        // A server Poké Ball result confirms the ball was spent. Native
+        // sessions may receive battle receipts before the next complete
+        // estado.balls snapshot. Keep the restock threshold current even when
+        // that inventory patch is delayed. A future authoritative inventory
+        // object replaces this provisional count, never merges it.
+        if self.known_stock[Self::idx("ball")] {
+            if let Some(events)=frame.get("ev").and_then(Value::as_array) {
+                for event in events {
+                    if event.get("k").and_then(Value::as_str)!=Some("bola") ||
+                        event.get("sucesso").and_then(Value::as_bool).is_none() {
+                        continue;
+                    }
+                    let Some(id)=event.get("ballId").and_then(Value::as_u64) else {continue};
+                    if let Some(count)=self.stock.get_mut(&("ball",id)) {
+                        *count=count.saturating_sub(1);
+                    }
+                }
+            }
+        }
         // Match purchase results by ID, kind, name, or exact quantity+spend.
         // It is common for the server to omit ID or kind in purchase events.
         let mut acknowledged = false;
@@ -644,6 +663,35 @@ mod tests {
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},"items":{"200":1}}}"#, now);
         assert_eq!(r.next(now, true).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
+    }
+    #[test]
+    fn confirmed_ball_receipts_update_restock_stock_before_state_patch() {
+        let now=Instant::now();
+        let mut r=configured();
+        r.ingest(r#"{"t":"welcome","catalogoBolas":[
+            {"id":4,"nome":"Ultra Ball","compravel":true,"preco":10}],
+            "estado":{"gold":10000,"balls":{"4":6},"items":{"200":20}}}"#,now);
+        r.ingest(r#"{"t":"batalha","ev":[
+            {"k":"bola","ballId":4,"sucesso":false},
+            {"k":"bola","ballId":4,"sucesso":true}]}"#,now);
+        let ball=r.rule_statuses().into_iter().find(|x|x.kind=="ball").unwrap();
+        assert_eq!(ball.current,Some(4));
+        assert_eq!(r.next(now,true).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"ball","id":4,"qty":16}));
+        r.ingest(r#"{"t":"estado","estado":{"balls":{"4":20}}}"#,
+            now+Duration::from_secs(1));
+        let ball=r.rule_statuses().into_iter().find(|x|x.kind=="ball").unwrap();
+        assert_eq!(ball.current,Some(20));
+    }
+    #[test]
+    fn a_receipt_without_ball_id_does_not_guess_what_to_restock() {
+        let now=Instant::now();
+        let mut r=configured();
+        r.ingest(r#"{"t":"welcome","estado":{
+            "gold":10000,"balls":{"4":6},"items":{"200":20}}}"#,now);
+        r.ingest(r#"{"t":"batalha","ev":[{"k":"bola","sucesso":true}]}"#,now);
+        let ball=r.rule_statuses().into_iter().find(|x|x.kind=="ball").unwrap();
+        assert_eq!(ball.current,Some(6));
     }
     #[test]
     fn migration_imports_legacy_default_thresholds_without_a_userscript() {
