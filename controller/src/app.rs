@@ -5169,12 +5169,12 @@ mod restock_selection_tests {
 
         let mut latest = CatchSettings::default();
         latest.enabled = true;
-        latest.interval_ms = 200;
+        latest.interval_ms = 800;
         copy_restock_fields(&mut latest, &staged);
         assert_eq!(latest.potion_id, 70070);
         assert_eq!(latest.revive_id, 206);
         assert!(latest.enabled);
-        assert_eq!(latest.interval_ms, 200);
+        assert_eq!(latest.interval_ms, 800);
         assert!(restock_fields_equal(&staged, &latest));
         assert_eq!(CatchSettings::from_value(Some(&latest.as_value())), latest);
 
