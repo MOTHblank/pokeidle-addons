@@ -22,3 +22,4 @@
 *.log
 probe.csv
 /controller/dist
+/dist
