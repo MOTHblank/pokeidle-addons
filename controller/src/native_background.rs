@@ -816,6 +816,16 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         ));
                         break;
                     }
+                    // Manager parity: never replay repeated ball.throw frames
+                    // against an unacknowledged server slot. Refresh this
+                    // account's authenticated inventory and event stream.
+                    if gameplay.needs_capture_resync(Instant::now()) {
+                        crate::logging::warn(&format!(
+                            "{} native capture receipt overdue; reconnecting game socket",
+                            profile.label()
+                        ));
+                        break;
+                    }
                     while let Ok(sample)=forecast_rx.try_recv(){
                         history_recorder.record_forecast(sample);
                     }
