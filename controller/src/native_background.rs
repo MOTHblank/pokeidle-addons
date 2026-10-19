@@ -326,6 +326,11 @@ impl NativeSession {
             pokemon_xp_h,kills_h,calibrated)else{return false};
         self.forecast_tx.try_send(sample).is_ok()
     }
+    /// Lightweight per-account UI read: avoid cloning the entire snapshot each frame.
+    pub fn capture_status(&self)->GameplayStatus {
+        self.snapshot.lock()
+            .map(|state|state.native_capture_status.clone()).unwrap_or_default()
+    }
     pub fn capture_settings(&self)->CatchSettings {
         self.capture_config.lock().map(|g|g.clone()).unwrap_or_default()
     }
