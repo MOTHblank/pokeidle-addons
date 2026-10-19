@@ -334,8 +334,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for server Poké Ball inventory" => "Aguardando inventário de Pokébolas do servidor",
         "Ball-event captures" => "Capturas em eventos de bola",
         "Ball-event failures" => "Falhas em eventos de bola",
-        "Server cooldown: at least 1.2 s between throws, one awaiting reply" =>
-            "Intervalo seguro: pelo menos 1,2 s entre lançamentos, aguardando uma resposta por vez",
+        "Native interval: at least 1.2 s between throws, one awaiting reply" =>
+            "Intervalo nativo: pelo menos 1,2 s entre lançamentos, aguardando uma resposta por vez",
         "Capture server notice" => "Aviso do servidor sobre captura",
         "Capture resyncs" => "Reconexões para recuperar capturas",
         "Only observed ball battle events are counted; built-in VIP captures may not generate them." =>
@@ -5452,7 +5452,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
             .range(1200..=3000).speed(100.0).suffix(" ms"));
-        ui.label(RichText::new(tr("Server cooldown: at least 1.2 s between throws, one awaiting reply"))
+        ui.label(RichText::new(tr("Native interval: at least 1.2 s between throws, one awaiting reply"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
