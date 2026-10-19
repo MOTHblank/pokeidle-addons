@@ -24,6 +24,8 @@ Acompanhe suas caçadas, configure automações e mantenha as sessões funcionan
 3. Entre no **PokéIdle** e na **Twitch** quando solicitado.
 4. Use o **Painel** para acompanhar suas contas, **Automações** para configurar as automações e **Hunt Atlas** para encontrar as melhores caçadas para seus objetivos.
 
+**Navegador recomendado:** [Firefox Developer Edition](https://www.mozilla.org/pt-BR/firefox/developer/).
+
 Para jogar pelo navegador, selecione **Abrir no Firefox** na conta desejada.
 
 ## Desenvolvimento
