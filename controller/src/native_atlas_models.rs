@@ -240,9 +240,11 @@ mod tests {
         assert!((ordinary(20,8.0)-0.0293).abs()<0.00002);
         assert!((ordinary(40,8.0)-0.0235).abs()<0.00002);
         assert!((ordinary(100,8.0)-0.0188).abs()<0.00002);
-        assert!((ordinary(20,4.0)-0.0146).abs()<0.00002);
-        assert!((ordinary(40,4.0)-0.0117).abs()<0.00002);
-        assert!((ordinary(100,4.0)-0.0094).abs()<0.00002);
+        // The 4x ball uses half the 8x efficiency without rounding
+        // the expected probabilities to four decimal places.
+        for stage in [20, 40, 100] {
+            assert!((ordinary(stage,4.0)*2.0-ordinary(stage,8.0)).abs()<1e-12);
+        }
         assert_eq!(capture_chance_for_stage(None,None,4.0,0.0),None);
         assert_eq!(capture_chance_for_stage(None,Some(12000.0),4.0,0.0),
             wiki_capture_chance(12000.0,4.0,0.0));
