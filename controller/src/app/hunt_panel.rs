@@ -2706,20 +2706,20 @@ mod tests {
     #[test]
     fn hunt_status_uses_confirmed_location_not_wild_slot(){
         let mut view=HuntView::default();
-        assert_eq!(atlas_combat_status(&view,false).0,"Offline / stale");
-        assert_eq!(atlas_combat_status(&view,true).0,"No confirmed hunt");
+        assert_eq!(atlas_combat_status(&view,false).0,tr("Offline / stale"));
+        assert_eq!(atlas_combat_status(&view,true).0,tr("No confirmed hunt"));
         view.hunt_slug=Some("scyther-field".into());
-        assert_eq!(atlas_combat_status(&view,true).0,"Hunting");
+        assert_eq!(atlas_combat_status(&view,true).0,tr("Hunting"));
         view.measurements.combat_event_age_secs=Some(10);
-        assert_eq!(atlas_combat_status(&view,true).0,"Hunt active");
+        assert_eq!(atlas_combat_status(&view,true).0,tr("Hunt active"));
         view.wild=Some(native_hunts::WildInfo::default());
-        assert_eq!(atlas_combat_status(&view,true).0,"Hunt active");
+        assert_eq!(atlas_combat_status(&view,true).0,tr("Hunt active"));
         view.wild=None; // Encounter cleared; location and activity persist.
-        assert_eq!(atlas_combat_status(&view,true).0,"Hunt active");
+        assert_eq!(atlas_combat_status(&view,true).0,tr("Hunt active"));
         view.measurements.combat_event_age_secs=Some(181);
-        assert_eq!(atlas_combat_status(&view,true).0,"In hunt · no recent activity");
+        assert_eq!(atlas_combat_status(&view,true).0,tr("In hunt · no recent activity"));
         view.in_center=true;
-        assert_eq!(atlas_combat_status(&view,true).0,"At Pokémon Center");
+        assert_eq!(atlas_combat_status(&view,true).0,tr("At Pokémon Center"));
     }
     #[test]
     fn location_selector_combines_server_and_guide_area_names(){
