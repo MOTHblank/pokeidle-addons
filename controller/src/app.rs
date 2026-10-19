@@ -337,6 +337,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Sem Pokébolas selecionadas acima da reserva; confira reposição e prioridades",
         "Restock buys a ball that Auto Catch does not use" =>
             "A reposição compra uma Pokébola que a captura automática não utiliza",
+        "wild death events without capture slots" =>
+            "eventos de derrota sem slot de captura",
         "Last combat activity" => "Último combate",
         "Gold/h" => "Ouro/h",
         "XP/h" => "XP/h",
@@ -3929,7 +3931,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
             ui.add_space(9.0);
             ui.horizontal_wrapped(|ui| {
                 let capture_status=app.games[index].native.as_ref()
-                    .map(|native|native.snapshot().native_capture_status);
+                    .map(|native|native.capture_status());
                 let capture_ready=capture_status.as_ref()
                     .is_some_and(|status|status.capture_ready);
                 let catch_status = if !fresh || !health.bridge_snapshot_ok {
@@ -4950,6 +4952,12 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 if let Some(warning)=game.native_capture_status.warning.as_deref() {
                     ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
                 }
+            }
+            if game.native_capture_status.deaths_without_slot>0 {
+                ui.label(RichText::new(format!("{} {}",
+                    game.native_capture_status.deaths_without_slot,
+                    tr("wild death events without capture slots")))
+                    .size(10.0).color(WARN));
             }
             if !game.native_capture_status.last_action.is_empty() {
                 ui.label(RichText::new(&game.native_capture_status.last_action)
