@@ -39,7 +39,7 @@ impl GameCommand {
     }
     pub fn is_valid(&self) -> bool {
         match self {
-            Self::Throw{ball_id,slot} => *ball_id>0 && *slot>0,
+            Self::Throw{ball_id,..} => *ball_id>0,
             Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             Self::OutlandTier(tier) => (1..=8).contains(tier),
@@ -68,6 +68,9 @@ pub struct GameplayStatus {
     pub auto_catch:bool, pub queue:usize, pub throws:u64,
     pub catches:u64, pub failures:u64, pub timeout_retries:u64,
     pub at_center:bool, pub error:Option<String>,
+    /// Enabled is a preference; ready requires server inventory and a usable ball.
+    pub capture_ready:bool, pub blocked_reason:Option<String>,
+    pub warning:Option<String>, pub deaths_without_slot:u64,
     pub last_action:String,
     pub used_by_ball:BTreeMap<u64,u64>,
     pub caught_by_ball:BTreeMap<u64,u64>,
@@ -83,6 +86,7 @@ pub struct Gameplay {
     priorities:Vec<String>,
     reserves:BTreeMap<String,u64>,
     interval:Duration,
+    restock_ball_id:u64, restock_enabled:bool,
     last_throw:Option<Instant>,
     pub server_auto:serde_json::Map<String,Value>,
 }
@@ -95,6 +99,7 @@ impl Gameplay {
             catalog:BTreeMap::new(),priorities:config.priorities,
             reserves:config.reserves,
             interval:Duration::from_millis(config.interval_ms.max(MIN_THROW_INTERVAL_MS)),
+            restock_ball_id:config.ball_id,restock_enabled:config.restock_enabled,
             last_throw:None,server_auto:serde_json::Map::new()
         }
     }
@@ -103,6 +108,9 @@ impl Gameplay {
         self.priorities=config.priorities.clone();
         self.reserves=config.reserves.clone();
         self.interval=Duration::from_millis(config.interval_ms.clamp(100,3000));
+        self.restock_ball_id=config.ball_id;
+        self.restock_enabled=config.restock_enabled;
+        self.refresh_readiness();
     }
     pub fn on_disconnect(&mut self) {
         self.corpses.clear();
@@ -113,6 +121,7 @@ impl Gameplay {
         self.status.queue=0;
         self.status.at_center=true;
         self.status.last_action="Waiting for authenticated game state".into();
+        self.refresh_readiness();
     }
     fn expire_corpses(&mut self,now:Instant) {
         self.corpses.retain(|c|
@@ -127,17 +136,56 @@ impl Gameplay {
         // provisional debit; if the patch is stale, retain that reservation.
         for (id,current) in &fresh {
             let was=self.balls.get(id).copied().unwrap_or(*current);
-            let reflected=was.saturating_sub(*current);
-            if let Some(held)=self.unreflected.get_mut(id) {
-                *held=held.saturating_sub(reflected);
+            if *current > was {
+                // A replenished full server stock supersedes reservations from
+                // the previous generation; otherwise Auto Catch can stall forever.
+                self.unreflected.remove(id);
+            } else {
+                let reflected=was.saturating_sub(*current);
+                if let Some(held)=self.unreflected.get_mut(id) {
+                    *held=held.saturating_sub(reflected);
+                }
             }
         }
-        self.unreflected.retain(|_,qty|*qty>0);
+        self.unreflected.retain(|id,qty|*qty>0 && fresh.contains_key(id));
         self.balls=fresh;
     }
     fn available(&self,id:u64)->u64 {
         self.balls.get(&id).copied().unwrap_or(0)
             .saturating_sub(self.unreflected.get(&id).copied().unwrap_or(0))
+    }
+    fn ball_matches(name:&str,priority:&str)->bool {
+        name.contains(priority) || (priority=="poke" && name.contains("poké"))
+    }
+    fn refresh_readiness(&mut self) {
+        let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
+            self.catalog.get(&self.restock_ball_id).is_some_and(|name|
+                !self.priorities.iter().any(|p|Self::ball_matches(name,p)));
+        let mut warnings=Vec::new();
+        if mismatch {
+            warnings.push("Restock buys a ball that Auto Catch does not use".to_owned());
+        }
+        if self.status.deaths_without_slot>0 {
+            warnings.push(format!("{} wild death(s) lacked a capture slot",
+                self.status.deaths_without_slot));
+        }
+        self.status.warning=if warnings.is_empty(){None}else{Some(warnings.join(" · "))};
+        let reason=if !self.status.auto_catch {
+            Some("Auto Catch disabled")
+        } else if self.status.at_center {
+            Some("At center or waiting for authenticated hunt state")
+        } else if self.priorities.is_empty() {
+            Some("No capture ball selected")
+        } else if self.catalog.is_empty() {
+            Some("Waiting for server Poké Ball catalog")
+        } else if !self.priorities.iter().any(|priority|
+            self.catalog.iter().any(|(id,name)|
+                !name.contains("master") && Self::ball_matches(name,priority) &&
+                self.available(*id)>self.reserves.get(priority).copied().unwrap_or(0))) {
+            Some("No selected Poké Balls above reserve; check restock and ball priorities")
+        } else {None};
+        self.status.capture_ready=reason.is_none();
+        self.status.blocked_reason=reason.map(str::to_owned);
     }
     #[cfg(test)]
     pub fn ingest(&mut self, raw:&str, now:Instant) {
@@ -166,6 +214,22 @@ impl Gameplay {
                 }
             }
             if let Some(state)=frame.get("estado") {
+                // A full server corpse list can recover deaths whose receipts
+                // omit a slot. Never guess a target slot.
+                if let Some(downed)=state.get("caidos").and_then(Value::as_array) {
+                    let slots=downed.iter().filter_map(|entry|
+                        entry.get("slot").and_then(Value::as_u64)
+                            .or_else(||entry.as_u64())).collect::<Vec<_>>();
+                    self.corpses.retain(|corpse|slots.contains(&corpse.slot));
+                    for slot in slots {
+                        if !self.corpses.iter().any(|corpse|corpse.slot==slot) {
+                            self.corpses.push_back(Corpse {
+                                slot,at:now,last:None,pending:false,
+                                attempts:0,last_ball:None
+                            });
+                        }
+                    }
+                }
                 if let Some(stock)=state.get("balls").and_then(Value::as_object) {
                     self.refresh_ball_inventory(stock);
                 }
@@ -186,12 +250,15 @@ impl Gameplay {
                     let slot=event.get("slot").and_then(Value::as_u64);
                     match event.get("k").and_then(Value::as_str) {
                         Some("morte") if event.get("quem").and_then(Value::as_str)==Some("selvagem")=>{
-                            if let Some(slot)=slot.filter(|v|*v>0) {
+                            if let Some(slot)=slot {
                                 self.corpses.retain(|v|v.slot!=slot);
                                 self.corpses.push_back(Corpse {
                                     slot,at:now,last:None,pending:false,
                                     attempts:0,last_ball:None
                                 });
+                            } else {
+                                self.status.deaths_without_slot=
+                                    self.status.deaths_without_slot.saturating_add(1);
                             }
                         }
                         Some("bola")=>{
@@ -242,10 +309,12 @@ impl Gameplay {
             }
         }
         self.expire_corpses(now);
+        self.refresh_readiness();
     }
     pub fn next_capture(&mut self,now:Instant)->Option<GameCommand> {
         self.expire_corpses(now);
-        if !self.status.auto_catch || self.status.at_center ||
+        self.refresh_readiness();
+        if !self.status.capture_ready ||
             self.last_throw.is_some_and(|v|now.saturating_duration_since(v)<self.interval) {
             return None;
         }
@@ -255,7 +324,7 @@ impl Gameplay {
         let selected=self.priorities.iter().find_map(|priority|
             self.catalog.iter().find(|(id,name)|
                 !name.contains("master") &&
-                (name.contains(priority) || (priority=="poke" && name.contains("poké"))) &&
+                Self::ball_matches(name,priority) &&
                 self.available(**id)>
                     self.reserves.get(priority).copied().unwrap_or(0))
                 .map(|(id,_)|*id));
@@ -287,6 +356,7 @@ impl Gameplay {
         corpse.attempts=corpse.attempts.saturating_add(1);
         self.last_throw=Some(now);
         *self.unreflected.entry(id).or_default()+=1;
+        self.refresh_readiness();
         self.status.throws=self.status.throws.saturating_add(1);
         *self.status.used_by_ball.entry(id).or_default()+=1;
         self.status.last_action=if timed_out {
@@ -312,6 +382,7 @@ impl Gameplay {
             if let Some(v)=self.status.used_by_ball.get_mut(ball_id) {
                 *v=v.saturating_sub(1);
             }
+            self.refresh_readiness();
         }
     }
 }
@@ -476,6 +547,59 @@ mod tests {
     g.on_disconnect();
     assert_eq!(g.status.queue,0);
     assert!(g.next_capture(at+Duration::from_secs(32)).is_none());
+ }
+ #[test]
+ fn zero_is_a_valid_server_capture_slot() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["poke"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":1,"nome":"Poké Ball"}],
+        "estado":{"noCentro":false,"balls":{"1":5}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":0}]}"#,at);
+    assert_eq!(g.next_capture(at).unwrap().wire(),
+        json!({"t":"ball.throw","ballId":1,"slot":0}));
+    assert!(GameCommand::Throw{ball_id:1,slot:0}.is_valid());
+ }
+ #[test]
+ fn full_corpse_state_recovers_death_without_event_slot() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":8}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem"}]}"#,at);
+    assert_eq!(g.status.deaths_without_slot,1);
+    assert!(g.next_capture(at).is_none());
+    g.ingest(r#"{"t":"estado","estado":{"caidos":[{"slot":7}]}}"#,
+        at+Duration::from_millis(20));
+    assert_eq!(g.next_capture(at+Duration::from_millis(20)).unwrap().wire()["slot"],7);
+ }
+ #[test]
+ fn replenished_inventory_releases_old_provisional_spend() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert_eq!(g.available(4),1);
+    g.ingest(r#"{"t":"estado","estado":{"balls":{"4":100}}}"#,
+        at+Duration::from_millis(1));
+    assert_eq!(g.available(4),100);
+    assert!(g.status.capture_ready);
+ }
+ #[test]
+ fn restock_mismatch_and_empty_selected_balls_are_reported() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"],
+        "restock":{"enabled":true,"selectedBallId":1}})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":1,"nome":"Poké Ball"},
+        {"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"1":100,"4":0}}}"#,at);
+    assert!(!g.status.capture_ready);
+    assert!(g.status.blocked_reason.as_deref().unwrap().contains("No selected"));
+    assert!(g.status.warning.as_deref().unwrap().contains("does not use"));
+    g.ingest(r#"{"t":"estado","estado":{"balls":{"1":100,"4":5}}}"#,
+        at+Duration::from_secs(1));
+    assert!(g.status.capture_ready);
  }
  #[test]
  fn native_capture_requires_enabled_mode_catalog_and_server_corpse(){
