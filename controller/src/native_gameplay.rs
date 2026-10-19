@@ -559,12 +559,13 @@ mod tests {
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":22}]}"#,
         at+Duration::from_secs(5));
     assert_eq!(g.next_capture(at+Duration::from_secs(5)).unwrap().wire()["slot"],11);
-    // The second corpse must not consume another unacknowledged ball.
-    assert!(g.next_capture(at+Duration::from_millis(6500)).is_none());
+    assert!(g.next_capture(at+Duration::from_millis(5599)).is_none());
+    // A second distinct AoE corpse is served at 600ms even if the first
+    // receipt is still pending.
+    assert_eq!(g.next_capture(at+Duration::from_millis(5600)).unwrap().wire()["slot"],22);
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":11,
-        "ballId":4,"sucesso":true}]}"#,at+Duration::from_millis(6510));
-    assert!(g.next_capture(at+Duration::from_millis(7709)).is_none());
-    assert_eq!(g.next_capture(at+Duration::from_millis(7710)).unwrap().wire()["slot"],22);
+        "ballId":4,"sucesso":true}]}"#,at+Duration::from_millis(5610));
+    assert!(g.next_capture(at+Duration::from_millis(6200)).is_none());
     assert_eq!(g.status.throws,2);
     assert_eq!(g.status.catches,1);
  }
@@ -580,8 +581,8 @@ mod tests {
     g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":7,"ballId":4,
         "sucesso":false}]}"#,at+Duration::from_millis(20));
     assert_eq!(g.status.failures,1);
-    assert!(g.next_capture(at+Duration::from_millis(1219)).is_none());
-    assert_eq!(g.next_capture(at+Duration::from_millis(1220)).unwrap().wire()["slot"],7);
+    assert!(g.next_capture(at+Duration::from_millis(619)).is_none());
+    assert_eq!(g.next_capture(at+Duration::from_millis(620)).unwrap().wire()["slot"],7);
     assert_eq!(g.status.throws,2);
     assert_eq!(g.status.retries,1);
  }
@@ -626,7 +627,7 @@ mod tests {
     g.ingest(r#"{"t":"estado","estado":{"balls":{"4":2}}}"#,
         at+Duration::from_millis(150));
     assert_eq!(g.available(4),2);
-    assert_eq!(g.unreflected.get(&4).copied().unwrap_or(0),0);
+    assert_eq!(g.pending_for_ball(4),0);
  }
  #[test]
  fn duplicate_and_manual_capture_receipts_are_not_ours() {
@@ -837,6 +838,70 @@ mod tests {
     g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":7}]}"#,at);
     assert_eq!(g.next_capture(at).unwrap().wire(),
         json!({"t":"ball.throw","ballId":4,"slot":7}));
+ }
+ #[test]
+ fn restock_with_10_to_40_balls_keeps_600ms_aoe_cadence_without_debit_deadlock() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({
+        "enabled":true,"intervalMs":600,"ballPriority":["ultra"],
+        "restock":{"enabled":true,"selectedBallId":4,"ballAt":10,"ballTo":40}
+    })));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":10}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":1},
+        {"k":"morte","quem":"selvagem","slot":2},
+        {"k":"morte","quem":"selvagem","slot":3},
+        {"k":"morte","quem":"selvagem","slot":4}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert_eq!(g.next_capture(at+Duration::from_millis(600)).unwrap().wire()["slot"],2);
+    assert_eq!(g.next_capture(at+Duration::from_millis(1200)).unwrap().wire()["slot"],3);
+    assert_eq!(g.status.throws,3);
+    assert_eq!(g.pending_throws(),MAX_PENDING_CAPTURE_THROWS);
+    assert!(g.next_capture(at+Duration::from_millis(1800)).is_none());
+    assert!(g.status.capture_ready);
+    assert_eq!(g.available(4),10); // Pending stock doesn't override restock.
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":1,"ballId":4,
+        "sucesso":false}]}"#,at+Duration::from_millis(1900));
+    assert_eq!(g.pending_throws(),2);
+    assert_eq!(g.available(4),9); // Confirmed spend is real, not a reservation.
+    g.ingest(r#"{"t":"estado","estado":{"balls":{"4":40}}}"#,
+        at+Duration::from_millis(1950));
+    assert_eq!(g.available(4),40);
+    assert_eq!(g.next_capture(at+Duration::from_millis(1950)).unwrap().wire()["slot"],4);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":4,"ballId":4,
+        "sucesso":true}]}"#,at+Duration::from_millis(2000));
+    assert!(g.status.server_catches>0);
+ }
+ #[test]
+ fn unrelated_vip_ball_receipts_do_not_reset_native_send_timer() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":20}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":1},
+        {"k":"morte","quem":"selvagem","slot":2}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"bola","slot":99,"ballId":4,"sucesso":true}]}"#,
+        at+Duration::from_millis(500));
+    assert_eq!(g.status.server_catches,1);
+    assert_eq!(g.status.catches,0);
+    assert_eq!(g.next_capture(at+Duration::from_millis(600)).unwrap().wire()["slot"],2);
+ }
+ #[test]
+ fn expired_pending_target_releases_its_ball_reservation() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,
+        "ballPriority":["ultra"],"reserve":{"ultra":1}})));
+    g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":3}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert_eq!(g.available(4),1);
+    g.expire_corpses(at+Duration::from_secs(30));
+    g.refresh_readiness();
+    assert_eq!(g.pending_for_ball(4),0);
+    assert_eq!(g.status.unreflected_throws,0);
+    assert_eq!(g.available(4),2);
  }
  #[test]
  fn native_capture_requires_enabled_mode_inventory_and_server_corpse(){
