@@ -3968,39 +3968,17 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
 
             ui.add_space(9.0);
             ui.horizontal_wrapped(|ui| {
-                let capture_status=app.games[index].native.as_ref()
-                    .map(|native|native.capture_status());
-                let capture_ready=capture_status.as_ref()
-                    .is_some_and(|status|status.capture_ready);
-                let catch_status = if !fresh || !health.bridge_snapshot_ok {
-                    tr("Not checked")
-                } else if !health.autocatch_on {
-                    tr("Off")
-                } else if capture_ready {
-                    tr("Active")
-                } else {
-                    tr("Waiting")
-                };
+                // Overview reports the saved Auto Catch switch, NOT temporary
+                // throw readiness, inventory state or receipt timing. Those
+                // operational diagnostics belong exclusively to Automation.
+                let catch_enabled = app.games[index].native.as_ref()
+                    .map(|native|native.capture_settings().enabled)
+                    .unwrap_or(health.autocatch_on);
                 automation_badge(
-                    ui, "Auto Catch", catch_status,
-                    fresh && health.bridge_snapshot_ok && health.autocatch_on && capture_ready,
+                    ui, "Auto Catch",
+                    if catch_enabled {tr("Auto Catch on")} else {tr("Auto Catch off")},
+                    catch_enabled,
                 );
-                if fresh && health.bridge_snapshot_ok && health.autocatch_on {
-                    if !capture_ready {
-                        ui.label(RichText::new(format!(
-                            "{}: {}",tr("Restock"),
-                            tr(&health.autocatch_restock)
-                        )).size(10.0).color(DIM));
-                    }
-                    if let Some(capture)=capture_status.as_ref() {
-                        if let Some(reason)=capture.blocked_reason.as_deref() {
-                            ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
-                        }
-                        if let Some(warning)=capture.warning.as_deref() {
-                            ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
-                        }
-                    }
-                }
                 let bonus_confirmed = fresh && health.bridge_snapshot_ok
                     && health.stream_bonus_pct > 0.0 && !health.stream_watching.is_empty();
                 let bonus_text = if bonus_confirmed {
