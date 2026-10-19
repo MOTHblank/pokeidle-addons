@@ -805,6 +805,17 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
+                    // A confirmed shop receipt with no following full
+                    // inventory patch cannot safely be repeated. Refresh the
+                    // authenticated game state with a new welcome instead of
+                    // indefinitely freezing restock on just this account.
+                    if restock.needs_inventory_reconnect(Instant::now()) {
+                        crate::logging::warn(&format!(
+                            "{} native restock inventory confirmation overdue; reconnecting game socket",
+                            profile.label()
+                        ));
+                        break;
+                    }
                     while let Ok(sample)=forecast_rx.try_recv(){
                         history_recorder.record_forecast(sample);
                     }

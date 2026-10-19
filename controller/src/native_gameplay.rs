@@ -66,7 +66,11 @@ struct Corpse {
 #[derive(Clone,Debug,Default)]
 pub struct GameplayStatus {
     pub auto_catch:bool, pub queue:usize, pub throws:u64,
+    /// Confirmed server success receipts. Unlike native-attributed catches,
+    /// these do not require an outstanding corpse slot to still be tracked.
+    pub server_catches:u64, pub server_failures:u64,
     pub catches:u64, pub failures:u64, pub timeout_retries:u64,
+    pub unmatched_successes:u64, pub unreflected_throws:u64,
     pub at_center:bool, pub error:Option<String>,
     /// Enabled is a preference; ready requires server inventory and a usable ball.
     pub capture_ready:bool, pub blocked_reason:Option<String>,
@@ -74,6 +78,7 @@ pub struct GameplayStatus {
     pub last_action:String,
     pub used_by_ball:BTreeMap<u64,u64>,
     pub caught_by_ball:BTreeMap<u64,u64>,
+    pub server_caught_by_ball:BTreeMap<u64,u64>,
 }
 pub struct Gameplay {
     pub status:GameplayStatus,
@@ -152,6 +157,7 @@ impl Gameplay {
         }
         self.unreflected.retain(|id,qty|*qty>0 && fresh.contains_key(id));
         self.balls=fresh;
+        self.refresh_readiness();
     }
     fn available(&self,id:u64)->u64 {
         self.balls.get(&id).copied().unwrap_or(0)
@@ -161,6 +167,8 @@ impl Gameplay {
         name.contains(priority) || (priority=="poke" && name.contains("poké"))
     }
     fn refresh_readiness(&mut self) {
+        self.status.unreflected_throws=self.unreflected.values()
+            .copied().fold(0u64,u64::saturating_add);
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
             self.catalog.get(&self.restock_ball_id).is_some_and(|name|
                 !self.priorities.iter().any(|p|Self::ball_matches(name,p)));
@@ -181,7 +189,15 @@ impl Gameplay {
             self.catalog.iter().any(|(id,name)|
                 !name.contains("master") && Self::ball_matches(name,priority) &&
                 self.available(*id)>self.reserves.get(priority).copied().unwrap_or(0))) {
-            Some("No selected Poké Balls above reserve; check restock and ball priorities")
+            if self.priorities.iter().any(|priority|
+                self.catalog.iter().any(|(id,name)|
+                    !name.contains("master") && Self::ball_matches(name,priority) &&
+                    self.balls.get(id).copied().unwrap_or(0)>
+                        self.reserves.get(priority).copied().unwrap_or(0))) {
+                Some("Selected Poké Balls reserved; waiting for server consumption confirmation")
+            } else {
+                Some("No selected Poké Balls above reserve; check restock and ball priorities")
+            }
         } else {None};
         self.status.capture_ready=reason.is_none();
         self.status.blocked_reason=reason.map(str::to_owned);
@@ -264,24 +280,66 @@ impl Gameplay {
                             }
                         }
                         Some("bola")=>{
-                            if let (Some(slot),Some(success))=
-                                (slot,event.get("sucesso").and_then(Value::as_bool)) {
-                                if let Some(idx)=self.corpses.iter().position(|c|c.slot==slot) {
+                            if let Some(success)=event.get("sucesso").and_then(Value::as_bool) {
+                                // The server receipt is authoritative regardless
+                                // of slot correlation. A slot may have expired
+                                // or the reply may omit it altogether.
+                                let response_ball=event.get("ballId").and_then(Value::as_u64);
+                                if success {
+                                    self.status.server_catches=self.status.server_catches.saturating_add(1);
+                                    if let Some(id)=response_ball {
+                                        *self.status.server_caught_by_ball.entry(id).or_default()+=1;
+                                    }
+                                } else {
+                                    self.status.server_failures=self.status.server_failures.saturating_add(1);
+                                }
+                                // Missing slots may be correlated only when
+                                // exactly one outstanding local throw is eligible.
+                                // Never assign an ambiguous receipt to a corpse.
+                                let matched=slot.and_then(|slot|
+                                    self.corpses.iter().position(|c|c.slot==slot))
+                                    .or_else(||{
+                                        if slot.is_some(){return None}
+                                        let mut eligible=self.corpses.iter().enumerate()
+                                            .filter(|(_,c)|c.pending && c.attempts>0 &&
+                                                response_ball.is_none_or(|id|c.last_ball==Some(id)))
+                                            .map(|(idx,_)|idx);
+                                        let first=eligible.next()?;
+                                        if eligible.next().is_some(){None}else{Some(first)}
+                                    });
+                                if let Some(idx)=matched {
                                     let own=self.corpses[idx].attempts>0;
-                                    let response_ball=event.get("ballId").and_then(Value::as_u64);
+                                    let pending=self.corpses[idx].pending;
                                     let expected_ball=self.corpses[idx].last_ball;
+                                    // Once a tracked server receipt confirms a
+                                    // throw, reflect its consumption without
+                                    // waiting indefinitely for estado.balls.
+                                    // Decrease the reserved spend and observed
+                                    // stock together: available stock does not
+                                    // increase and configured reserves stay safe.
+                                    if own && pending &&
+                                        (response_ball.is_none() || response_ball==expected_ball) {
+                                        if let Some(id)=response_ball.or(expected_ball) {
+                                            if let Some(held)=self.unreflected.get_mut(&id) {
+                                                if *held>0 {
+                                                    *held-=1;
+                                                    if let Some(stock)=self.balls.get_mut(&id) {
+                                                        *stock=stock.saturating_sub(1);
+                                                    }
+                                                }
+                                            }
+                                            self.unreflected.retain(|_,amount|*amount>0);
+                                        }
+                                    }
                                     if success {
                                         if own {
                                             self.status.catches=self.status.catches.saturating_add(1);
-                                            let id=response_ball.or(expected_ball);
-                                            if let Some(id)=id {
+                                            if let Some(id)=response_ball.or(expected_ball) {
                                                 *self.status.caught_by_ball.entry(id).or_default()+=1;
                                             }
                                             self.status.last_action="Pokémon captured".into();
                                             self.status.error=None;
                                         }
-                                        // A manual or server automation success also
-                                        // closes the corpse, but isn't an own capture.
                                         self.corpses.remove(idx);
                                     } else if own && (response_ball.is_none() ||
                                         response_ball==expected_ball) {
@@ -290,10 +348,10 @@ impl Gameplay {
                                             self.status.failures=self.status.failures.saturating_add(1);
                                             self.status.last_action="The Pokémon resisted; retrying".into();
                                         }
-                                        // Keep the original send timestamp. An
-                                        // authoritative failure can be retried at
-                                        // the configured fast cadence.
                                     }
+                                } else if success {
+                                    self.status.unmatched_successes=
+                                        self.status.unmatched_successes.saturating_add(1);
                                 }
                             }
                         }
@@ -592,6 +650,33 @@ mod tests {
     assert!(g.status.capture_ready);
  }
  #[test]
+ fn queue_keeps_growing_but_unconfirmed_stock_blocks_more_sends() {
+    // Reproduces the reported Account 4 symptom: a changing corpse backlog
+    // with a stationary throw counter. The UI must expose the reason instead
+    // of claiming capture is healthy.
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({
+        "enabled":true,"ballPriority":["ultra"],"reserve":{"ultra":0}
+    })));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":2}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":1},
+        {"k":"morte","quem":"selvagem","slot":2}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert!(g.next_capture(at+Duration::from_millis(100)).is_some());
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":3}]}"#,
+        at+Duration::from_millis(200));
+    assert_eq!(g.status.queue,3);
+    assert_eq!(g.status.throws,2);
+    assert_eq!(g.status.unreflected_throws,2);
+    assert!(!g.status.capture_ready);
+    assert!(g.status.blocked_reason.as_deref().unwrap()
+        .contains("reserved"));
+    assert!(g.next_capture(at+Duration::from_millis(200)).is_none());
+ }
+ #[test]
  fn restock_mismatch_and_empty_selected_balls_are_reported() {
     let at=Instant::now();
     let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"],
@@ -605,6 +690,72 @@ mod tests {
     g.ingest(r#"{"t":"estado","estado":{"balls":{"1":100,"4":5}}}"#,
         at+Duration::from_secs(1));
     assert!(g.status.capture_ready);
+ }
+ #[test]
+ fn server_captures_count_without_slot_and_without_native_attribution() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":100}}}"#,at);
+    // This is a valid server success but not a proven native capture.
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":true}]}"#,at);
+    assert_eq!(g.status.server_catches,1);
+    assert_eq!(g.status.catches,0);
+    assert_eq!(g.status.server_caught_by_ball[&4],1);
+    assert_eq!(g.status.unmatched_successes,1);
+ }
+ #[test]
+ fn missing_slot_can_match_exactly_one_native_pending_throw() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":100}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":8}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":true}]}"#,
+        at+Duration::from_millis(30));
+    assert_eq!(g.status.server_catches,1);
+    assert_eq!(g.status.catches,1);
+    assert_eq!(g.status.queue,0);
+    assert_eq!(g.status.unmatched_successes,0);
+ }
+ #[test]
+ fn matching_ball_result_reconciles_local_spend_without_stock_patch() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":3}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":11}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert_eq!(g.available(4),2);
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":11,"ballId":4,
+        "sucesso":false}]}"#,at+Duration::from_millis(15));
+    assert_eq!(g.balls[&4],2);
+    assert_eq!(g.available(4),2);
+    assert_eq!(g.status.unreflected_throws,0);
+    assert_eq!(g.status.server_failures,1);
+    // A delayed authoritative inventory matches the confirmed consumption.
+    g.ingest(r#"{"t":"estado","estado":{"balls":{"4":2}}}"#,
+        at+Duration::from_millis(50));
+    assert_eq!(g.available(4),2);
+ }
+ #[test]
+ fn ambiguous_missing_slot_receipt_counts_server_success_without_guessing_target() {
+    let at=Instant::now();
+    let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"]})));
+    g.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"nome":"Ultra Ball"}],
+        "estado":{"noCentro":false,"balls":{"4":100}}}"#,at);
+    g.ingest(r#"{"t":"batalha","ev":[
+        {"k":"morte","quem":"selvagem","slot":5},
+        {"k":"morte","quem":"selvagem","slot":6}]}"#,at);
+    assert!(g.next_capture(at).is_some());
+    assert!(g.next_capture(at+Duration::from_millis(100)).is_some());
+    g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":true}]}"#,
+        at+Duration::from_millis(110));
+    assert_eq!(g.status.server_catches,1);
+    assert_eq!(g.status.catches,0);
+    assert_eq!(g.status.unmatched_successes,1);
+    assert_eq!(g.status.queue,2);
  }
  #[test]
  fn native_capture_requires_enabled_mode_catalog_and_server_corpse(){
