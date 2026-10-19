@@ -360,6 +360,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Intervalo nativo: 0,6 s, com limite de lançamentos pendentes",
         "Capture server notice" => "Aviso do servidor sobre captura",
         "Capture resyncs" => "Reconexões para recuperar capturas",
+        "Capture timeouts" => "Capturas com resposta atrasada",
         "Only observed ball battle events are counted; built-in VIP captures may not generate them." =>
             "Só são contados eventos de bola observados; capturas automáticas VIP do jogo podem não gerar esses eventos.",
         "No server response to native Poké Ball throw; refreshing game state" =>
@@ -1663,6 +1664,8 @@ enum HuntRanking { TrainerXp, PokemonXp, Gold }
 struct CaptureSavedEvent {
     index:usize,
     config:CatchSettings,
+    // A switch-only save must not discard unsaved editor changes.
+    toggle_only:bool,
     result:Result<(),String>
 }
 pub struct ControllerApp {
@@ -2050,7 +2053,13 @@ impl ControllerApp {
                             continue;
                         }
                     }
-                    self.capture_drafts[event.index]=None;
+                    if event.toggle_only {
+                        if let Some(draft)=self.capture_drafts[event.index].as_mut() {
+                            draft.enabled=event.config.enabled;
+                        }
+                    } else {
+                        self.capture_drafts[event.index]=None;
+                    }
                     if self.restock_drafts[event.index].as_ref()
                         .is_some_and(|draft| restock_fields_equal(draft, &event.config))
                     {
@@ -5023,8 +5032,9 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 {
                     // Use the same confirmed save/event flow as the editor.
                     // A failed vault write must not silently change the switch.
-                    let mut next=app.capture_drafts[index].clone()
-                        .unwrap_or_else(||native.capture_settings());
+                    // Toggle ONLY the current saved switch. Do not silently
+                    // commit unrelated unsaved changes in the editor.
+                    let mut next=native.capture_settings();
                     next.enabled=!capture_enabled;
                     if let Err(error)=next.validate() {
                         app.capture_save_error[index]=Some(error);
@@ -5037,7 +5047,9 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                                 std::panic::AssertUnwindSafe(||
                                     crate::native_auth::set_capture_settings(profile,&next)))
                                 .unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
-                            let _=tx.send(CaptureSavedEvent{index,config:next,result});
+                            let _=tx.send(CaptureSavedEvent{
+                                index,config:next,toggle_only:true,result
+                            });
                         });
                     }
                 }
@@ -5049,8 +5061,8 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             if capture_enabled {
                 let operational=auto_catch_operational_label(capture_connected,capture);
                 ui.label(RichText::new(format!("{}: {}",tr("Capture operation"),tr(operational)))
-                    .size(11.0).color(if capture_connected && capture.capture_ready {GOOD}
-                        else {WARN}));
+                    .size(11.0).color(if capture_connected && capture.capture_ready &&
+                        capture.unreflected_throws==0 {GOOD} else {WARN}));
                 if capture_connected && !capture.capture_ready {
                     if let Some(reason)=capture.blocked_reason.as_deref() {
                         ui.label(RichText::new(tr(reason)).size(10.0).color(MUTED));
@@ -5084,7 +5096,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                 ui.label(RichText::new(format!(
                     "{}: {}{} · {}: {}",
                     tr("Restock"),tr(&restock.phase),ball_detail,
-                    tr("Stock awaiting confirmation"),
+                    tr("Pending capture receipts"),
                     game.native_capture_status.unreflected_throws
                 )).size(10.0).color(
                     if restock.last_error.is_some() {WARN} else {DIM}
@@ -5103,9 +5115,6 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                         "{}: {}",tr("Capture server notice"),notice
                     )).size(10.0).color(WARN));
                 }
-                if let Some(reason)=game.native_capture_status.blocked_reason.as_deref() {
-                    ui.label(RichText::new(tr(reason)).size(10.0).color(WARN));
-                }
                 if let Some(warning)=game.native_capture_status.warning.as_deref() {
                     ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
                 }
@@ -5117,7 +5126,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     .size(10.0).color(WARN));
             }
             if !game.native_capture_status.last_action.is_empty() {
-                ui.label(RichText::new(&game.native_capture_status.last_action)
+                ui.label(RichText::new(tr(&game.native_capture_status.last_action))
                     .size(10.0).color(MUTED));
             }
             if let Some(error)=game.native_capture_status.error.as_deref() {
@@ -5529,7 +5538,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
                     std::panic::AssertUnwindSafe(||
                         crate::native_auth::set_capture_settings(profile, &next)))
                     .unwrap_or_else(|_| Err("Encrypted restock save panicked".into()));
-                let _ = tx.send(CaptureSavedEvent { index, config: next, result });
+                let _ = tx.send(CaptureSavedEvent { index, config: next, toggle_only:false, result });
             });
         }
     }
@@ -5542,7 +5551,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         app.capture_drafts[index]=Some(native.capture_settings());
     }
     let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
-    ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
+    ui.add_enabled(!app.capture_save_busy[index],
+        egui::Checkbox::new(&mut cfg.enabled,tr("Enable Auto Catch")));
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
@@ -5602,7 +5612,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                         std::panic::AssertUnwindSafe(||
                             crate::native_auth::set_capture_settings(profile,&to_save))
                     ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
-                    let _=tx.send(CaptureSavedEvent{index,config:to_save,result});
+                    let _=tx.send(CaptureSavedEvent{index,config:to_save,toggle_only:false,result});
                 });
             }
         }
