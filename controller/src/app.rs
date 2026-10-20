@@ -5198,36 +5198,6 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     tr("Only observed ball battle events are counted; built-in VIP captures may not generate them.")
                 ).size(10.0).color(DIM));
             });
-            ui.add_space(7.0);
-            ui.separator();
-            ui.add_space(6.0);
-            if game.phase == "Online" {
-                ui.add_space(5.0);
-                ui.collapsing(tr("Game actions"), |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.small_button(tr("Pokémon Center")).clicked() {
-                            if let Err(error) = native.send_command(GameCommand::Center) {
-                                crate::logging::warn(&format!(
-                                    "Native center command rejected: {error}"
-                                ));
-                            }
-                        }
-                        if let Some(slug) = game.hunt_slug.as_deref() {
-                            if ui.small_button(tr("Return to hunt"))
-                                .on_hover_text(slug).clicked()
-                            {
-                                if let Err(error) = native.send_command(
-                                    GameCommand::Hunt(slug.to_owned())
-                                ) {
-                                    crate::logging::warn(&format!(
-                                        "Native hunt command rejected: {error}"
-                                    ));
-                                }
-                            }
-                        }
-                    });
-                });
-            }
         });
     ui.add_space(8.0);
     egui::CollapsingHeader::new(tr("Configure Auto Catch"))
