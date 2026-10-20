@@ -143,6 +143,10 @@ pub struct HuntBonuses {
     pub twitch_known: bool,
     pub guild_boost_known: bool,
     pub vip_known: bool,
+    pub kick_xp_pct: f64,
+    pub shop_trainer_xp_multiplier: f64,
+    pub shop_pokemon_xp_multiplier: f64,
+    pub delayed_xp_multiplier: f64,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntMeasurements {
@@ -193,6 +197,8 @@ pub struct HuntView {
     pub field_map: Option<String>,
     pub field_slug: Option<String>,
     pub field_init_timestamp: Option<u64>,
+    /// Real full-wave spawn-distance quantiles, learned only from native field events.
+    pub geo_distances: Arc<BTreeMap<String,Vec<f64>>>,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     /// Stable representative sprite for the confirmed hunt. This is not
@@ -302,6 +308,11 @@ pub struct HuntIntel {
     recent_drops: VecDeque<(String,u64)>,
     pending_at: Option<Instant>,
     pending_outland_at: Option<Instant>,
+    boost_multipliers: BTreeMap<String,f64>,
+    geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
+    geo_wave: Option<(String,Instant,Vec<f64>)>,
+    geo_alive: BTreeMap<u64,bool>,
+    geo_hero: Option<(f64,f64)>,
 }
 impl HuntIntel {
     pub fn new() -> Self {
@@ -316,11 +327,15 @@ impl HuntIntel {
             session_start: Instant::now(),
             recent_drops: VecDeque::new(), pending_at: None,
             pending_outland_at: None,
+            boost_multipliers:BTreeMap::new(),
+            geo_samples:BTreeMap::new(),
+            geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
     }
     /// Produce a cheap UI snapshot: roster data is cloned only on the
     /// 1-second UI publish cadence, never once per high-rate game delta.
     pub fn snapshot(&mut self) -> HuntView {
+        self.finish_geo_wave(Instant::now());
         self.expire_outland_request(Instant::now());
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
         self.view.measurements.last_battle_age_secs=self.last_battle_at
@@ -479,6 +494,87 @@ impl HuntIntel {
         }
     }
     fn num(record: &Value, key: &str) -> Option<u64> { record.get(key).and_then(Value::as_u64) }
+    /// Only full waves count as geometry. Spawn slots, not active wild encounters,
+    /// provide movement distances. No monitoring state or hunt counters are mutated.
+    fn finish_geo_wave(&mut self, now:Instant) {
+        let finished=self.geo_wave.as_ref().is_some_and(|(_,since,_)|
+            now.saturating_duration_since(*since)>=Duration::from_secs(4));
+        if !finished {return}
+        let Some((slug,_,mut distances))=self.geo_wave.take() else{return};
+        let Some(hunt)=self.view.hunts.iter().find(|h|h.slug==slug) else{return};
+        if hunt.level>150 {return} // Per-slot replacement has no full wave.
+        let expected=if hunt.total_spawns>0 {hunt.total_spawns as f64}
+            else {hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>().min(16.0)};
+        let threshold=(expected*0.8).ceil().max(6.0);
+        if (distances.len() as f64)<threshold {return}
+        distances.retain(|d|d.is_finite()&&*d>=0.0);
+        if distances.is_empty(){return}
+        distances.sort_by(f64::total_cmp);
+        let histories=self.geo_samples.entry(slug.clone()).or_default();
+        histories.push(distances);
+        if histories.len()>6 {histories.remove(0);}
+        let all=histories.iter().flat_map(|v|v.iter().copied()).collect();
+        let mut next=(*self.view.geo_distances).clone();
+        next.insert(slug,all);
+        self.view.geo_distances=Arc::new(next);
+    }
+    fn field_geo_init(&mut self, frame:&Value) {
+        self.geo_wave=None;
+        self.geo_alive.clear();
+        self.geo_hero=frame.get("heroi").and_then(|h|
+            Some((h.get("c")?.as_f64()?,h.get("r")?.as_f64()?)));
+        if let Some(mobs)=frame.get("mobs").and_then(Value::as_array){
+            for mob in mobs{
+                if Self::is_field_wild(mob){
+                    if let Some(slot)=Self::num(mob,"s"){
+                        self.geo_alive.insert(slot,mob.get("x").and_then(Value::as_bool)!=Some(true));
+                    }
+                }
+            }
+        }
+    }
+    fn is_field_wild(mob:&Value)->bool {
+        !["bn","cura","tm","depot","tr"].iter()
+            .any(|k|mob.get(*k).is_some_and(|v|!v.is_null()&&v!=false))
+            && mob.get("ti").is_none()
+    }
+    fn field_geo_delta(&mut self, frame:&Value, now:Instant) {
+        self.finish_geo_wave(now);
+        if let Some(hero)=frame.get("heroi") {
+            if let (Some(c),Some(r))=(hero.get("c").and_then(Value::as_f64),
+                hero.get("r").and_then(Value::as_f64)) {
+                self.geo_hero=Some((c,r));
+            }
+        }
+        let slug=self.view.field_slug.as_deref()
+            .filter(|slug|self.view.hunts.iter().any(|h|h.slug==*slug));
+        for mob in frame.get("mobs").and_then(Value::as_array)
+            .into_iter().flatten(){
+            if !Self::is_field_wild(mob){continue}
+            let Some(slot)=Self::num(mob,"s") else{continue};
+            let dead=mob.get("x").and_then(Value::as_bool)==Some(true);
+            let was_alive=self.geo_alive.insert(slot,!dead);
+            if !dead && was_alive!=Some(true) {
+                if let (Some(slug),Some((hc,hr)),Some(c),Some(r))=(
+                    slug,self.geo_hero,mob.get("c").and_then(Value::as_f64),
+                    mob.get("r").and_then(Value::as_f64)) {
+                    let dist=(c-hc).hypot(r-hr);
+                    if dist.is_finite() && dist<=300.0{
+                        if self.geo_wave.as_ref().is_none_or(|(s,_,_)|s!=slug){
+                            self.geo_wave=Some((slug.to_owned(),now,Vec::new()));
+                        }
+                        if let Some((_,_,samples))=self.geo_wave.as_mut(){
+                            if samples.len()<32 {samples.push((dist*10.0).round()/10.0);}
+                        }
+                    }
+                }
+            }
+        }
+        for slot in frame.get("fora").and_then(Value::as_array)
+            .into_iter().flatten().filter_map(Value::as_u64){
+            self.geo_alive.remove(&slot);
+        }
+    }
     fn set_pokemon(&mut self, value: &Value) {
         let Some(id) = Self::num(value, "id") else { return };
         self.roster_dirty = true;
@@ -698,6 +794,36 @@ impl HuntIntel {
                 self.view.bonuses.twitch_known = true;
             }
         }
+        // Store XP boosts, Kick and catch-up multipliers are independent and
+        // stack with the already tracked VIP, guild, Twitch and event bonuses.
+        let clock=Self::num(state,"servidorAgora")
+            .or(self.view.server_now).unwrap_or(0);
+        let shop=state.get("loja");
+        for (key,dest) in [
+            ("xp",&mut self.view.bonuses.shop_trainer_xp_multiplier),
+            ("pokexp",&mut self.view.bonuses.shop_pokemon_xp_multiplier)
+        ]{
+            let until=shop.and_then(|v|v.get("boosts"))
+                .and_then(|v|v.get(key)).and_then(Value::as_u64).unwrap_or(0);
+            *dest=if clock>0 && until>clock {
+                self.boost_multipliers.get(key).copied().unwrap_or(1.0)
+            }else{1.0};
+        }
+        if let Some(late)=shop.and_then(|v|v.get("atrasados")) {
+            let mult=late.get("mult").and_then(Value::as_f64).unwrap_or(1.0);
+            let target=late.get("alvo").and_then(Value::as_u64).unwrap_or(0);
+            let level=self.view.trainer_level.unwrap_or(0);
+            self.view.bonuses.delayed_xp_multiplier=if mult.is_finite()
+                && mult>1.0 && level>0 && (level as u64)<target {mult}
+                else {1.0};
+        }
+        if let Some(kick)=state.get("kick") {
+            let expiry=kick.get("bonus").and_then(|v|v.get("xp"))
+                .and_then(Value::as_u64).unwrap_or(0);
+            let pct=kick.get("pct").and_then(Value::as_f64).unwrap_or(0.0);
+            self.view.bonuses.kick_xp_pct=if clock>0&&expiry>clock
+                &&pct.is_finite()&&pct>0.0{pct}else{0.0};
+        }
         if let Some(raw)=state.get("guild").and_then(|g|g.get("boostAte")){
             self.view.guild_boost_until=raw.as_u64();
             self.view.bonuses.guild_boost_known=true;
@@ -785,6 +911,13 @@ impl HuntIntel {
     pub fn ingest_value(&mut self, frame: &Value, now: Instant) {
         match frame.get("t").and_then(Value::as_str) {
             Some("welcome") => {
+                if let Some(boosts)=frame.get("tiposBoost").and_then(Value::as_array){
+                    self.boost_multipliers=boosts.iter().filter_map(|row|{
+                        let key=row.get("chave").and_then(Value::as_str)?;
+                        let mult=row.get("mult").and_then(Value::as_f64)?;
+                        (mult.is_finite()&&mult>=1.0).then_some((key.to_owned(),mult))
+                    }).collect();
+                }
                 self.view.outland_catalog=frame.get("catalogoOutlandTiers")
                     .or_else(||frame.get("outlandTiers"))
                     .and_then(parse_outland_catalog);
@@ -815,6 +948,7 @@ impl HuntIntel {
                 if let Some(state) = frame.get("estado") { self.merge_state(state, now); }
             }
             Some("campo.init") => {
+                self.field_geo_init(frame);
                 if let Some(map) = frame.get("mapa").and_then(Value::as_str) {
                     self.view.field_map = Some(map.to_owned());
                 }
@@ -832,6 +966,7 @@ impl HuntIntel {
                     self.view.field_init_timestamp = Some(timestamp);
                 }
             }
+            Some("campo") => self.field_geo_delta(frame,now),
             Some("batalha") => {
                 if let Some(events) = frame.get("ev").and_then(Value::as_array) {
                     for e in events {
