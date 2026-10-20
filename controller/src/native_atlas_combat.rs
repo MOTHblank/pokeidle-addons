@@ -3,7 +3,6 @@
 use super::{damage, effect, Reference, ReferenceSpecies};
 use crate::native_hunts::{HuntEntry, PokemonInfo};
 
-const WILD_HP_MULT: f64 = 12.0 * 5.0;
 const PLAYER_GAP_MS: f64 = 900.0;
 const TACKLE_COOLDOWN_MS: f64 = 2000.0;
 const TACKLE_POWER: f64 = 30.0;
@@ -42,6 +41,14 @@ fn speed_iv(mon: &PokemonInfo) -> f64 {
 fn iv_cooldown_ms(base_ms: f64, mon: &PokemonInfo) -> f64 {
     (base_ms - speed_iv(mon) * 10.0).max(400.0)
 }
+/// Exact shared/cooldown-golpes.mjs skill cooldown: base species Speed
+/// determines up to 7% reduction, scaled by the Pokémon's Speed IV.
+fn skill_cooldown_ms(base_ms:f64, base_speed:f64, mon:&PokemonInfo)->f64 {
+    let potential=if base_speed<=120.0 {
+        base_speed.max(0.0)/20.0
+    }else{6.0+(base_speed-120.0)/40.0}.min(7.0);
+    (base_ms*(1.0-potential*speed_iv(mon)/3200.0)).round()
+}
 fn wild_stat(base: f64, level: u32, iv: f64) -> f64 {
     (base + 2.0 * iv) * level as f64 / 100.0
 }
@@ -61,7 +68,7 @@ fn move_damage(
 }
 fn incoming(
     r: &Reference, foe: &ReferenceSpecies, level: u32,
-    player: &ReferenceSpecies, mon: &PokemonInfo, stats: &[f64; 6],
+    player: &ReferenceSpecies, stats: &[f64; 6],
 ) -> Threat {
     let mut blows = Vec::new();
     for mv in foe.moves.iter().filter(|m| m.min_level <= level) {
@@ -78,7 +85,6 @@ fn incoming(
         blows.iter().sum::<f64>() / blows.len() as f64 * 0.92 + inv * 0.08
     };
     let max = blows.iter().copied().fold(inv, f64::max);
-    let _ = mon; // Keep monster-vs-player computation independent of session changes.
     Threat {
         dps: mean * WILD_DAMAGE_MULT / WILD_ATTACK_GAP_S,
         mean_hit: mean * WILD_DAMAGE_MULT,
@@ -184,7 +190,6 @@ pub(super) fn simulate(
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
     let mut weight=0.0;
     let mut ttk=0.0;
-    let mut incoming_dps=0.0;
     let mut hit_mean=0.0;
     let mut hit_max=0.0f64;
     for encounter in &hunt.species {
@@ -199,7 +204,17 @@ pub(super) fn simulate(
             let def=wild_stat(foe.base[if mv.special {4}else{2}],hunt.level,16.0);
             attacks.push(Attack {
                 damage:move_damage(r,mon.level,mv.power,atk,def,&mv.move_type,&player.types,foe),
-                cooldown_s:iv_cooldown_ms(mv.cooldown,mon)/1000.0,
+                cooldown_s:skill_cooldown_ms(mv.cooldown,player.base[5],mon)/1000.0,
+            });
+        }
+        // Z-Move is a permanent 2800-power SPECIAL TM with a 60s base cooldown.
+        if let Some(element)=mon.tm_elemental.as_deref().filter(|kind|
+            player.types.iter().any(|t|t==*kind)) {
+            attacks.push(Attack{
+                damage:move_damage(r,mon.level,2800.0,stats[3],
+                    wild_stat(foe.base[4],hunt.level,16.0),
+                    element,&player.types,foe),
+                cooldown_s:skill_cooldown_ms(60_000.0,player.base[5],mon)/1000.0,
             });
         }
         let tackle_type=effective_tackle_type(&player.types,foe,r);
@@ -216,10 +231,9 @@ pub(super) fn simulate(
                 .max(24.0)*5.0;
         }
         let time=mean_ttk(&attacks,basic,gap_s,&hp,downtime)?;
-        let threat=incoming(r,foe,hunt.level,player,mon,stats);
+        let threat=incoming(r,foe,hunt.level,player,stats);
         weight+=w;
         ttk+=w*time;
-        incoming_dps+=w*threat.dps;
         hit_mean+=w*threat.mean_hit;
         hit_max=hit_max.max(threat.worst_hit);
     }
@@ -228,7 +242,6 @@ pub(super) fn simulate(
     let coverage=weight/total;
     if coverage<0.6{return None}
     ttk/=weight;
-    incoming_dps/=weight;
     hit_mean/=weight;
     let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
     let mut kills_h=single_target_kills(&d,cycle,hunt);
@@ -281,5 +294,6 @@ mod tests {
         mon.ivs[5]=Some(32);
         assert_eq!(iv_cooldown_ms(900.0,&mon),580.0);
         assert_eq!(iv_cooldown_ms(500.0,&mon),400.0);
+        assert_eq!(skill_cooldown_ms(60_000.0,130.0,&mon),56250.0);
     }
 }
