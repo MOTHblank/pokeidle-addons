@@ -46,7 +46,6 @@ pub(super) struct AtlasFilters {
     collection: AtlasCollection,
     weak_to: std::collections::BTreeSet<String>,
     weakness_match_all: bool,
-    aoe_gain_only: bool,
     sort: AtlasSort,
     ascending: bool,
     /// Per-account Explorer selection; stable across repaint and socket snapshots.
@@ -59,7 +58,7 @@ impl Default for AtlasFilters {
             min_level:0,max_level:0,availability:AtlasAvailability::All,
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
-            aoe_gain_only:false,sort:AtlasSort::Xp,ascending:false,selected_species:None,
+            sort:AtlasSort::Xp,ascending:false,selected_species:None,
         }
     }
 }
@@ -77,8 +76,7 @@ impl AtlasFilters {
         usize::from(self.min_level>0)+usize::from(self.max_level>0)+
         usize::from(self.availability!=AtlasAvailability::All)+
         usize::from(self.collection!=AtlasCollection::All)+
-        usize::from(!self.weak_to.is_empty())+
-        usize::from(self.aoe_gain_only)
+        usize::from(!self.weak_to.is_empty())
     }
 }
 
@@ -318,29 +316,20 @@ fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
         }
 }
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
-enum AtlasAoeCue { NoLead, SingleTarget, Equipped, Accelerated, NoGain }
+enum AtlasAoeCue { NoLead, SingleTarget, Enabled }
 
 fn atlas_aoe_cue(
-    lead:Option<&native_hunts::PokemonInfo>,
-    forecast:Option<&native_atlas::Forecast>,
-)->AtlasAoeCue{
-    match lead {
-        None => AtlasAoeCue::NoLead,
-        Some(mon) if !mon.tm_aoe => AtlasAoeCue::SingleTarget,
-        Some(_) => match forecast {
-            Some(f) if f.aoe => AtlasAoeCue::Accelerated,
-            Some(_) => AtlasAoeCue::NoGain,
-            None => AtlasAoeCue::Equipped,
-        }
-    }
+    lead:Option<&native_hunts::PokemonInfo>,aoe_enabled:bool,
+)->AtlasAoeCue {
+    if lead.is_none(){AtlasAoeCue::NoLead}
+    else if aoe_enabled {AtlasAoeCue::Enabled}
+    else {AtlasAoeCue::SingleTarget}
 }
 fn atlas_aoe_label(cue:AtlasAoeCue)->(&'static str,Color32){
     match cue {
         AtlasAoeCue::NoLead => (tr("Lead unavailable"),MUTED),
-        AtlasAoeCue::SingleTarget => (tr("Single-target · no AoE TM"),MUTED),
-        AtlasAoeCue::Equipped => (tr("TM AoE equipped"),ACCENT),
-        AtlasAoeCue::Accelerated => (tr("TM AoE · faster here"),GOOD),
-        AtlasAoeCue::NoGain => (tr("TM AoE · no speed gain here"),MUTED),
+        AtlasAoeCue::SingleTarget => (tr("AoE disabled · single-target"),MUTED),
+        AtlasAoeCue::Enabled => (tr("AoE enabled · multiple targets"),GOOD),
     }
 }
 /// One consistent, visually prominent combat signal across the recommendations,
@@ -349,8 +338,9 @@ fn draw_atlas_combat_cues(
     ui:&mut egui::Ui,
     lead:Option<&native_hunts::PokemonInfo>,
     forecast:Option<&native_atlas::Forecast>,
+    aoe_enabled:bool,
 ){
-    let (aoe_label,aoe_color)=atlas_aoe_label(atlas_aoe_cue(lead,forecast));
+    let (aoe_label,aoe_color)=atlas_aoe_label(atlas_aoe_cue(lead,aoe_enabled));
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(aoe_label).size(11.0).strong().color(aoe_color));
         if let Some(f)=forecast {
@@ -380,7 +370,7 @@ fn draw_atlas_combat_cues(
     });
 }
 fn draw_atlas_combat_profile(
-    ui:&mut egui::Ui,view:&HuntView,cache:&EstimateCache,
+    ui:&mut egui::Ui,view:&HuntView,cache:&EstimateCache,aoe_enabled:bool,
 ){
     let current=view.hunt_slug.as_deref().and_then(|slug|cache.get(slug));
     egui::Frame::new().fill(PANEL_ALT)
@@ -395,7 +385,7 @@ fn draw_atlas_combat_profile(
                     ui.label(RichText::new(format!("{} · Lv {}",lead.name,lead.level))
                         .size(11.0).strong().color(TEXT));
                 }
-                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current.as_ref());
+                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current.as_ref(),aoe_enabled);
                 if let Some(lead)=view.active_pokemon.as_ref() {
                     if let Some(element)=lead.tm_elemental.as_deref() {
                         ui.label(RichText::new(format!("Z-Move {element}"))
@@ -995,9 +985,6 @@ fn atlas_species_rows(
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
         let hunt_forecast=cache.get(&hunt.slug);
-        if filters.aoe_gain_only && !hunt_forecast.as_ref().is_some_and(|f|f.aoe) {
-            continue;
-        }
         // Only allocate a compact destination label if at least one species
         // actually passes the current filters.
         let mut destination_label:Option<Arc<AtlasHuntLabel>>=None;
@@ -1416,20 +1403,6 @@ fn atlas_filters_panel(
                         .on_hover_text(if f.ascending{tr("Ascending sort")}
                             else{tr("Descending sort")}).clicked(){
                         f.ascending=!f.ascending;*page=0;
-                    }
-                });
-                ui.horizontal_wrapped(|ui|{
-                    let equipped=view.active_pokemon.as_ref().is_some_and(|p|p.tm_aoe);
-                    if !equipped && f.aoe_gain_only {
-                        f.aoe_gain_only=false;*page=0;
-                    }
-                    ui.add_enabled_ui(equipped,|ui|{
-                        if ui.checkbox(&mut f.aoe_gain_only,
-                            tr("Only hunts where AoE increases kills")).changed(){*page=0;}
-                    });
-                    if !equipped {
-                        ui.label(RichText::new(tr("Equip AoE TM to filter by AoE benefit"))
-                            .size(10.0).color(MUTED));
                     }
                 });
                 ui.horizontal_wrapped(|ui|{
