@@ -477,8 +477,9 @@ fn draw_hunt_row(
                         RateSource::Calibrated | RateSource::Experimental => {
                             if let Some(f)=result.forecast.as_ref(){
                                 ui.label(format!(
-                                    "Guide model: {:.0}% modeled species coverage · {:.1}s/kill · {:.0} kills/h.",
-                                    f.coverage*100.0,f.seconds_per_kill,f.kills_h
+                                    "Combat simulation: {:.0}% species coverage · {:.1}s fight · {:.0} kills/h · {:.0} incoming damage/kill.",
+                                    f.coverage*100.0,f.seconds_per_kill,f.kills_h,
+                                    f.incoming_damage_per_kill
                                 ));
                             }
                             ui.label(tr("Combat simulation includes attack cooldowns, spawn timing, AoE and lethal hits. Measured rewards are displayed separately."));
