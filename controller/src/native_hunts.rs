@@ -542,7 +542,7 @@ impl HuntIntel {
     }
     fn is_field_wild(mob:&Value)->bool {
         !["bn","cura","tm","depot","tr"].iter()
-            .any(|k|mob.get(*k).is_some_and(|v|!v.is_null()&&v!=false))
+            .any(|k|mob.get(*k).is_some_and(|v|!v.is_null()&&v.as_bool()!=Some(false)))
             && mob.get("ti").is_none()
     }
     fn field_geo_delta(&mut self, frame:&Value, now:Instant) {
@@ -1249,6 +1249,58 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn live_pokemon_retains_server_stats_and_tms() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"estado","estado":{
+            "pokemons":[{"id":9,"speciesId":6,"level":150,
+                "stats":{"hp":1000,"atk":200,"def":100,"spAtk":300,"spDef":120,"speed":140},
+                "tmAoe":true,"tmElemental":"FIRE"}],
+            "activeId":9
+        }}),now);
+        let lead=intel.view.active_pokemon.as_ref().unwrap();
+        assert!(lead.tm_aoe);
+        assert_eq!(lead.tm_elemental.as_deref(),Some("FIRE"));
+        assert_eq!(lead.battle_stats.unwrap()[3],300.0);
+    }
+    #[test]
+    fn full_wave_geometry_uses_real_spawns_without_changing_hunt_kills() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"welcome",
+            "hunts":[{"slug":"field-a","name":"Field A","nivel":50,
+                "totalSpawns":8,"especies":[{"pokeId":6,"pontos":8}]}]
+        }),now);
+        intel.ingest_value(&json!({"t":"campo.init",
+            "slug":"field-a","heroi":{"c":10,"r":10},"mobs":[]}),now);
+        let mobs=(0..8).map(|i|json!({
+            "s":i+1,"c":10+i,"r":15,"x":false
+        })).collect::<Vec<_>>();
+        intel.ingest_value(&json!({"t":"campo","mobs":mobs}),now);
+        intel.finish_geo_wave(now+Duration::from_secs(5));
+        assert_eq!(intel.view.geo_distances["field-a"].len(),8);
+        assert_eq!(intel.view.session.kills,0);
+        assert_eq!(intel.view.measurements.kills,0);
+    }
+    #[test]
+    fn partial_state_does_not_cancel_active_shop_boost() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"welcome",
+            "tiposBoost":[{"chave":"xp","mult":2.0}],
+            "estado":{"servidorAgora":100,"loja":{"boosts":{"xp":300}}}
+        }),now);
+        assert_eq!(intel.view.bonuses.shop_trainer_xp_multiplier,2.0);
+        intel.ingest_value(&json!({"t":"estado","estado":{
+            "servidorAgora":200,"xp":1000
+        }}),now);
+        assert_eq!(intel.view.bonuses.shop_trainer_xp_multiplier,2.0);
+        intel.ingest_value(&json!({"t":"estado","estado":{
+            "servidorAgora":301
+        }}),now);
+        assert_eq!(intel.view.bonuses.shop_trainer_xp_multiplier,1.0);
+    }
     #[test]
     fn representative_sprite_uses_server_species_then_hunt_name() {
         let mut hunt = HuntEntry {
