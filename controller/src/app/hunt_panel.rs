@@ -202,12 +202,6 @@ impl EstimateCache {
                 values.insert(hunt.slug.clone(),
                     native_atlas::estimate_with_aoe(&snapshot,hunt,&guide,aoe_enabled));
             }
-            for hunt in guide.hunts.iter(){
-                if !values.contains_key(&hunt.slug) {
-                    values.insert(hunt.slug.clone(),
-                        native_atlas::estimate_with_aoe(&snapshot,hunt,&guide,aoe_enabled));
-                }
-            }
             let _=tx.send(values);
         });
     }
@@ -702,54 +696,28 @@ struct AtlasSpeciesRow {
 }
 
 fn atlas_destinations<'a>(
-    view:&'a HuntView, reference:Option<&'a AtlasReference>
-) -> Vec<(&'a native_hunts::HuntEntry,bool)> {
-    // Authentication, not trainer level, is authoritative for actual unlocks.
-    let mut seen=std::collections::BTreeSet::new();
-    let mut result=Vec::new();
-    for hunt in view.hunts.iter() {
-        if seen.insert(hunt.slug.as_str()) {
-            result.push((hunt,true));
-        }
-    }
-    if let Some(reference)=reference {
-        for hunt in &reference.hunts {
-            if seen.insert(hunt.slug.as_str()) {
-                result.push((hunt,false)); // public-guide preview only
-            }
-        }
-    }
-    result
+    view:&'a HuntView,_reference:Option<&'a AtlasReference>
+)->Vec<(&'a native_hunts::HuntEntry,bool)> {
+    // The authenticated server's hunt catalog is the only destination list.
+    view.hunts.iter().map(|hunt|(hunt,true)).collect()
 }
 
-/// Return the combined game type-chart multiplier for an attack type against
-/// a single- or dual-type defender. The guide omits some neutral 1× entries;
-/// absent *entries* are neutral, but absent type definitions are unknown.
-
+/// Neutral multipliers omitted from the bundled upstream chart are 1×.
 fn atlas_locations(
-    view:&HuntView,reference:Option<&AtlasReference>
+    view:&HuntView,_reference:Option<&AtlasReference>
 )->std::collections::BTreeSet<String>{
     let mut locations=std::collections::BTreeSet::new();
-    // Do not deduplicate by slug here: guide and server can supply
-    // complementary area/region names for the same hunt.
-    let guide=reference.into_iter().flat_map(|r|r.hunts.iter());
-    for hunt in view.hunts.iter().chain(guide){
+    for hunt in view.hunts.iter(){
         for name in [&hunt.area,&hunt.region]{
             if !name.trim().is_empty(){locations.insert(name.trim().to_owned());}
         }
     }
     locations
 }
-fn atlas_hunt_matches_location(
-    hunt:&native_hunts::HuntEntry,location:&str,
-    guide_locations:&std::collections::BTreeMap<&str,(&str,&str)>
-)->bool{
-    if location.is_empty(){return true}
-    if hunt.area.trim().eq_ignore_ascii_case(location) ||
-        hunt.region.trim().eq_ignore_ascii_case(location) {return true}
-    guide_locations.get(hunt.slug.as_str()).is_some_and(|(area,region)|
-        area.trim().eq_ignore_ascii_case(location) ||
-        region.trim().eq_ignore_ascii_case(location))
+fn atlas_hunt_matches_location(hunt:&native_hunts::HuntEntry,location:&str)->bool{
+    location.is_empty()||
+    hunt.area.trim().eq_ignore_ascii_case(location)||
+    hunt.region.trim().eq_ignore_ascii_case(location)
 }
 
 fn atlas_type_multiplier(
@@ -1060,16 +1028,13 @@ fn atlas_species_rows(
     let query=filters.search.trim().to_lowercase();
     let known_roster:std::collections::BTreeSet<_>=view.pokemon_roster.iter()
         .filter_map(|mon|mon.species_id).collect();
-    let guide_locations=reference.map(|guide|guide.hunts.iter()
-        .map(|hunt|(hunt.slug.as_str(),(hunt.area.as_str(),hunt.region.as_str())))
-        .collect::<std::collections::BTreeMap<_,_>>()).unwrap_or_default();
     let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow>::new();
     for (hunt,unlocked) in atlas_destinations(view,reference) {
         if filters.availability==AtlasAvailability::Unlocked && !unlocked
             || filters.availability==AtlasAvailability::Locked && unlocked
             || filters.min_level>0 && hunt.level<filters.min_level
             || filters.max_level>0 && hunt.level>filters.max_level
-            || !atlas_hunt_matches_location(hunt,&filters.region,&guide_locations)
+            || !atlas_hunt_matches_location(hunt,&filters.region)
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
@@ -2974,12 +2939,6 @@ mod tests {
                 chance_pct:10.0,minimum:1.0,maximum:3.0,guide_price:5.0,
             }],
         });
-        guide.hunts.push(native_hunts::HuntEntry{
-            slug:"guide-locked".into(),name:"Guide Preview".into(),level:200,
-            area:"Region".into(),
-            species:vec![native_hunts::HuntSpecies{id:1,weight:100.0}],
-            ..Default::default()
-        });
         guide
     }
     #[test]
@@ -3111,52 +3070,41 @@ mod tests {
         assert_eq!(atlas_combat_status(&view,true).0,tr("At Pokémon Center"));
     }
     #[test]
-    fn location_selector_combines_server_and_guide_area_names(){
+    fn location_selector_uses_game_area_and_region(){
         let mut view=HuntView::default();
         view.hunts=Arc::new(vec![native_hunts::HuntEntry{
             slug:"same".into(),area:"Kanto".into(),region:"Viridian".into(),
             ..Default::default()
         }]);
-        let mut guide=AtlasReference::default();
-        guide.hunts.push(native_hunts::HuntEntry{
-            slug:"same".into(),area:"Outland".into(),..Default::default()
-        });
-        let names=atlas_locations(&view,Some(&guide));
-        assert!(["Kanto","Viridian","Outland"].iter().all(|n|names.contains(*n)));
-        let guide_locations=guide.hunts.iter()
-            .map(|h|(h.slug.as_str(),(h.area.as_str(),h.region.as_str())))
-            .collect::<std::collections::BTreeMap<_,_>>();
-        assert!(atlas_hunt_matches_location(&view.hunts[0],"Outland",&guide_locations));
-        assert!(!atlas_hunt_matches_location(&view.hunts[0],"Johto",&guide_locations));
+        let names=atlas_locations(&view,None);
+        assert!(["Kanto","Viridian"].iter().all(|n|names.contains(*n)));
+        assert!(!names.contains("Outland"));
+        assert!(atlas_hunt_matches_location(&view.hunts[0],"Kanto"));
+        assert!(atlas_hunt_matches_location(&view.hunts[0],"Viridian"));
+        assert!(!atlas_hunt_matches_location(&view.hunts[0],"Johto"));
     }
     #[test]
-    fn explorer_preserves_authoritative_unlocked_and_locked_separation(){
-        let guide=guide_fixture();
+    fn explorer_shows_only_authenticated_game_destinations(){
+        let catalog=guide_fixture();
         let mut view=HuntView::default();
         view.hunts=Arc::new(vec![native_hunts::HuntEntry{
             slug:"server-unlocked".into(),name:"Current".into(),level:50,
             species:vec![native_hunts::HuntSpecies{id:1,weight:80.0}],
             ..Default::default()
         }]);
-        let locations=atlas_destinations(&view,Some(&guide));
-        assert_eq!(locations.len(),2);
-        assert!(locations.iter().any(|(hunt,valid)|
-            *valid && hunt.slug=="server-unlocked"));
-        assert!(locations.iter().any(|(hunt,valid)|
-            !*valid && hunt.slug=="guide-locked"));
+        let locations=atlas_destinations(&view,Some(&catalog));
+        assert_eq!(locations.len(),1);
+        assert!(locations.iter().all(|(hunt,unlocked)|
+            *unlocked && hunt.slug=="server-unlocked"));
         let cache=EstimateCache::default();
         let mut filters=AtlasFilters::default();
-        filters.availability=AtlasAvailability::Unlocked;
-        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default())[0]
-            .destinations.len(),1);
-        filters.availability=AtlasAvailability::All;
-        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default())[0]
-            .destinations.len(),2);
-        filters.availability=AtlasAvailability::Locked;
-        assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default())[0]
-            .destinations[0].hunt.slug,"guide-locked");
+        let rows=atlas_species_rows(&view,Some(&catalog),&cache,&filters,
+            &AtlasScenario::default());
+        assert_eq!(rows.len(),1);
+        assert_eq!(rows[0].destinations.len(),1);
         filters.min_level=250;
-        assert!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&AtlasScenario::default()).is_empty());
+        assert!(atlas_species_rows(&view,Some(&catalog),&cache,&filters,
+            &AtlasScenario::default()).is_empty());
     }
     #[test]
     fn multi_weakness_filter_uses_each_multiplier_for_any_and_all_modes(){
