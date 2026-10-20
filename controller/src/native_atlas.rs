@@ -2,6 +2,8 @@
 //! Never execute public JavaScript or send credentials to the reference host.
 //! The account's own welcome.hunts is authoritative for unlocked destinations.
 use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, gross_gold_per_kill};
+#[path = "native_atlas_combat.rs"]
+mod combat;
 use serde_json::Value;
 use std::{collections::{BTreeMap,BTreeSet}, io::Read, sync::OnceLock, time::Duration};
 
@@ -97,6 +99,10 @@ pub struct Forecast {
     pub seconds_per_kill: f64,
     pub coverage: f64,
     pub calibrated: bool,
+    pub deaths_h: f64,
+    pub one_hit: bool,
+    pub aoe: bool,
+    pub engaged: f64,
 }
 
 pub fn parse(script: &str) -> Result<Reference, String> {
@@ -467,6 +473,10 @@ fn damage(level:u32,power:f64,atk:f64,def:f64,stab:bool,multiplier:f64) -> f64 {
 }
 fn pokemon_stats(mon:&PokemonInfo, meta:&ReferenceSpecies)->Option<[f64;6]> {
     if mon.level==0||meta.base.len()<6 {return None}
+    if let Some(stats)=mon.battle_stats.filter(|stats|
+        stats.iter().all(|value|value.is_finite()&&*value>0.0)) {
+        return Some(stats);
+    }
     let quality=mon.quality.filter(|q|*q>0.0)?;
     let potency=mon.potency.filter(|n|(1..=5).contains(n))? as usize;
     let bonus=[0.0,0.05,0.1,0.25,1.0][potency-1];
@@ -480,43 +490,6 @@ fn pokemon_stats(mon:&PokemonInfo, meta:&ReferenceSpecies)->Option<[f64;6]> {
     }
     Some(stats)
 }
-fn dps(mon:&PokemonInfo, mon_meta:&ReferenceSpecies, stats:&[f64;6],
-       wild:&ReferenceSpecies, level:u32, refdata:&Reference)->f64 {
-    let iv_speed=mon.ivs[5].unwrap_or(16).clamp(1,32) as f64;
-    let mut dps=0.0;
-    let mut attacks=0.0;
-    let def=(wild.base[2]+32.0)*level as f64/100.0;
-    let tackle=damage(mon.level,30.0,stats[1],def,
-        mon_meta.types.iter().any(|t|t=="NORMAL"),effect(refdata,"NORMAL",wild));
-    for ability in mon_meta.moves.iter().filter(|m|m.min_level<=mon.level) {
-        let attack=stats[if ability.special {3} else {1}];
-        let defense=(wild.base[if ability.special{4}else{2}]+32.0)*level as f64/100.0;
-        let cooldown=(ability.cooldown-iv_speed*10.0).max(400.0)/1000.0;
-        let stab=mon_meta.types.iter().any(|t|t==&ability.move_type);
-        dps+=damage(mon.level,ability.power,attack,defense,stab,
-            effect(refdata,&ability.move_type,wild))/cooldown;
-        attacks+=1.0/cooldown;
-    }
-    dps+tackle*((1.0-attacks*0.9).max(0.0)/2.0)
-}
-fn raw_kills(hunt:&HuntEntry, mon:&PokemonInfo, meta:&ReferenceSpecies,
-             refdata:&Reference,stats:&[f64;6])->Option<(f64,f64,f64)> {
-    let total=hunt.species.iter().map(|p|p.weight).sum::<f64>();
-    if total<=0.0||hunt.level==0{return None}
-    let mut secs=0.0;let mut coverage=0.0;
-    for spawn in &hunt.species {
-        let Some(wild)=refdata.species.get(&spawn.id) else {continue};
-        let hp=(((wild.base[0]+32.0)*hunt.level as f64/100.0)*60.0).max(24.0);
-        let kill=(hp/dps(mon,meta,stats,wild,hunt.level,refdata).max(1.0)).max(0.9);
-        let ratio=spawn.weight.max(0.0)/total;
-        secs+=ratio*kill;
-        coverage+=ratio;
-    }
-    if coverage<0.6 {return None}
-    let sec=(secs/coverage+2.8).max(0.9);
-    let max_kills=3600.0/if hunt.level<20{4.2}else{3.2};
-    Some(((3600.0/sec).min(max_kills),0.0,coverage))
-}
 fn bonus(view:&HuntView, trainer:bool)->f64 {
     let b=&view.bonuses;
     // Same multiplicative structure as the community calculator, but mark
@@ -529,27 +502,11 @@ fn bonus(view:&HuntView, trainer:bool)->f64 {
 }
 pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<Forecast> {
     let mon=view.active_pokemon.as_ref()?;
-    let mon_meta=reference.species.get(&mon.species_id?)?;
-    let stats=pokemon_stats(mon,mon_meta)?;
-    let (base_kills,_,coverage)=raw_kills(hunt,mon,mon_meta,reference,&stats)?;
-    // The raw stat/move approximation is optimistic for many setups.
-    // Calibrate against the current *observed* hunt's kills/h where possible;
-    // never double-count Pokémon and trainer XP streams.
-    let observed=&view.measurements;
-    let current_prediction=view.hunt_slug.as_deref()
-        .and_then(|slug|view.hunts.iter().find(|h|h.slug==slug))
-        .and_then(|h|raw_kills(h,mon,mon_meta,reference,&stats));
-    let calibration=if observed.seconds>=30.0 && observed.kills>=5
-        && observed.last_battle_age_secs.is_none_or(|age|age<=180) {
-        current_prediction.and_then(|(k,_,_)|
-            if k>0.0 && observed.kills_h.is_finite() && observed.kills_h>0.0 {
-                Some((observed.kills_h/k).clamp(0.001,10.0))
-            } else {None})
-    }else{None};
-    let kills_h=(base_kills*calibration.unwrap_or(1.0))
-        .min(3600.0/if hunt.level<20{4.2}else{3.2});
-    // Guild bonus is reported by estado and, per upstream, also boosts
-    // converted loot Coins. Unreported loot-store/event boosts are not guessed.
+    let player=reference.species.get(&mon.species_id?)?;
+    let stats=pokemon_stats(mon,player)?;
+    let geometry=view.geo_distances.get(&hunt.slug);
+    let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry)?;
+    let kills_h=pace.kills_h;
     let loot_pct=if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0};
     let combat_gold_h=gross_gold_per_kill(hunt.level,loot_pct)*kills_h;
     Some(Forecast {
@@ -561,9 +518,13 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         npc_loot_gold_h:0.0,
         trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
         pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
-        seconds_per_kill:if kills_h>0.0{3600.0/kills_h}else{0.0},
-        coverage,
-        calibrated:calibration.is_some()
+        seconds_per_kill:pace.seconds_per_kill,
+        coverage:pace.coverage,
+        calibrated:false, // model is independent of observed current-hunt pace
+        deaths_h:pace.deaths_h,
+        one_hit:pace.one_hit,
+        aoe:pace.aoe,
+        engaged:pace.engaged,
     })
 }
 #[cfg(test)]
@@ -712,8 +673,8 @@ mod tests {
         data.species.insert(1,base(1,"Attacker"));
         data.species.insert(2,base(2,"Target"));
         let forecast=estimate(&view,&hunt,&data).unwrap();
-        assert!(forecast.calibrated);
-        assert!((forecast.kills_h-600.0).abs()<1.0);
+        assert!(!forecast.calibrated);
+        assert!(forecast.kills_h>0.0 && forecast.kills_h.is_finite());
         assert_eq!(forecast.trainer_xp_h,forecast.pokemon_xp_h);
         view.bonuses.trainer_event_pct=100.0;
         let forecast=estimate(&view,&hunt,&data).unwrap();
