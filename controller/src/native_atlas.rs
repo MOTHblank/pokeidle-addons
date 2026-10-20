@@ -707,6 +707,19 @@ mod tests {
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
     }
     #[test]
+    fn vip_and_timed_guild_xp_boosts_stack_for_both_xp_streams(){
+        let unboosted=HuntView::default();
+        let mut boosted=unboosted.clone();
+        boosted.bonuses.vip_active=true;
+        boosted.bonuses.guild_boost_active=true;
+        for trainer in [true,false] {
+            let base=bonus(&unboosted,trainer);
+            assert!((bonus(&boosted,trainer)/base-1.65).abs()<1e-10);
+        }
+        boosted.bonuses.vip_active=false;
+        assert!((bonus(&boosted,true)-1.1).abs()<1e-10);
+    }
+    #[test]
     fn forecast_economy_channels_sum_to_gross_gold_and_xp_stays_separate(){
         let mut view=HuntView::default();
         view.hunt_slug=Some("hunt-a".into());
