@@ -5,7 +5,9 @@
 //! Linux: Secret Service desktop keyring via secret-tool (stdin for writes).
 //! If an OS vault is unavailable, a one-time Firefox authentication is still
 //! required for that launch; there is deliberately no plaintext fallback.
-use crate::config::{self, GameProfile};
+use crate::config::GameProfile;
+#[cfg(windows)]
+use crate::config;
 use serde_json::Value;
 
 const MAX_BOOTSTRAP_BYTES: usize = 512 * 1024;

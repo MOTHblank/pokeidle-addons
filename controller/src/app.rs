@@ -675,7 +675,6 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "RECONNECTING" => "RECONECTANDO",
         "UPDATES DELAYED" => "ATUALIZAÇÕES ATRASADAS",
         "Last confirmed data; reconnecting" => "Últimos dados recebidos; reconectando",
-        "Capture timeouts" => "Capturas sem resposta",
         "FIREFOX CONNECTION BLOCKED" => "SESSÃO BIDI BLOQUEADA",
         "Restart Firefox to reconnect" => "Reiniciar Firefox para reconectar",
         "Restarts Firefox for this account. The game will disconnect briefly." => "Reinicia o Firefox desta conta. O jogo será desconectado brevemente.",

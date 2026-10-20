@@ -641,7 +641,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .size(11.0).color(MUTED));
         if !configured.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                for slug in &configured {
+                for slug in configured {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(slug).size(11.0).color(TEXT));
                         if ui.small_button("×")
