@@ -117,7 +117,7 @@ pub(super) struct EstimateCache {
     account: Option<usize>,
     catalog_ptr: usize,
     reference_ptr: usize,
-    active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>)>,
+    active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     geo_ptr: usize,
     hunt_slug: Option<String>,
     live: bool,
@@ -152,7 +152,8 @@ impl EstimateCache {
         let geo_ptr=Arc::as_ptr(&view.geo_distances) as usize;
         let active_signature=view.active_pokemon.as_ref().map(|p|
             (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny,
-                p.tm_aoe,p.battle_stats.map(|stats|stats.map(f64::to_bits))));
+                p.tm_aoe,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
+                p.tm_elemental.clone(),p.types.clone()));
         let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
             || self.reference_ptr!=reference_ptr || self.geo_ptr!=geo_ptr || self.live!=live
             || self.active_signature!=active_signature || self.hunt_slug!=view.hunt_slug;
@@ -433,6 +434,11 @@ fn draw_hunt_row(
                         if f.aoe {
                             ui.label(RichText::new(format!("TM AoE · {:.1} engaged",f.engaged))
                                 .size(9.0).color(GOOD));
+                        }
+                        if f.worst_hit_fraction>0.0 {
+                            ui.label(RichText::new(format!(
+                                "Strongest hit: {:.0}% HP",f.worst_hit_fraction*100.0
+                            )).size(9.0).color(if f.one_hit {WARN}else{MUTED}));
                         }
                         if f.deaths_h>0.0 || f.one_hit {
                             ui.label(RichText::new(format!(
