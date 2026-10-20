@@ -1821,7 +1821,7 @@ fn draw_atlas_species(
                             }else if pending{
                                 ui.colored_label(WARN,tr("Switching…"));
                             }else if ui.add_enabled(live,egui::Button::new(
-                                if best.unlocked{tr("Hunt best →")}else{tr("Hunt unlocked →")}
+                                tr("Hunt")
                             )).on_hover_text(format!(
                                 "Switch to {} (server-unlocked)",target.hunt.name
                             )).clicked(){
