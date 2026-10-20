@@ -655,6 +655,14 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         }
                         let payload = command.wire().to_string();
                         if let GameCommand::Hunt(slug) = &command {
+                            // A redundant hunt.select can restart server-side hunt tracking.
+                            // Do not reselect an active hunt just to refresh the UI.
+                            // Leaving the center is different: that transition is intentional.
+                            if !hunt_intel.view.in_center
+                                && hunt_intel.view.hunt_slug.as_deref() == Some(slug.as_str())
+                            {
+                                continue;
+                            }
                             if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
                                 crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
                                 continue;
