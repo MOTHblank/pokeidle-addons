@@ -4,7 +4,7 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Default)]
 pub struct HuntSpecies {
@@ -312,6 +312,7 @@ pub struct HuntIntel {
     pending_outland_at: Option<Instant>,
     boost_multipliers: BTreeMap<String,f64>,
     store_boost_until:BTreeMap<String,u64>,
+    server_clock_seen_at:Option<Instant>,
     kick_xp_until:u64,
     kick_reported_pct:f64,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
@@ -334,6 +335,7 @@ impl HuntIntel {
             pending_outland_at: None,
             boost_multipliers:BTreeMap::new(),
             store_boost_until:BTreeMap::new(),
+            server_clock_seen_at:None,
             kick_xp_until:0,kick_reported_pct:0.0,
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
@@ -342,6 +344,8 @@ impl HuntIntel {
     /// Produce a cheap UI snapshot: roster data is cloned only on the
     /// 1-second UI publish cadence, never once per high-rate game delta.
     pub fn snapshot(&mut self) -> HuntView {
+        // Time-limited XP bonuses may end without another estado frame.
+        self.refresh_timed_xp_bonuses(Instant::now());
         self.finish_geo_wave(Instant::now());
         self.expire_outland_request(Instant::now());
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
@@ -669,6 +673,45 @@ impl HuntIntel {
                 .or_else(|| same.map(|old| old.max_hp)).unwrap_or(0),
         })
     }
+    /// Prefer the game's clock when available, advancing it between packets.
+    /// PokéIdle timestamps are epoch milliseconds; the client clock is a
+    /// fallback when the server omits servidorAgora from its estado packets.
+    fn xp_clock(&self, now:Instant)->u64 {
+        match self.view.server_now {
+            Some(server) => {
+                // Accept epoch seconds as well as milliseconds if a protocol
+                // revision changes the server clock's unit. Boost expiries
+                // remain epoch milliseconds in the game's loja/guild state.
+                let server_ms=if (1_000_000_000..10_000_000_000).contains(&server) {
+                    server.saturating_mul(1_000)
+                } else {server};
+                server_ms.saturating_add(self.server_clock_seen_at
+                    .map(|at|now.saturating_duration_since(at).as_millis() as u64)
+                    .unwrap_or(0))
+            },
+            None => SystemTime::now().duration_since(UNIX_EPOCH)
+                .unwrap_or_default().as_millis() as u64,
+        }
+    }
+    fn refresh_timed_xp_bonuses(&mut self,now:Instant) {
+        let clock=self.xp_clock(now);
+        self.view.bonuses.vip_active=self.view.vip_until
+            .is_some_and(|until|until>clock);
+        self.view.bonuses.guild_boost_active=self.view.guild_boost_until
+            .is_some_and(|until|until>clock);
+        for (key,dest) in [
+            ("xp",&mut self.view.bonuses.shop_trainer_xp_multiplier),
+            ("pokexp",&mut self.view.bonuses.shop_pokemon_xp_multiplier)
+        ] {
+            let until=self.store_boost_until.get(key).copied().unwrap_or(0);
+            *dest=if until>clock {
+                self.boost_multipliers.get(key).copied().unwrap_or(1.0)
+            }else{1.0};
+        }
+        self.view.bonuses.kick_xp_pct=if self.kick_xp_until>clock {
+            self.kick_reported_pct
+        }else{0.0};
+    }
     fn merge_state(&mut self, state: &Value, now: Instant) {
         // Switch hunt before applying its opponent. On a welcome, the same
         // state already includes the new wild encounter; do not clear it after.
@@ -693,7 +736,10 @@ impl HuntIntel {
         }
         if let Some(value) = Self::num(state, "diamonds") { self.view.diamonds = Some(value); }
         if let Some(value) = Self::num(state, "orbs") { self.view.orbs = Some(value); }
-        if let Some(value) = Self::num(state, "servidorAgora") { self.view.server_now = Some(value); }
+        if let Some(value) = Self::num(state, "servidorAgora") {
+            self.view.server_now = Some(value);
+            self.server_clock_seen_at = Some(now);
+        }
         if let Some(value) = Self::num(state, "centroLivreEm") { self.view.center_free_at = Some(value); }
         if let Some(value)=state.get("vipAte") {
             self.view.vip_until=value.as_u64();
@@ -805,8 +851,6 @@ impl HuntIntel {
         }
         // Preserve bonuses from a full welcome across partial estado deltas;
         // absent loja/kick fields are not evidence that a boost ended.
-        let clock=Self::num(state,"servidorAgora")
-            .or(self.view.server_now).unwrap_or(0);
         if let Some(shop)=state.get("loja"){
             if let Some(boosts)=shop.get("boosts").and_then(Value::as_object){
                 for (key,raw) in boosts{
@@ -828,15 +872,6 @@ impl HuntIntel {
                     else {1.0};
             }
         }
-        for (key,dest) in [
-            ("xp",&mut self.view.bonuses.shop_trainer_xp_multiplier),
-            ("pokexp",&mut self.view.bonuses.shop_pokemon_xp_multiplier)
-        ]{
-            let until=self.store_boost_until.get(key).copied().unwrap_or(0);
-            *dest=if clock>0 && until>clock {
-                self.boost_multipliers.get(key).copied().unwrap_or(1.0)
-            }else{1.0};
-        }
         if let Some(kick)=state.get("kick"){
             if let Some(raw)=kick.get("bonus").and_then(|v|v.get("xp")) {
                 self.kick_xp_until=raw.as_u64().unwrap_or(0);
@@ -845,9 +880,7 @@ impl HuntIntel {
                 self.kick_reported_pct=if pct.is_finite(){pct.max(0.0)}else{0.0};
             }
         }
-        self.view.bonuses.kick_xp_pct=if clock>0&&self.kick_xp_until>clock {
-            self.kick_reported_pct
-        } else {0.0};
+        let clock=self.xp_clock(now);
         let loot_expiry=self.store_boost_until.get("loot").copied().unwrap_or(0);
         let store_loot=if clock>0&&loot_expiry>clock {
             (self.boost_multipliers.get("loot").copied().unwrap_or(1.0)-1.0)*100.0
@@ -859,11 +892,7 @@ impl HuntIntel {
             self.view.guild_boost_until=raw.as_u64();
             self.view.bonuses.guild_boost_known=true;
         }
-        let server_now=self.view.server_now.unwrap_or(0);
-        self.view.bonuses.guild_boost_active=server_now>0 &&
-            self.view.guild_boost_until.is_some_and(|until|until>server_now);
-        self.view.bonuses.vip_active=server_now>0 &&
-            self.view.vip_until.is_some_and(|until|until>server_now);
+        self.refresh_timed_xp_bonuses(now);
         self.sample(now);
     }
     fn catalog(&mut self, list: &[Value]) {
@@ -1770,6 +1799,66 @@ mod tests {
         }
         assert_eq!(intel.view.measurements.kills,6);
         assert_eq!(intel.view.measurements.pokemon_xp_h,120.0*3600.0/29.0);
+    }
+    #[test]
+    fn vip_and_guild_boost_are_detected_without_servidor_agora(){
+        let now=Instant::now();
+        let current_ms=SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap().as_millis() as u64;
+        let mut intel=HuntIntel::new();
+        intel.ingest_value(&json!({"t":"welcome",
+            "tiposBoost":[{"chave":"xp","mult":2.0}],
+            "estado":{
+                "loja":{"vipAte":current_ms+60_000,
+                    "boosts":{"xp":current_ms+60_000}},
+                "guild":{"boostAte":current_ms+60_000}
+            }}),now);
+        assert!(intel.view.server_now.is_none());
+        assert!(intel.view.bonuses.vip_known);
+        assert!(intel.view.bonuses.guild_boost_known);
+        assert!(intel.view.bonuses.vip_active);
+        assert!(intel.view.bonuses.guild_boost_active);
+        assert_eq!(intel.view.bonuses.shop_trainer_xp_multiplier,2.0);
+        intel.ingest_value(&json!({"t":"estado","estado":{"xp":42}}),now);
+        assert!(intel.snapshot().bonuses.vip_active);
+        assert!(intel.view.bonuses.guild_boost_active);
+        intel.ingest_value(&json!({"t":"estado","estado":{
+            "loja":{"vipAte":null},"guild":{"boostAte":null}
+        }}),now);
+        assert!(!intel.view.bonuses.vip_active);
+        assert!(!intel.view.bonuses.guild_boost_active);
+    }
+    #[test]
+    fn timed_bonuses_expire_without_new_estado_packets(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest_value(&json!({"t":"welcome",
+            "tiposBoost":[{"chave":"xp","mult":2.0}],
+            "estado":{"servidorAgora":100,"loja":{
+                "vipAte":120,"boosts":{"xp":120}},
+                "guild":{"boostAte":130}
+            }}),now);
+        assert!(intel.view.bonuses.vip_active);
+        assert!(intel.view.bonuses.guild_boost_active);
+        intel.refresh_timed_xp_bonuses(now+Duration::from_secs(40));
+        assert!(!intel.view.bonuses.vip_active);
+        assert!(!intel.view.bonuses.guild_boost_active);
+        assert_eq!(intel.view.bonuses.shop_trainer_xp_multiplier,1.0);
+    }
+    #[test]
+    fn server_clock_in_epoch_seconds_is_normalized_for_vip_expiry(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest_value(&json!({"t":"welcome","estado":{
+            "servidorAgora":1_800_000_000,
+            "loja":{"vipAte":1_800_000_060_000},
+            "guild":{"boostAte":1_800_000_090_000}
+        }}),now);
+        assert!(intel.view.bonuses.vip_active);
+        assert!(intel.view.bonuses.guild_boost_active);
+        intel.refresh_timed_xp_bonuses(now+Duration::from_secs(100));
+        assert!(!intel.view.bonuses.vip_active);
+        assert!(!intel.view.bonuses.guild_boost_active);
     }
     #[test]
     fn bonus_expiration_is_recomputed_when_server_clock_moves(){
