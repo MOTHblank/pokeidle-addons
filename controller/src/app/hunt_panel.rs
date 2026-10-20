@@ -3131,7 +3131,8 @@ mod tests {
             },
         ]);
         let mut guide=guide_fixture();
-        guide.species.insert(2,guide.species[&1].clone());
+        let second_species=guide.species[&1].clone();
+        guide.species.insert(2,second_species);
         let mut estimates=EstimateCache::default();
         estimates.values.insert("aoe".into(),Some(simulated_forecast(300.0,true)));
         estimates.values.insert("single".into(),Some(simulated_forecast(450.0,false)));
