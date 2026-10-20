@@ -513,7 +513,8 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
     let geometry=view.geo_distances.get(&hunt.slug);
     let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry)?;
     let kills_h=pace.kills_h;
-    let loot_pct=if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0};
+    let loot_pct=(if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0})
+        + view.bonuses.extra_loot_pct;
     let combat_gold_h=gross_gold_per_kill(hunt.level,loot_pct)*kills_h;
     Some(Forecast {
         kills_h,
