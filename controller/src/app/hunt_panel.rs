@@ -2901,6 +2901,24 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn center_return_keeps_last_server_confirmed_hunt() {
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry {
+            slug:"kanto-route-1".into(),
+            name:"Route 1".into(),
+            ..Default::default()
+        }]);
+        view.hunt_slug=Some("kanto-route-1".into());
+        view.in_center=true;
+        assert_eq!(atlas_return_hunt_slug(&view),Some("kanto-route-1"));
+        // A public guide entry or stale ID is not an executable destination.
+        view.hunt_slug=Some("guide-only-route".into());
+        assert_eq!(atlas_return_hunt_slug(&view),None);
+        view.hunt_slug=None;
+        assert_eq!(atlas_return_hunt_slug(&view),None);
+    }
     #[test]
     fn weakness_palette_matches_all_eighteen_classic_pokemon_colors() {
         let expected=[
