@@ -2910,6 +2910,8 @@ mod tests {
             [("GRASS".into(),2.0)].into_iter().collect());
         guide.chart.insert("WATER".into(),
             [("GRASS".into(),0.5)].into_iter().collect());
+        // The chart validates each defending type as a known type.
+        guide.chart.insert("GRASS".into(),Default::default());
         let defender=vec!["GRASS".to_owned()];
         let selected=["FIRE".to_owned(),"WATER".to_owned()]
             .into_iter().collect::<std::collections::BTreeSet<_>>();

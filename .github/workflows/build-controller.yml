@@ -10,6 +10,7 @@ on:
     paths:
       - 'controller/Cargo.toml'
       - 'controller/Cargo.lock'
+      - 'controller/src/**'
       - '.github/release-notes/v*.md'
       # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
       - '.github/workflows/build-controller.yml'
@@ -101,6 +102,9 @@ jobs:
   windows:
     name: Windows x86_64
     needs: versao
+    # After publication, source changes are covered by the validation workflow.
+    # Manual dispatch still produces preview binaries when publishing is disabled.
+    if: needs.versao.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     permissions:
       contents: read
@@ -153,6 +157,7 @@ jobs:
   linux:
     name: Linux x86_64 (glibc 2.35)
     needs: versao
+    if: needs.versao.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     permissions:
       contents: read

@@ -459,9 +459,11 @@ impl Gameplay {
         if !self.status.capture_ready || self.last_throw.is_some_and(|last|
             now.saturating_duration_since(last)<self.interval) {return None;}
         let id=self.priorities.iter().find_map(|p|Self::known_ball_id(p))?;
-        // Least recently thrown target first, including previously attempted slots.
+        // Untouched corpses must be targeted before reattempting one thrown at
+        // in the same instant. Then rotate by last throw time, without waiting
+        // for receipts or inventory confirmation.
         let idx=self.corpses.iter().enumerate()
-            .min_by_key(|(_,c)|(c.last.unwrap_or(c.at),c.at))
+            .min_by_key(|(_,c)|(c.last.is_some(),c.last.unwrap_or(c.at),c.at))
             .map(|(idx,_)|idx)?;
         let corpse=&mut self.corpses[idx];
         if corpse.attempts>0 {self.status.retries=self.status.retries.saturating_add(1);}
