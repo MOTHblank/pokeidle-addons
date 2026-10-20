@@ -87,7 +87,7 @@ impl RateSource {
         match self {
             Self::Measured => tr("Measured"),
             Self::Calibrated => tr("Calibrated estimate"),
-            Self::Experimental => tr("Early estimate"),
+            Self::Experimental => tr("Simulated combat"),
             Self::Scenario => tr("Same-pace scenario"),
             Self::Unavailable => tr("Unavailable"),
         }
@@ -117,7 +117,8 @@ pub(super) struct EstimateCache {
     account: Option<usize>,
     catalog_ptr: usize,
     reference_ptr: usize,
-    active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool)>,
+    active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>)>,
+    geo_ptr: usize,
     hunt_slug: Option<String>,
     live: bool,
     refreshed: Option<Instant>,
@@ -148,15 +149,18 @@ impl EstimateCache {
         }
         let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
         let reference_ptr=reference.map_or(0,|r|Arc::as_ptr(r) as usize);
+        let geo_ptr=Arc::as_ptr(&view.geo_distances) as usize;
         let active_signature=view.active_pokemon.as_ref().map(|p|
-            (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny));
+            (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny,
+                p.tm_aoe,p.battle_stats.map(|stats|stats.map(f64::to_bits))));
         let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
-            || self.reference_ptr!=reference_ptr || self.live!=live
+            || self.reference_ptr!=reference_ptr || self.geo_ptr!=geo_ptr || self.live!=live
             || self.active_signature!=active_signature || self.hunt_slug!=view.hunt_slug;
         if changed {
             self.account=Some(account);
             self.catalog_ptr=catalog_ptr;
             self.reference_ptr=reference_ptr;
+            self.geo_ptr=geo_ptr;
             self.active_signature=active_signature;
             self.live=live;
             self.hunt_slug=view.hunt_slug.clone();
@@ -250,8 +254,7 @@ fn ranked_hunts<'a>(
         let forecast_value = forecast.as_ref().and_then(|f|match ranking {
             HuntRanking::TrainerXp => Some(f.trainer_xp_h),
             HuntRanking::PokemonXp => Some(f.pokemon_xp_h),
-            HuntRanking::Gold if f.calibrated => Some(f.gold_h),
-            HuntRanking::Gold => None,
+            HuntRanking::Gold => Some(f.gold_h),
         }).filter(|n|n.is_finite());
 
         // These are *unboosted* counterfactual rates, not predictions.
@@ -263,13 +266,12 @@ fn ranked_hunts<'a>(
                 HuntRanking::Gold => gold,
             }).filter(|n| n.is_finite());
 
-        let (value,source) = if let Some(value) = actual {
+        // Compare every destination under the same simulated conditions.
+        // Current-hunt receipts remain a fallback if catalog details are missing.
+        let (value,source) = if let Some(value) = forecast_value {
+            (Some(value),RateSource::Experimental)
+        } else if let Some(value) = actual {
             (Some(value),RateSource::Measured)
-        } else if let Some(value) = forecast_value {
-            (Some(value),if forecast.as_ref().is_some_and(|f|f.calibrated)
-                && bonuses_complete(view,ranking) {
-                RateSource::Calibrated
-            } else { RateSource::Experimental })
         } else if let Some(value) = scenario {
             (Some(value),RateSource::Scenario)
         } else {
@@ -425,9 +427,19 @@ fn draw_hunt_row(
                         ui.label(RichText::new(format!("{:.0} {}",f.kills_h,tr("kills/h")))
                             .size(13.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
-                            "{:.1}s/kill · {:.0}% coverage",
+                            "{:.1}s fight · {:.0}% coverage",
                             f.seconds_per_kill,f.coverage*100.0
                         )).size(9.0).color(MUTED));
+                        if f.aoe {
+                            ui.label(RichText::new(format!("TM AoE · {:.1} engaged",f.engaged))
+                                .size(9.0).color(GOOD));
+                        }
+                        if f.deaths_h>0.0 || f.one_hit {
+                            ui.label(RichText::new(format!(
+                                "{:.1} deaths/h{}",f.deaths_h,
+                                if f.one_hit {" · lethal hit"} else {""}
+                            )).size(9.0).color(WARN));
+                        }
                     });
                 }
             });
@@ -463,7 +475,7 @@ fn draw_hunt_row(
                                     f.coverage*100.0,f.seconds_per_kill,f.kills_h
                                 ));
                             }
-                            ui.label(tr("Combat estimates are approximate; move timing, captures, pauses and costs may differ."));
+                            ui.label(tr("Combat simulation includes attack cooldowns, spawn timing, AoE and lethal hits. Measured rewards are displayed separately."));
                         }
                         RateSource::Scenario => {
                             ui.label(tr("Uses the currently measured kills/h at another hunt's base level. No bonus, DPS, or travel projection."));
