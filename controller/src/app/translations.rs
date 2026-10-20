@@ -3,8 +3,13 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
-        "Reference data available" => "Dados de referência disponíveis",
-        "Hunt Atlas combines the third-party Guia PokéIdle reference with public game catalogs. If the guide is unavailable, game catalogs are used instead. Only the authenticated game server confirms unlocked hunts." => "O Hunt Atlas combina o Guia PokéIdle, uma referência externa, com os catálogos públicos do jogo. Se o guia estiver indisponível, são usados os catálogos do jogo. Somente o servidor autenticado confirma quais hunts estão liberadas.",
+        "Loading Pokémon data..." => "Carregando dados dos Pokémon...",
+        "Pokémon data unavailable" => "Dados dos Pokémon indisponíveis",
+        "Pokémon data is still loading; some estimates may be unavailable." => "Os dados dos Pokémon ainda estão carregando; algumas estimativas podem não estar disponíveis.",
+        "Type matchup data unavailable" => "Efetividade dos tipos indisponível",
+        "Not enough data for a reliable estimate." => "Dados insuficientes para uma estimativa confiável.",
+        "available hunts" => "hunts disponíveis",
+        "No available hunts." => "Nenhuma hunt disponível.",
         "Travel to the Pokémon Center" => "Ir ao Centro Pokémon",
         "No confirmed hunt to return to" => "Nenhuma hunt confirmada para retornar",
         "COMBAT PROFILE" => "PERFIL DE COMBATE",
