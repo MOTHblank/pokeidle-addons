@@ -103,6 +103,8 @@ pub struct Forecast {
     pub one_hit: bool,
     pub aoe: bool,
     pub engaged: f64,
+    pub worst_hit_fraction:f64,
+    pub incoming_damage_per_kill:f64,
 }
 
 pub fn parse(script: &str) -> Result<Reference, String> {
@@ -529,6 +531,8 @@ pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<For
         one_hit:pace.one_hit,
         aoe:pace.aoe,
         engaged:pace.engaged,
+        worst_hit_fraction:pace.worst_hit_fraction,
+        incoming_damage_per_kill:pace.incoming_damage_per_kill,
     })
 }
 #[cfg(test)]
@@ -645,7 +649,7 @@ mod tests {
         assert!(parse("alert('hi');").is_err());
     }
     #[test]
-    fn forecast_calibrates_kills_in_current_hunt_instead_of_double_counting_xp() {
+    fn forecast_uses_simulation_instead_of_current_hunt_pace_without_double_counting_xp() {
         let mut view=HuntView::default();
         let hunt=HuntEntry{
             slug:"route-a".into(),level:100,
