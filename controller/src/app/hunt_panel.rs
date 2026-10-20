@@ -318,9 +318,22 @@ fn known_percent(value:f64,known:bool)->String {
     if known {format!("+{value:.1}%")} else {"— (not reported)".into()}
 }
 fn known_boost(active:bool,known:bool,multiplier:f64)->String {
-    if !known {"unknown".into()}
-    else if active {format!("on ×{multiplier:.1}")}
-    else {"off".into()}
+    if !known {tr("Unknown").into()}
+    else if active {format!("{} ×{multiplier:.1}",tr("Active"))}
+    else {tr("Off").into()}
+}
+/// The guild-ranking percentage is distinct from the guild's timed XP boost.
+/// Do not present a legitimate +0% ranking as though it were the boost's state.
+fn guild_ranking_bonus(b:&native_hunts::HuntBonuses)->Option<String> {
+    (b.guild_known && b.guild_pct>0.0).then(||
+        format!("{} {}",tr("Guild rank"),known_percent(b.guild_pct,true)))
+}
+/// Report recognized status just like Twitch; measured XP is already boosted.
+fn xp_bonus_summary(b:&native_hunts::HuntBonuses)->String {
+    format!("Twitch {} · {} {} · VIP {}",
+        known_percent(b.twitch_pct,b.twitch_known),
+        tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,1.1),
+        known_boost(b.vip_active,b.vip_known,1.5))
 }
 fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
     if ranking==HuntRanking::Gold {return true;}
@@ -2397,21 +2410,15 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 let b=&hunts.bonuses;
                                 ui.label(RichText::new(tr("BONUSES & LOCATION"))
                                     .size(10.0).strong().color(DIM));
-                                ui.label(format!(
-                                    "Twitch {} · {} {}",
-                                    known_percent(b.twitch_pct,b.twitch_known),tr("Guild"),
-                                    known_percent(b.guild_pct,b.guild_known)
-                                ));
+                                ui.label(xp_bonus_summary(b));
+                                if let Some(ranking)=guild_ranking_bonus(b) {
+                                    ui.label(RichText::new(ranking).size(10.0).color(MUTED));
+                                }
                                 ui.label(format!(
                                     "{} {} · {} {}",
                                     tr("Trainer event"),known_percent(b.trainer_event_pct,b.trainer_event_known),
                                     tr("Pokémon event"),known_percent(b.pokemon_event_pct,b.pokemon_event_known)
                                 ));
-                                ui.label(RichText::new(format!(
-                                    "VIP {} · {} {}",
-                                    known_boost(b.vip_active,b.vip_known,1.5),tr("Guild boost"),
-                                    known_boost(b.guild_boost_active,b.guild_boost_known,1.1)
-                                )).size(10.0).color(MUTED));
                                 ui.separator();
                                 if let Some(h)=current{
                                     ui.label(RichText::new(format!(
@@ -2807,21 +2814,18 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                             });
                     }
                     ui.add_space(7.0);
-                    ui.collapsing(tr("XP bonus assumptions"),|ui|{
+                    ui.collapsing(tr("XP bonuses reported by game"),|ui|{
                         let b=&hunts.bonuses;
+                        ui.label(xp_bonus_summary(b));
+                        if let Some(ranking)=guild_ranking_bonus(b) {
+                            ui.label(ranking);
+                        }
                         ui.label(format!(
-                            "{}: {} · {}: {} · {}: {} · Twitch: {}",
+                            "{}: {} · {}: {}",
                             tr("Trainer event"),known_percent(b.trainer_event_pct,b.trainer_event_known),
-                            tr("Pokémon event"),known_percent(b.pokemon_event_pct,b.pokemon_event_known),
-                            tr("Guild"),known_percent(b.guild_pct,b.guild_known),
-                            known_percent(b.twitch_pct,b.twitch_known)
+                            tr("Pokémon event"),known_percent(b.pokemon_event_pct,b.pokemon_event_known)
                         ));
-                        ui.label(format!(
-                            "VIP: {} · {}: {}",
-                            known_boost(b.vip_active,b.vip_known,1.5),
-                            tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,1.1)
-                        ));
-                        ui.label(tr("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded."));
+                        ui.label(tr("Measured XP/h already includes server-awarded bonuses. Simulated forecasts apply known bonuses once; same-speed comparisons do not add bonuses."));
                     });
                     ui.label(RichText::new(tr("Combat gold/h from confirmed receipts is separate from net wallet changes. Other-hunt gold/h uses comparable full-wave combat simulations; unknown loot boosts are excluded."))
                         .size(10.0).color(MUTED));
@@ -3257,6 +3261,11 @@ mod tests {
         let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","",&cache);
         assert_eq!(rows.iter().find(|r|r.hunt.slug=="a").unwrap().source,RateSource::Measured);
         assert_eq!(rows.iter().find(|r|r.hunt.slug=="b").unwrap().source,RateSource::Scenario);
+        view.bonuses.vip_active=true;
+        view.bonuses.guild_boost_active=true;
+        let boosted=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","",&cache);
+        assert_eq!(boosted.iter().find(|r|r.hunt.slug=="a").unwrap().value,Some(1200.0),
+            "Measured XP already contains buffs and must not be multiplied again");
         let stale=ranked_hunts(&view,None,HuntRanking::TrainerXp,false,"","","",&cache);
         assert!(stale.iter().all(|r|r.value.is_none()));
     }
@@ -3280,6 +3289,31 @@ mod tests {
         cache.refresh(0,&view,None,true,false);
         assert!(cache.refreshed.is_none(),"VIP expiry must invalidate forecasts");
     }
+    #[test]
+    fn timed_guild_and_vip_are_displayed_independently_of_guild_rank(){
+        let mut b=native_hunts::HuntBonuses::default();
+        b.twitch_known=true;
+        b.twitch_pct=20.0;
+        b.guild_known=true;
+        b.guild_pct=0.0; // A zero guild rank does not disable the timed boost.
+        b.guild_boost_known=true;
+        b.guild_boost_active=true;
+        b.vip_known=true;
+        b.vip_active=true;
+        let label=xp_bonus_summary(&b);
+        assert!(label.contains("+20.0%"));
+        assert!(label.contains("×1.1"));
+        assert!(label.contains("×1.5"));
+        assert!(!label.contains("+0.0%"));
+        assert!(guild_ranking_bonus(&b).is_none());
+        b.guild_pct=7.0;
+        assert!(guild_ranking_bonus(&b).unwrap().contains("+7.0%"));
+        b.vip_active=false;
+        assert!(!xp_bonus_summary(&b).contains("×1.5"));
+        b.vip_known=false;
+        assert!(xp_bonus_summary(&b).contains(tr("Unknown")));
+    }
+
     #[test]
     fn partial_bonus_data_downgrades_xp_forecast_confidence(){
         let mut view=HuntView::default();
