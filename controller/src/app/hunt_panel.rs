@@ -1356,6 +1356,122 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
 
 
 
+/// Classic Pokémon type palette, used only for the Atlas type picker.
+const ATLAS_TYPES:[&str;18]=[
+    "NORMAL","FIRE","WATER","ELECTRIC","GRASS","ICE",
+    "FIGHTING","POISON","GROUND","FLYING","PSYCHIC","BUG",
+    "ROCK","GHOST","DRAGON","DARK","STEEL","FAIRY",
+];
+fn atlas_type_color(kind:&str)->Color32{
+    let (r,g,b)=match kind {
+        "NORMAL"=>(0xA8,0xA7,0x7A),
+        "FIRE"=>(0xEE,0x81,0x30),
+        "WATER"=>(0x63,0x90,0xF0),
+        "ELECTRIC"=>(0xF7,0xD0,0x2C),
+        "GRASS"=>(0x7A,0xC7,0x4C),
+        "ICE"=>(0x96,0xD9,0xD6),
+        "FIGHTING"=>(0xC2,0x2E,0x28),
+        "POISON"=>(0xA3,0x3E,0xA1),
+        "GROUND"=>(0xE2,0xBF,0x65),
+        "FLYING"=>(0xA9,0x8F,0xF3),
+        "PSYCHIC"=>(0xF9,0x55,0x87),
+        "BUG"=>(0xA6,0xB9,0x1A),
+        "ROCK"=>(0xB6,0xA1,0x36),
+        "GHOST"=>(0x73,0x57,0x97),
+        "DRAGON"=>(0x6F,0x35,0xFC),
+        "DARK"=>(0x70,0x57,0x46),
+        "STEEL"=>(0xB7,0xB7,0xCE),
+        "FAIRY"=>(0xD6,0x85,0xAD),
+        _=>(0x78,0x80,0x8A),
+    };
+    Color32::from_rgb(r,g,b)
+}
+/// Standard relative-luminance contrast rule: white/black lettering
+/// remains readable even on yellow Electric or pale Ice and Steel tiles.
+fn atlas_type_text_color(background:Color32)->Color32{
+    let linear=|c:u8|{
+        let x=c as f32/255.0;
+        if x<=0.04045{x/12.92}else{((x+0.055)/1.055).powf(2.4)}
+    };
+    let luminance=0.2126*linear(background.r())+
+        0.7152*linear(background.g())+0.0722*linear(background.b());
+    if luminance>0.179{Color32::BLACK}else{Color32::WHITE}
+}
+/// Equal-width grid tiles, with selected checkmark AND outline; selection
+/// never relies on hue alone. At narrow widths columns decrease instead of
+/// wrapping eighteen tiny buttons into an unpredictable line.
+fn draw_atlas_weakness_grid(
+    ui:&mut egui::Ui,f:&mut AtlasFilters,page:&mut usize,
+    reference:Option<&AtlasReference>,account:usize,
+){
+    egui::Frame::new().fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0,BORDER))
+        .corner_radius(8.0).inner_margin(egui::Margin::same(9))
+        .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(tr("Weak to"))
+                    .size(12.0).strong().color(TEXT));
+                if !f.weak_to.is_empty(){
+                    ui.label(RichText::new(format!(
+                        "{} {}",f.weak_to.len(),tr("selected types")
+                    )).size(10.0).color(ACCENT));
+                }
+                ui.add_space(8.0);
+                ui.label(RichText::new(tr("Match"))
+                    .size(10.0).color(DIM));
+                if ui.selectable_value(&mut f.weakness_match_all,false,tr("Any"))
+                    .on_hover_text(tr("Match weaknesses to at least one selected attack type"))
+                    .changed(){*page=0;}
+                if ui.selectable_value(&mut f.weakness_match_all,true,tr("All"))
+                    .on_hover_text(tr("Match weaknesses to every selected attack type"))
+                    .changed(){*page=0;}
+                if !f.weak_to.is_empty() &&
+                    ui.small_button(tr("Clear weaknesses")).clicked(){
+                    f.weak_to.clear();*page=0;
+                }
+            });
+            ui.add_space(5.0);
+            if reference.is_none(){
+                ui.label(RichText::new(tr("Guide type chart unavailable"))
+                    .size(10.0).color(MUTED));
+            }
+            let available=ui.available_width();
+            let gap=6.0f32;
+            let columns=(((available+gap)/(112.0+gap)).floor() as usize).clamp(1,6);
+            let width=((available-gap*(columns.saturating_sub(1) as f32))
+                /columns as f32).max(64.0);
+            egui::Grid::new(("atlas-weak-type-grid",account))
+                .num_columns(columns).spacing([gap,gap])
+                .show(ui,|ui|{
+                    for (i,kind) in ATLAS_TYPES.iter().enumerate(){
+                        let selected=f.weak_to.contains(*kind);
+                        let base=atlas_type_color(kind);
+                        let fill=if selected{base}else{base.gamma_multiply(0.59)};
+                        let fg=atlas_type_text_color(fill);
+                        let response=ui.add_enabled(
+                            reference.is_some(),
+                            egui::Button::new(RichText::new(if selected{
+                                format!("✓ {}",atlas_type_name(kind))
+                            }else{atlas_type_name(kind).to_owned()})
+                                .size(11.0).strong().color(fg))
+                                .fill(fill)
+                                .stroke(Stroke::new(if selected{2.0}else{1.0},
+                                    if selected{Color32::WHITE}
+                                    else{base.gamma_multiply(0.85)}))
+                                .corner_radius(6.0)
+                                .min_size(egui::vec2(width,32.0))
+                        ).on_hover_text(tr("Filter Pokémon by weakness to this attack type"));
+                        if response.clicked(){
+                            if selected{f.weak_to.remove(*kind);}
+                            else{f.weak_to.insert((*kind).to_owned());}
+                            *page=0;
+                        }
+                        if (i+1)%columns==0{ui.end_row();}
+                    }
+                });
+        });
+}
 fn atlas_filters_panel(
     ui:&mut egui::Ui, f:&mut AtlasFilters, page:&mut usize,
     view:&HuntView, reference:Option<&AtlasReference>, account:usize,
@@ -1371,10 +1487,11 @@ fn atlas_filters_panel(
                     f.clear();*page=0;
                 }
             });
-            // All filters remain available without an extra disclosure click.
+            // General filters stay compact; the type grid is always visible
+            // below them instead of being buried in this scrolling area.
             egui::ScrollArea::vertical()
                 .id_salt(("atlas-filter-card",account))
-                .max_height(295.0)
+                .max_height(158.0)
                 .auto_shrink([false,true]).show(ui,|ui|{
                 ui.set_min_width(ui.available_width());
                 ui.horizontal_wrapped(|ui|{
@@ -1490,39 +1607,9 @@ fn atlas_filters_panel(
                             }
                         }).response.on_hover_text(tr("Capture filter uses currently owned Pokémon, not past captures."));
                 });
-                ui.horizontal_wrapped(|ui|{
-                    ui.label(tr("Weak to"));
-                    if let Some(reference)=reference {
-                        let mut kinds=reference.chart.keys().map(String::as_str)
-                            .collect::<Vec<_>>();
-                        kinds.sort_unstable();
-                        for kind in kinds {
-                            let selected=f.weak_to.contains(kind);
-                            if ui.add(egui::Button::new(
-                                RichText::new(atlas_type_name(kind)).size(9.0))
-                                .fill(if selected{ACCENT.linear_multiply(0.25)}else{PANEL_ALT})
-                                .stroke(Stroke::new(1.0,if selected{ACCENT}else{BORDER}))
-                            ).clicked(){
-                                if selected{f.weak_to.remove(kind);}
-                                else{f.weak_to.insert(kind.to_owned());}
-                                *page=0;
-                            }
-                        }
-                    }else{
-                        ui.label(RichText::new(tr("Guide type chart unavailable"))
-                            .size(10.0).color(MUTED));
-                    }
-                });
-                ui.horizontal_wrapped(|ui|{
-                    if ui.checkbox(&mut f.weakness_match_all,
-                        tr("Match all selected weaknesses (otherwise any)")).changed(){
-                        *page=0;
-                    }
-                    if !f.weak_to.is_empty() && ui.small_button(tr("Clear weaknesses")).clicked(){
-                        f.weak_to.clear();*page=0;
-                    }
-                });
             });
+            ui.add_space(8.0);
+            draw_atlas_weakness_grid(ui,f,page,reference,account);
         });
 }
 
