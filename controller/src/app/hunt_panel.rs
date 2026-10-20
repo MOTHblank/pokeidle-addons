@@ -513,6 +513,8 @@ fn draw_hunt_row(
                     }
                 });
             });
+            ui.add_space(6.0);
+            draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),result.forecast.as_ref());
             ui.add_space(5.0);
             ui.horizontal_wrapped(|ui|{
                 draw_rate(ui,rate_label(ranking),result.value,result.source);
@@ -526,21 +528,9 @@ fn draw_hunt_row(
                             "{:.1}s fight · {:.0}% coverage",
                             f.seconds_per_kill,f.coverage*100.0
                         )).size(9.0).color(MUTED));
-                        if f.aoe {
-                            ui.label(RichText::new(format!("TM AoE · {:.1} engaged",f.engaged))
-                                .size(9.0).color(GOOD));
-                        }
-                        if f.worst_hit_fraction>0.0 {
-                            ui.label(RichText::new(format!(
-                                "Strongest hit: {:.0}% HP",f.worst_hit_fraction*100.0
-                            )).size(9.0).color(if f.one_hit {WARN}else{MUTED}));
-                        }
-                        if f.deaths_h>0.0 || f.one_hit {
-                            ui.label(RichText::new(format!(
-                                "{:.1} deaths/h{}",f.deaths_h,
-                                if f.one_hit {" · lethal hit"} else {""}
-                            )).size(9.0).color(WARN));
-                        }
+                        ui.label(RichText::new(format!(
+                            "{}: {:.0}",tr("Incoming damage/kill"),f.incoming_damage_per_kill
+                        )).size(9.0).color(MUTED));
                     });
                 }
             });
@@ -1315,6 +1305,10 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             "Lead: {}",view.active_pokemon.as_ref()
                                 .map(|p|p.name.as_str()).unwrap_or("—")
                         )).size(10.0).color(MUTED));
+                        let current_model=view.hunt_slug.as_deref()
+                            .and_then(|slug|app.hunt_estimate_cache[*index].get(slug));
+                        draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current_model.as_ref());
+                        ui.add_space(5.0);
                         ui.horizontal_wrapped(|ui|{
                             let m=&view.measurements;
                             draw_rate(ui,tr("Trainer XP/h"),
@@ -1343,18 +1337,16 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             .size(10.0).strong().color(DIM));
                         let mut estimates=view.hunts.iter().filter_map(|h|{
                             app.hunt_estimate_cache[*index].get(&h.slug)
-                                .map(|f|(h,f.trainer_xp_h,f.calibrated))
+                                .map(|f|(h,f))
                         }).collect::<Vec<_>>();
-                        estimates.sort_by(|a,b|b.1.total_cmp(&a.1));
-                        for (rank,(hunt,score,calibrated)) in estimates.iter().take(3).enumerate(){
-                            ui.horizontal_wrapped(|ui|{
-                                ui.label(RichText::new(format!(
-                                    "{}. {} · {} {}",
-                                    rank+1,hunt.name,format_hunt_amount(*score),tr("Trainer XP/h")
-                                )).size(11.0).color(TEXT));
-                                ui.label(RichText::new(if *calibrated{tr("calibrated")}
-                                    else{tr("simulated")}).size(9.0).color(MUTED));
-                            });
+                        estimates.sort_by(|a,b|b.1.trainer_xp_h.total_cmp(&a.1.trainer_xp_h));
+                        for (rank,(hunt,forecast)) in estimates.iter().take(3).enumerate(){
+                            ui.label(RichText::new(format!(
+                                "{}. {} · {} {}",
+                                rank+1,hunt.name,format_hunt_amount(forecast.trainer_xp_h),
+                                tr("Trainer XP/h")
+                            )).size(11.0).strong().color(TEXT));
+                            draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),Some(forecast));
                         }
                         if estimates.is_empty(){
                             ui.label(RichText::new(if *live &&
@@ -1593,6 +1585,8 @@ fn draw_atlas_destination(
                 }
             });
             if let Some(f)=dest.forecast.as_ref(){
+                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),Some(f));
+                ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
                         (tr("Trainer XP/h"),Some(f.trainer_xp_h)),
@@ -1683,6 +1677,8 @@ fn draw_atlas_species(
                     ui,reference,&row.types,&filters.weak_to
                 );
                 if let Some(best)=row.destinations.first(){
+                    draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),best.forecast.as_ref());
+                    ui.add_space(5.0);
                     // The highest projected destination may be guide-only. The
                     // action instead uses the highest ranked unlocked location.
                     let available=atlas_first_unlocked(row);
@@ -1776,6 +1772,7 @@ fn draw_atlas_species_selector(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow,
     sort:AtlasSort,selected:bool,
     reference:Option<&AtlasReference>,filters:&AtlasFilters,
+    lead:Option<&native_hunts::PokemonInfo>,
 )->bool{
     let row_frame=egui::Frame::new()
         .fill(if selected{ACCENT.linear_multiply(0.13)}else{PANEL})
@@ -1813,6 +1810,9 @@ fn draw_atlas_species_selector(
                     });
                 });
             });
+            if let Some(top)=row.destinations.first(){
+                draw_atlas_combat_cues(ui,lead,top.forecast.as_ref());
+            }
             draw_atlas_selected_weaknesses(
                 ui,reference,&row.types,&filters.weak_to
             );
@@ -1949,7 +1949,7 @@ fn draw_atlas_explorer(
                                 if draw_atlas_species_selector(
                                     ui,row,filters.sort,
                                     filters.selected_species==Some(row.id),
-                                    reference,filters
+                                    reference,filters,view.active_pokemon.as_ref()
                                 ){
                                     filters.selected_species=Some(row.id);
                                 }
@@ -2135,6 +2135,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         draw_atlas_context(ui,&view,live){
         app.hunt_subtab=HuntSubtab::Current;
     }
+    ui.add_space(6.0);
+    draw_atlas_combat_profile(ui,&view,&app.hunt_estimate_cache[index]);
     ui.add_space(6.0);
     draw_atlas_outland_tier(ui,&view,native,index,live,
         &mut app.hunt_action_error[index]);
@@ -2357,6 +2359,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 .size(12.0).strong().color(TEXT));
             if let Some(forecast)=hunts.hunt_slug.as_deref()
                 .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
+                draw_atlas_combat_cues(ui,hunts.active_pokemon.as_ref(),Some(&forecast));
+                ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
                         (tr("Trainer XP/h"),Some(forecast.trainer_xp_h)),
