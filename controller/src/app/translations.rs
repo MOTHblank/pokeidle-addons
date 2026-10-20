@@ -10,6 +10,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Not enough data for a reliable estimate." => "Dados insuficientes para uma estimativa confiável.",
         "available hunts" => "hunts disponíveis",
         "No available hunts." => "Nenhuma hunt disponível.",
+        "Combat estimate unavailable for current Pokémon." => "Estimativa de combate indisponível para o Pokémon atual.",
         "Travel to the Pokémon Center" => "Ir ao Centro Pokémon",
         "No confirmed hunt to return to" => "Nenhuma hunt confirmada para retornar",
         "COMBAT PROFILE" => "PERFIL DE COMBATE",
