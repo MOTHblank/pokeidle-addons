@@ -184,6 +184,7 @@ fn aoe_kills(d:&[f64], ttk:f64, hunt:&HuntEntry)->f64 {
 pub(super) fn simulate(
     hunt: &HuntEntry, mon: &PokemonInfo, player: &ReferenceSpecies,
     r: &Reference, stats: &[f64;6], distances: Option<&Vec<f64>>,
+    aoe_enabled: bool,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
     let d=spawn_distances(hunt,distances);
@@ -249,12 +250,15 @@ pub(super) fn simulate(
     hit_mean/=weight;
     incoming_dps/=weight;
     let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
-    let mut kills_h=single_target_kills(&d,cycle,hunt);
-    let mut aoe=false;
+    let solo_kills_h=single_target_kills(&d,cycle,hunt);
+    let mut kills_h=solo_kills_h;
+    let aoe=aoe_enabled;
     let mut engaged=1.0;
-    if mon.tm_aoe {
-        let area=aoe_kills(&d,ttk,hunt);
-        if area>kills_h { kills_h=area;aoe=true; }
+    if aoe_enabled {
+        // Only an explicit per-account Atlas checkbox activates this mode.
+        // Never infer it from a live monster's partially populated TM flags.
+        // The AoE scenario is never modeled as slower than single-target.
+        kills_h=kills_h.max(aoe_kills(&d,ttk,hunt));
         engaged=(1.0+kills_h*ttk/3600.0).min(MAX_AOE_ENGAGED);
     }
     let own_hp=mon.max_hp.filter(|hp|*hp>0).map(|hp|hp as f64)
@@ -269,6 +273,12 @@ pub(super) fn simulate(
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
     kills_h*=uptime;
+    if aoe_enabled {
+        let solo_life=if hit_max>=own_hp {own_hp/hit_max.max(1e-6)} else {999.0};
+        let solo_alive_s=solo_life*3600.0/solo_kills_h.max(1e-6);
+        let solo_uptime=solo_alive_s/(solo_alive_s+recovery);
+        kills_h=kills_h.max(solo_kills_h*solo_uptime);
+    }
     if !kills_h.is_finite()||!ttk.is_finite() {return None}
     Some(CombatPace {
         kills_h,seconds_per_kill:ttk,coverage,deaths_h,one_hit,aoe,engaged,
