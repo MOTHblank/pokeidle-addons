@@ -1757,6 +1757,9 @@ pub struct ControllerApp {
     kick_discovered_live: [Vec<String>; 4],
     // Only changes in the native official roster trigger Kick worker reconciliation.
     kick_discovered_roster: [Option<Vec<crate::native_kick::OfficialKickChannel>>; 4],
+    kick_native_stamp: [Option<(Instant,u64)>; 4],
+    kick_sync_checked: [Option<Instant>; 4],
+    kick_display_cache: [kick_panel::KickDisplayCache; 4],
     kick_discovery_available: [bool; 4],
     kick_channel_new: [String; 4],
     kick_saved_login: [bool; 4],
@@ -1892,6 +1895,9 @@ impl ControllerApp {
             }),
             kick_discovered_live: std::array::from_fn(|_| Vec::new()),
             kick_discovered_roster: std::array::from_fn(|_| None),
+            kick_native_stamp: [None; 4],
+            kick_sync_checked: [None; 4],
+            kick_display_cache: std::array::from_fn(|_|kick_panel::KickDisplayCache::default()),
             kick_discovery_available: [false; 4],
             kick_channel_new: std::array::from_fn(|_| String::new()),
             kick_saved_login: std::array::from_fn(|index| {

@@ -61,6 +61,7 @@ pub struct NativeSnapshot {
     pub kick_official_live: Option<Vec<String>>,
     /// Full official roster including offline creators, as reported by the game.
     pub kick_official_roster: Option<Vec<crate::native_kick::OfficialKickChannel>>,
+    pub kick_roster_revision: u64,
     pub error: Option<String>,
 }
 impl Default for NativeSnapshot {
@@ -78,6 +79,7 @@ impl Default for NativeSnapshot {
             pokemon_sale_error: None,
             twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
             kick_official_live: None, kick_official_roster: None,
+            kick_roster_revision: 0,
         }
     }
 }
@@ -172,6 +174,7 @@ type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<Tcp
 
 pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
+    created_at: Instant,
     profile: GameProfile,
     twitch: TwitchSession,
     stop: Arc<AtomicBool>,
@@ -253,7 +256,7 @@ impl NativeSession {
             })
             .map_err(|error| format!("Could not start the PokéIdle connection: {error}"))?;
         Ok(Self {
-            snapshot, profile, twitch, stop, command_tx, auto_catch, restock_enabled,
+            snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
             capture_config, market_rules, market_rules_revision, session_reset, hunts, history, forecast_tx
         })
     }
@@ -352,6 +355,15 @@ impl NativeSession {
     }
     pub fn snapshot(&self) -> NativeSnapshot {
         self.snapshot.lock().map(|status| status.clone()).unwrap_or_default()
+    }
+    /// Allocation-free roster change token. A new session timestamp prevents
+    /// old revision numbers from hiding a freshly authenticated game session.
+    pub fn official_kick_roster_stamp(&self) -> Option<(Instant,u64)> {
+        let state=self.snapshot.lock().ok()?;
+        if state.phase!="Online" ||
+            state.last_received.is_none_or(|at|at.elapsed()>Duration::from_secs(90)) ||
+            state.kick_official_roster.is_none() {return None}
+        Some((self.created_at,state.kick_roster_revision))
     }
     /// Cheap roster read for the Kick workspace. The native game snapshot
     /// may contain much larger automation and market data.
@@ -520,9 +532,12 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
             // Keep PokéIdle's own Kick official roster authoritative. The
             // optional value distinguishes unavailable data from an empty list.
             if let Some(roster) = crate::native_kick::pokeidle_official_roster(state) {
-                status.kick_official_live = Some(roster.iter().filter(|entry| entry.live)
-                    .map(|entry| entry.slug.clone()).collect());
-                status.kick_official_roster = Some(roster);
+                if status.kick_official_roster.as_ref()!=Some(&roster) {
+                    status.kick_official_live=Some(roster.iter().filter(|entry|entry.live)
+                        .map(|entry|entry.slug.clone()).collect());
+                    status.kick_official_roster=Some(roster);
+                    status.kick_roster_revision=status.kick_roster_revision.wrapping_add(1);
+                }
             }
             if let Some(twitch) = state.get("twitch") {
                 if let Some(lives) = twitch.get("lives").and_then(Value::as_array) {
@@ -1057,6 +1072,21 @@ mod tests {
         assert_eq!(observed.battle_kills, 1);
         assert_eq!(observed.captures, 1);
         assert_eq!(observed.frames, 1);
+    }
+    #[test]
+    fn unchanged_official_kick_roster_does_not_advance_ui_revision() {
+        let snapshot=Arc::new(Mutex::new(NativeSnapshot::default()));
+        let desired=Arc::new(Mutex::new(Vec::new()));
+        let frame=r#"{"t":"estado","estado":{"kick":{"oficiais":[
+            {"slug":"sample","aoVivo":true}]}}}"#;
+        observe(&snapshot,frame,&desired);
+        let first=snapshot.lock().unwrap().kick_roster_revision;
+        assert!(first>0);
+        observe(&snapshot,frame,&desired);
+        assert_eq!(snapshot.lock().unwrap().kick_roster_revision,first);
+        observe(&snapshot,r#"{"t":"estado","estado":{"kick":{"oficiais":[
+            {"slug":"sample","aoVivo":false}]}}}"#,&desired);
+        assert_eq!(snapshot.lock().unwrap().kick_roster_revision,first+1);
     }
     #[test]
     fn native_twitch_follows_lives_and_protects_rewarded_rooms() {

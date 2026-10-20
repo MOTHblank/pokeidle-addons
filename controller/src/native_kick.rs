@@ -65,6 +65,7 @@ struct OfflinePointsWorker {
 }
 pub struct KickMonitor {
     snapshot: Arc<Mutex<KickSnapshot>>,
+    created_at: Instant,
     observed: Vec<KickWorker>,
     token: String,
     auth: Arc<AuthGate>,
@@ -88,6 +89,7 @@ impl KickMonitor {
         }
         let mut monitor = Self {
             snapshot: Arc::new(Mutex::new(KickSnapshot::default())),
+            created_at: Instant::now(),
             observed: Vec::new(),
             token: bearer.to_owned(),
             auth: Arc::new(AuthGate::default()),
@@ -226,6 +228,8 @@ impl KickMonitor {
             .and_then(|worker| worker.balances.lock().ok().map(|balances| balances.clone()))
             .unwrap_or_default()
     }
+    /// Stable, allocation-free cache key for this monitor instance.
+    pub fn identity(&self) -> Instant {self.created_at}
     pub fn snapshot(&self) -> KickSnapshot {
         let mut state = self.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
         state.auth_denied = self.auth.denied();
