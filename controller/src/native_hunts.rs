@@ -678,9 +678,17 @@ impl HuntIntel {
     /// fallback when the server omits servidorAgora from its estado packets.
     fn xp_clock(&self, now:Instant)->u64 {
         match self.view.server_now {
-            Some(server) => server.saturating_add(self.server_clock_seen_at
-                .map(|at|now.saturating_duration_since(at).as_millis() as u64)
-                .unwrap_or(0)),
+            Some(server) => {
+                // Accept epoch seconds as well as milliseconds if a protocol
+                // revision changes the server clock's unit. Boost expiries
+                // remain epoch milliseconds in the game's loja/guild state.
+                let server_ms=if (1_000_000_000..10_000_000_000).contains(&server) {
+                    server.saturating_mul(1_000)
+                } else {server};
+                server_ms.saturating_add(self.server_clock_seen_at
+                    .map(|at|now.saturating_duration_since(at).as_millis() as u64)
+                    .unwrap_or(0))
+            },
             None => SystemTime::now().duration_since(UNIX_EPOCH)
                 .unwrap_or_default().as_millis() as u64,
         }
@@ -1836,6 +1844,21 @@ mod tests {
         assert!(!intel.view.bonuses.vip_active);
         assert!(!intel.view.bonuses.guild_boost_active);
         assert_eq!(intel.view.bonuses.shop_trainer_xp_multiplier,1.0);
+    }
+    #[test]
+    fn server_clock_in_epoch_seconds_is_normalized_for_vip_expiry(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest_value(&json!({"t":"welcome","estado":{
+            "servidorAgora":1_800_000_000,
+            "loja":{"vipAte":1_800_000_060_000},
+            "guild":{"boostAte":1_800_000_090_000}
+        }}),now);
+        assert!(intel.view.bonuses.vip_active);
+        assert!(intel.view.bonuses.guild_boost_active);
+        intel.refresh_timed_xp_bonuses(now+Duration::from_secs(100));
+        assert!(!intel.view.bonuses.vip_active);
+        assert!(!intel.view.bonuses.guild_boost_active);
     }
     #[test]
     fn bonus_expiration_is_recomputed_when_server_clock_moves(){
