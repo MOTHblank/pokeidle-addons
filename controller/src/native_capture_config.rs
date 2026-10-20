@@ -27,7 +27,7 @@ pub struct CatchSettings {
 impl Default for CatchSettings {
     fn default() -> Self {
         Self {
-            enabled:false, priorities:vec!["ultra".into()], interval_ms:600,
+            enabled:false, priorities:vec!["ultra".into()], interval_ms:100,
             reserves:BALLS.iter().map(|key|(key.to_string(),0)).collect(),
             restock_enabled:false,gold_reserve:0,
             ball_id:4,potion_id:200,revive_id:0,
@@ -43,12 +43,12 @@ impl CatchSettings {
         cfg.enabled=v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
         // The previous native build persisted its 1200-ms default. Upgrade
         // that legacy value once; a v2-tagged user-selected 1200 ms remains valid.
-        let old_interval=v.get("intervalMs").and_then(Value::as_u64).unwrap_or(600);
+        let old_interval=v.get("intervalMs").and_then(Value::as_u64).unwrap_or(100);
         let old_interval=if old_interval==1200 &&
             v.get("captureTimingV2").and_then(Value::as_bool)!=Some(true) {
             600
         } else {old_interval};
-        cfg.interval_ms=old_interval.clamp(600,3000);
+        cfg.interval_ms=if old_interval==600 && v.get("captureTimingV3").and_then(Value::as_bool)!=Some(true) {100} else {old_interval.clamp(100,3000)};
         if let Some(list)=v.get("ballPriority").and_then(Value::as_array) {
             cfg.priorities=list.iter().filter_map(Value::as_str)
                 .map(str::to_lowercase).filter(|p|BALLS.contains(&p.as_str()))
@@ -80,8 +80,8 @@ impl CatchSettings {
         cfg
     }
     pub fn validate(&self)->Result<(),String> {
-        if !(600..=3000).contains(&self.interval_ms) {
-            return Err("Auto Catch interval must be 600–3000 ms".into());
+        if !(100..=3000).contains(&self.interval_ms) {
+            return Err("Auto Catch interval must be 100–3000 ms".into());
         }
         if self.priorities.len()>2 || self.priorities.iter().any(|p|!BALLS.contains(&p.as_str())) ||
             (self.priorities.len()==2 && self.priorities[0]==self.priorities[1]) {
@@ -118,6 +118,7 @@ impl CatchSettings {
             "ballPriority":self.priorities,
             "intervalMs":self.interval_ms,
             "captureTimingV2":true,
+            "captureTimingV3":true,
             "reserve":reserve,
             "restock":{
                 "enabled":self.restock_enabled,
@@ -175,20 +176,20 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid.interval_ms=3001;
         assert!(invalid.validate().is_err());
-        assert_eq!(CatchSettings::from_value(Some(&json!({"intervalMs":20}))).interval_ms,600);
+        assert_eq!(CatchSettings::from_value(Some(&json!({"intervalMs":20}))).interval_ms,100);
     }
     #[test]
-    fn legacy_native_default_upgrades_to_600ms_but_explicit_new_interval_is_preserved() {
+    fn legacy_native_default_upgrades_to_100ms_but_explicit_new_interval_is_preserved() {
         let old=CatchSettings::from_value(Some(&json!({
             "enabled":true,"intervalMs":1200
         })));
-        assert_eq!(old.interval_ms,600);
+        assert_eq!(old.interval_ms,100);
         let new=CatchSettings::from_value(Some(&json!({
             "enabled":true,"intervalMs":1200,"captureTimingV2":true
         })));
         assert_eq!(new.interval_ms,1200);
         assert_eq!(CatchSettings::from_value(Some(&new.as_value())),new);
-        assert_eq!(CatchSettings::default().interval_ms,600);
+        assert_eq!(CatchSettings::default().interval_ms,100);
     }
     #[test]
     fn golden_potion_selection_cannot_overwrite_revive_selection() {
