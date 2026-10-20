@@ -27,8 +27,6 @@ impl Default for AtlasScenario {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AtlasAvailability { All, Unlocked, Locked }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AtlasCollection { All, InDepot, NotInDepot }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AtlasSort {
@@ -42,7 +40,6 @@ pub(super) struct AtlasFilters {
     kind: String,
     min_level: u32,
     max_level: u32,
-    availability: AtlasAvailability,
     collection: AtlasCollection,
     weak_to: std::collections::BTreeSet<String>,
     weakness_match_all: bool,
@@ -55,7 +52,7 @@ impl Default for AtlasFilters {
     fn default()->Self {
         Self{
             search:String::new(),region:String::new(),kind:String::new(),
-            min_level:0,max_level:0,availability:AtlasAvailability::All,
+            min_level:0,max_level:0,
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
             sort:AtlasSort::Xp,ascending:false,selected_species:None,
@@ -74,7 +71,6 @@ impl AtlasFilters {
         usize::from(!self.region.is_empty())+
         usize::from(!self.kind.is_empty())+
         usize::from(self.min_level>0)+usize::from(self.max_level>0)+
-        usize::from(self.availability!=AtlasAvailability::All)+
         usize::from(self.collection!=AtlasCollection::All)+
         usize::from(!self.weak_to.is_empty())
     }
@@ -1030,9 +1026,7 @@ fn atlas_species_rows(
         .filter_map(|mon|mon.species_id).collect();
     let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow>::new();
     for (hunt,unlocked) in atlas_destinations(view,reference) {
-        if filters.availability==AtlasAvailability::Unlocked && !unlocked
-            || filters.availability==AtlasAvailability::Locked && unlocked
-            || filters.min_level>0 && hunt.level<filters.min_level
+        if filters.min_level>0 && hunt.level<filters.min_level
             || filters.max_level>0 && hunt.level>filters.max_level
             || !atlas_hunt_matches_location(hunt,&filters.region)
         {continue}
@@ -1702,7 +1696,7 @@ fn draw_atlas_destination(
                 }else if pending{
                     ui.colored_label(WARN,tr("Switching…"));
                 }else if !dest.unlocked{
-                    ui.colored_label(WARN,tr("Guide-only · locked"));
+                    ui.colored_label(WARN,tr("Unavailable"));
                 }else if ui.add_enabled(live,
                     egui::Button::new(tr("Hunt →"))).clicked(){
                     match native.send_command(GameCommand::Hunt(
@@ -2559,7 +2553,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 ui.label(RichText::new(if app.hunt_estimate_cache[index].is_pending(){
                     tr("Calculating your forecast…")
                 }else{
-                    tr("Unavailable: reference species or active Pokémon combat data is incomplete.")
+                    tr("Combat estimate unavailable for current Pokémon.")
                 }).size(10.0).color(MUTED));
             }
         });
