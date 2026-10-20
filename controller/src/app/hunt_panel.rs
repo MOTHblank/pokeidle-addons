@@ -118,6 +118,7 @@ pub(super) struct EstimateCache {
     catalog_ptr: usize,
     reference_ptr: usize,
     active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
+    bonus_signature: [u64;12],
     geo_ptr: usize,
     hunt_slug: Option<String>,
     live: bool,
@@ -154,15 +155,31 @@ impl EstimateCache {
             (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny,
                 aoe_enabled,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
                 p.tm_elemental.clone(),p.types.clone()));
+        // XP and gross-gold modifiers change independently of the lead,
+        // catalog and combat geometry. Recompute rankings immediately on
+        // activation, expiration or any server-reported bonus adjustment.
+        let b=&view.bonuses;
+        let bonus_signature=[
+            b.vip_active as u64,b.guild_boost_active as u64,
+            b.guild_pct.to_bits(),b.twitch_pct.to_bits(),b.kick_xp_pct.to_bits(),
+            b.trainer_event_pct.to_bits(),b.pokemon_event_pct.to_bits(),
+            b.shop_trainer_xp_multiplier.to_bits(),
+            b.shop_pokemon_xp_multiplier.to_bits(),
+            b.delayed_xp_multiplier.to_bits(),b.extra_loot_pct.to_bits(),
+            b.guild_known as u64,
+        ];
         let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
             || self.reference_ptr!=reference_ptr || self.geo_ptr!=geo_ptr || self.live!=live
-            || self.active_signature!=active_signature || self.hunt_slug!=view.hunt_slug;
+            || self.active_signature!=active_signature
+            || self.bonus_signature!=bonus_signature
+            || self.hunt_slug!=view.hunt_slug;
         if changed {
             self.account=Some(account);
             self.catalog_ptr=catalog_ptr;
             self.reference_ptr=reference_ptr;
             self.geo_ptr=geo_ptr;
             self.active_signature=active_signature;
+            self.bonus_signature=bonus_signature;
             self.live=live;
             self.hunt_slug=view.hunt_slug.clone();
             self.refreshed=None;
@@ -300,15 +317,15 @@ fn rate_label(ranking: HuntRanking) -> &'static str {
 fn known_percent(value:f64,known:bool)->String {
     if known {format!("+{value:.1}%")} else {"— (not reported)".into()}
 }
-fn known_boost(active:bool,known:bool,clock_known:bool)->&'static str {
-    if !known || !clock_known {"unknown"}
-    else if active {"on"} else {"off"}
+fn known_boost(active:bool,known:bool,multiplier:f64)->String {
+    if !known {"unknown".into()}
+    else if active {format!("on ×{multiplier:.1}")}
+    else {"off".into()}
 }
 fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
     if ranking==HuntRanking::Gold {return true;}
     let b=&view.bonuses;
-    b.vip_known && b.guild_known && b.guild_boost_known && b.twitch_known
-        && view.server_now.is_some() &&
+    b.vip_known && b.guild_known && b.guild_boost_known && b.twitch_known &&
         match ranking {
             HuntRanking::TrainerXp=>b.trainer_event_known,
             HuntRanking::PokemonXp=>b.pokemon_event_known,
@@ -2279,10 +2296,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 ));
                                 ui.label(RichText::new(format!(
                                     "VIP {} · {} {}",
-                                    known_boost(b.vip_active,b.vip_known,
-                                        hunts.server_now.is_some()),tr("Guild boost"),
-                                    known_boost(b.guild_boost_active,b.guild_boost_known,
-                                        hunts.server_now.is_some())
+                                    known_boost(b.vip_active,b.vip_known,1.5),tr("Guild boost"),
+                                    known_boost(b.guild_boost_active,b.guild_boost_known,1.1)
                                 )).size(10.0).color(MUTED));
                                 ui.separator();
                                 if let Some(h)=current{
@@ -2690,8 +2705,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         ));
                         ui.label(format!(
                             "VIP: {} · {}: {}",
-                            known_boost(b.vip_active,b.vip_known,hunts.server_now.is_some()),
-                            tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,hunts.server_now.is_some())
+                            known_boost(b.vip_active,b.vip_known,1.5),
+                            tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,1.1)
                         ));
                         ui.label(tr("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded."));
                     });
@@ -3067,6 +3082,26 @@ mod tests {
         assert!(stale.iter().all(|r|r.value.is_none()));
     }
     #[test]
+    fn bonus_changes_invalidate_forecast_cache_without_lead_changes(){
+        let mut view=HuntView::default();
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        cache.refreshed=Some(Instant::now());
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_some());
+        view.bonuses.vip_active=true;
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none(),"VIP activation must invalidate XP forecasts");
+        cache.refreshed=Some(Instant::now());
+        view.bonuses.guild_boost_active=true;
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none(),"guild XP activation must invalidate forecasts");
+        cache.refreshed=Some(Instant::now());
+        view.bonuses.vip_active=false;
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none(),"VIP expiry must invalidate forecasts");
+    }
+    #[test]
     fn partial_bonus_data_downgrades_xp_forecast_confidence(){
         let mut view=HuntView::default();
         view.bonuses.trainer_event_pct=20.0;
@@ -3078,6 +3113,8 @@ mod tests {
         view.bonuses.guild_boost_known=true;
         view.bonuses.twitch_known=true;
         view.bonuses.vip_known=true;
+        assert!(bonuses_complete(&view,HuntRanking::TrainerXp));
+        view.server_now=None; // local clock is a supported fallback.
         assert!(bonuses_complete(&view,HuntRanking::TrainerXp));
         assert!(!bonuses_complete(&view,HuntRanking::PokemonXp));
     }
