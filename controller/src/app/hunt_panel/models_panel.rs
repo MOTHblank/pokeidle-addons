@@ -152,16 +152,14 @@ pub(super) fn draw_atlas_models(
     ui.horizontal_wrapped(|ui|{
         ui.label(tr("Destination"));
         let current=selected_hunt(view,reference,scenario)
-            .map(|(hunt,unlocked)|format!("{} · {}",
-                hunt.name,if unlocked{tr("Unlocked")}else{tr("Guide-only")}))
+            .map(|(hunt,_)|hunt.name.clone())
             .unwrap_or_else(||tr("No hunts loaded").into());
         egui::ComboBox::from_id_salt("atlas-model-destination")
             .width(245.0).selected_text(current).show_ui(ui,|ui|{
                 let hunts=atlas_destinations(view,reference);
-                for (hunt,unlocked) in hunts.iter().take(1500){
+                for (hunt,_) in hunts.iter().take(1500){
                     ui.selectable_value(&mut scenario.hunt_slug,hunt.slug.clone(),
-                        format!("{} · Lv {} · {}",hunt.name,hunt.level,
-                            if *unlocked{tr("unlocked")}else{tr("guide-only")}));
+                        format!("{} · Lv {}",hunt.name,hunt.level));
                 }
             });
         ui.label(tr("Ball"));
@@ -171,13 +169,9 @@ pub(super) fn draw_atlas_models(
     });
         });
     ui.add_space(8.0);
-    let Some((hunt,unlocked))=selected_hunt(view,reference,scenario) else{
-        ui.label(tr("No available destination or public-guide preview."));return
+    let Some((hunt,_))=selected_hunt(view,reference,scenario) else{
+        ui.label(tr("No available hunts."));return
     };
-    if !unlocked {
-        ui.label(RichText::new(tr("This location is listed in the guide but is not available for this account. You can compare estimates, but cannot switch to it here."))
-            .size(10.0).color(WARN));
-    }
     let observed_tier=view.outland_tier;
     let outland=hunt.area.eq_ignore_ascii_case("outland");
     if outland {
@@ -468,8 +462,6 @@ pub(super) fn draw_atlas_models(
                     }
                 });
                 });
-            ui.label(RichText::new(tr("The guide mentions Bicycle Fragments here, but the game has not confirmed this. Reaching the required level does not guarantee access."))
-                .size(10.0).color(WARN));
         });
     }else{
         ui.label(RichText::new(tr("Outside Outland: Shiny Egg Fragment uses the upstream 30-threshold level ladder; 10 fragments per craft, 168h reference incubation."))
