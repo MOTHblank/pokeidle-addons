@@ -147,6 +147,8 @@ pub struct HuntBonuses {
     pub shop_trainer_xp_multiplier: f64,
     pub shop_pokemon_xp_multiplier: f64,
     pub delayed_xp_multiplier: f64,
+    /// Store Loot Boost and active farming-event bonus, excluding guild ranking.
+    pub extra_loot_pct:f64,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntMeasurements {
@@ -309,6 +311,9 @@ pub struct HuntIntel {
     pending_at: Option<Instant>,
     pending_outland_at: Option<Instant>,
     boost_multipliers: BTreeMap<String,f64>,
+    store_boost_until:BTreeMap<String,u64>,
+    kick_xp_until:u64,
+    kick_reported_pct:f64,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
     geo_wave: Option<(String,Instant,Vec<f64>)>,
     geo_alive: BTreeMap<u64,bool>,
@@ -328,6 +333,8 @@ impl HuntIntel {
             recent_drops: VecDeque::new(), pending_at: None,
             pending_outland_at: None,
             boost_multipliers:BTreeMap::new(),
+            store_boost_until:BTreeMap::new(),
+            kick_xp_until:0,kick_reported_pct:0.0,
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
@@ -790,40 +797,64 @@ impl HuntIntel {
         if let Some(twitch) = state.get("twitch") {
             if let Some(n) = twitch.get("pctAtual").or_else(|| twitch.get("pct"))
                 .and_then(Value::as_f64) {
-                self.view.bonuses.twitch_pct = n;
+                self.view.bonuses.twitch_pct =
+                    if twitch.get("assistindo").and_then(Value::as_bool)==Some(false)
+                        {0.0}else{n};
                 self.view.bonuses.twitch_known = true;
             }
         }
-        // Store XP boosts, Kick and catch-up multipliers are independent and
-        // stack with the already tracked VIP, guild, Twitch and event bonuses.
+        // Preserve bonuses from a full welcome across partial estado deltas;
+        // absent loja/kick fields are not evidence that a boost ended.
         let clock=Self::num(state,"servidorAgora")
             .or(self.view.server_now).unwrap_or(0);
-        let shop=state.get("loja");
+        if let Some(shop)=state.get("loja"){
+            if let Some(boosts)=shop.get("boosts").and_then(Value::as_object){
+                for (key,raw) in boosts{
+                    if let Some(until)=raw.as_u64(){
+                        self.store_boost_until.insert(key.clone(),until);
+                    }
+                }
+            }
+            if let Some(raw)=shop.get("vipAte"){
+                self.view.vip_until=raw.as_u64();
+                self.view.bonuses.vip_known=true;
+            }
+            if let Some(late)=shop.get("atrasados"){
+                let mult=late.get("mult").and_then(Value::as_f64).unwrap_or(1.0);
+                let target=late.get("alvo").and_then(Value::as_u64).unwrap_or(0);
+                let level=self.view.trainer_level.unwrap_or(0);
+                self.view.bonuses.delayed_xp_multiplier=if mult.is_finite()
+                    && mult>1.0&&level>0&&(level as u64)<target {mult}
+                    else {1.0};
+            }
+        }
         for (key,dest) in [
             ("xp",&mut self.view.bonuses.shop_trainer_xp_multiplier),
             ("pokexp",&mut self.view.bonuses.shop_pokemon_xp_multiplier)
         ]{
-            let until=shop.and_then(|v|v.get("boosts"))
-                .and_then(|v|v.get(key)).and_then(Value::as_u64).unwrap_or(0);
+            let until=self.store_boost_until.get(key).copied().unwrap_or(0);
             *dest=if clock>0 && until>clock {
                 self.boost_multipliers.get(key).copied().unwrap_or(1.0)
             }else{1.0};
         }
-        if let Some(late)=shop.and_then(|v|v.get("atrasados")) {
-            let mult=late.get("mult").and_then(Value::as_f64).unwrap_or(1.0);
-            let target=late.get("alvo").and_then(Value::as_u64).unwrap_or(0);
-            let level=self.view.trainer_level.unwrap_or(0);
-            self.view.bonuses.delayed_xp_multiplier=if mult.is_finite()
-                && mult>1.0 && level>0 && (level as u64)<target {mult}
-                else {1.0};
+        if let Some(kick)=state.get("kick"){
+            if let Some(raw)=kick.get("bonus").and_then(|v|v.get("xp")) {
+                self.kick_xp_until=raw.as_u64().unwrap_or(0);
+            }
+            if let Some(pct)=kick.get("pct").and_then(Value::as_f64) {
+                self.kick_reported_pct=if pct.is_finite(){pct.max(0.0)}else{0.0};
+            }
         }
-        if let Some(kick)=state.get("kick") {
-            let expiry=kick.get("bonus").and_then(|v|v.get("xp"))
-                .and_then(Value::as_u64).unwrap_or(0);
-            let pct=kick.get("pct").and_then(Value::as_f64).unwrap_or(0.0);
-            self.view.bonuses.kick_xp_pct=if clock>0&&expiry>clock
-                &&pct.is_finite()&&pct>0.0{pct}else{0.0};
-        }
+        self.view.bonuses.kick_xp_pct=if clock>0&&self.kick_xp_until>clock {
+            self.kick_reported_pct
+        } else {0.0};
+        let loot_expiry=self.store_boost_until.get("loot").copied().unwrap_or(0);
+        let store_loot=if clock>0&&loot_expiry>clock {
+            (self.boost_multipliers.get("loot").copied().unwrap_or(1.0)-1.0)*100.0
+        }else{0.0};
+        let farm_event=state.get("evento").and_then(|e|e.get("farmPct")
+            .or_else(||e.get("lootPct"))).and_then(Value::as_f64).unwrap_or(0.0);
+        self.view.bonuses.extra_loot_pct=store_loot+farm_event.max(0.0);
         if let Some(raw)=state.get("guild").and_then(|g|g.get("boostAte")){
             self.view.guild_boost_until=raw.as_u64();
             self.view.bonuses.guild_boost_known=true;
