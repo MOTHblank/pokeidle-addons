@@ -621,6 +621,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.last_received = Some(Instant::now());
                 });
                 let mut last_ping = Instant::now();
+                // Delayed capture receipts are diagnostic, not connection failures.
+                // Summarize them at most once every five minutes per game socket.
+                let mut delayed_capture_receipts = 0usize;
+                let mut last_capture_delay_summary = Instant::now();
                 loop {
                     if stop.load(Ordering::Relaxed) {
                         let _ = socket.close(None);
@@ -828,11 +832,20 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // or corpse expiration, so the throw cannot be blindly replayed.
                     let capture_now=Instant::now();
                     if gameplay.has_unreported_capture_timeout(capture_now) {
-                        let count=gameplay.report_capture_timeouts(capture_now);
-                        crate::logging::warn(&format!(
-                            "{} has {} delayed native capture receipt(s); game socket kept online",
-                            profile.label(),count
-                        ));
+                        delayed_capture_receipts=delayed_capture_receipts.saturating_add(
+                            gameplay.report_capture_timeouts(capture_now)
+                        );
+                    }
+                    if capture_now.duration_since(last_capture_delay_summary)
+                        >= Duration::from_secs(300) {
+                        if delayed_capture_receipts > 0 {
+                            crate::logging::info(&format!(
+                                "{}: {} delayed native capture receipt(s) in the last five minutes; game connection unaffected",
+                                profile.label(), delayed_capture_receipts
+                            ));
+                        }
+                        delayed_capture_receipts=0;
+                        last_capture_delay_summary=capture_now;
                     }
                     while let Ok(sample)=forecast_rx.try_recv(){
                         history_recorder.record_forecast(sample);
