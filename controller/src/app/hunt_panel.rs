@@ -1988,12 +1988,14 @@ fn draw_atlas_explorer(
 /// the game; users tick it only when their Pokémon actually has AoE.
 fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
     let index=app.hunt_account;
+    let account_name=app.account_name(app.games[index].profile);
     let mut aoe_enabled=app.ui_options.atlas_aoe_enabled[index];
     egui::Frame::new().fill(PANEL_ALT)
         .stroke(Stroke::new(1.0,BORDER))
         .corner_radius(8.0).inner_margin(egui::Margin::symmetric(12,7))
         .show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(account_name.as_str()).size(11.0).strong().color(TEXT));
                 ui.checkbox(&mut aoe_enabled,tr("My Pokémon has AoE"))
                     .on_hover_text(tr("Check only if this account's active Pokémon has AoE. The checkbox changes Hunt Atlas simulations, not game settings."));
                 ui.label(RichText::new(tr(
