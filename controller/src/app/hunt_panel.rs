@@ -1,5 +1,5 @@
-//! Native Hunt Atlas workspace. All game state is read from the authenticated
-//! native socket. The public guide provides optional, untrusted reference data.
+//! Native Hunt Atlas workspace. Account state comes from the authenticated
+//! game socket; species metadata comes from public game-hosted catalogs.
 use super::*;
 use crate::native_atlas_models::{self as models, BallKind, Modifiers};
 mod models_panel;
@@ -662,7 +662,7 @@ fn draw_hunt_row(
                             ui.label(tr("Uses the currently measured kills/h at another hunt's base level. No bonus, DPS, or travel projection."));
                         }
                         RateSource::Unavailable => {
-                            ui.label(tr("No valid measured pace or sufficiently complete guide model is available."));
+                            ui.label(tr("Not enough data for a reliable estimate."));
                         }
                     }
                 });
@@ -905,7 +905,7 @@ fn draw_atlas_matchup(
             ui.label(RichText::new(target_context).size(9.0).color(MUTED));
             ui.add_space(4.0);
             let Some(reference)=reference else{
-                ui.label(RichText::new(tr("Waiting for the game guide's type chart."))
+                ui.label(RichText::new(tr("Type matchup data unavailable"))
                     .size(10.0).color(MUTED));
                 return;
             };
@@ -1567,7 +1567,7 @@ fn draw_atlas_weakness_grid(
             });
             ui.add_space(5.0);
             if reference.is_none(){
-                ui.label(RichText::new(tr("Guide type chart unavailable"))
+                ui.label(RichText::new(tr("Type matchup data unavailable"))
                     .size(10.0).color(MUTED));
             }
             // Keep the full grid visible on desktop, but give it an
@@ -1672,23 +1672,6 @@ fn atlas_filters_panel(
                         });
                 });
                 ui.horizontal_wrapped(|ui|{
-                    ui.label(tr("Availability"));
-                    egui::ComboBox::from_id_salt(("atlas-access",account))
-                        .selected_text(match f.availability{
-                            AtlasAvailability::All=>tr("All (guide + server)"),
-                            AtlasAvailability::Unlocked=>tr("Unlocked"),
-                            AtlasAvailability::Locked=>tr("Guide-only / locked"),
-                        }).show_ui(ui,|ui|{
-                            for (item,label) in [
-                                (AtlasAvailability::All,tr("All (guide + server)")),
-                                (AtlasAvailability::Unlocked,tr("Unlocked")),
-                                (AtlasAvailability::Locked,tr("Guide-only / locked")),
-                            ]{
-                                if ui.selectable_value(&mut f.availability,item,label).changed(){
-                                    *page=0;
-                                }
-                            }
-                        });
                     ui.label(tr("Type"));
                     let mut types=reference.map(|r|r.chart.keys()
                         .map(String::as_str).collect::<Vec<_>>()).unwrap_or_default();
@@ -2032,13 +2015,10 @@ fn draw_atlas_explorer(
             tr("Depot filtering uses the current account's roster; an empty or not-yet-loaded depot cannot establish historical captures.")
         ).size(10.0).color(WARN));
     }
-    let unlocked_count=view.hunts.len();
-    let guide_count=reference.map_or(0,|r|r.hunts.len());
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(format!(
-            "{} {} · {} {} · {} {}",
-            rows.len(),tr("species"),unlocked_count,tr("server-unlocked destinations"),
-            guide_count,tr("guide destinations")
+            "{} {} · {} {}",
+            rows.len(),tr("species"),view.hunts.len(),tr("available hunts")
         )).strong().size(11.0).color(TEXT));
         if cache.is_pending(){
             ui.label(RichText::new(tr("Calculating combat models..."))
@@ -2082,7 +2062,7 @@ fn draw_atlas_explorer(
                 }else if cache.is_pending(){
                     tr("Combat estimates are updating; rankings will refresh as inputs arrive.")
                 }else if reference.is_none(){
-                    tr("The guide reference is not available yet. Species names and model coverage may be incomplete.")
+                    tr("Pokémon data is still loading; some estimates may be unavailable.")
                 }else{
                     tr("Try a wider level range, different availability or fewer filters. Unknown model values are never treated as zero.")
                 };
@@ -2227,7 +2207,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         let tx = app.hunt_reference_tx.clone();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(native_atlas::load)
-                .unwrap_or_else(|_| Err(tr("Guide reference loader panicked").into()));
+                .unwrap_or_else(|_| Err(tr("Pokémon data unavailable").into()));
             let _ = tx.send(result);
         });
     }
@@ -2244,23 +2224,16 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         return;
     }
     if app.hunt_reference_busy {
-        ui.label(RichText::new(tr("Loading species and move reference..."))
+        ui.label(RichText::new(tr("Loading Pokémon data..."))
             .size(10.0).color(MUTED));
     } else if let Some(error) = app.hunt_reference_error.clone() {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(format!("{}: {}",
-                tr("Guide reference unavailable"), error)).size(10.0).color(WARN));
+                tr("Pokémon data unavailable"), error)).size(10.0).color(WARN));
             if ui.small_button(tr("Retry")).clicked() {
                 app.hunt_reference_error = None;
             }
         });
-    } else if let Some(reference) = app.hunt_reference.as_deref() {
-        ui.label(RichText::new(format!(
-            "● {} · {} {}",tr("Reference data available"),
-            reference.species.len(),tr("species")
-        )).size(10.0).color(GOOD)).on_hover_text(tr(
-            "Hunt Atlas combines the third-party Guia PokéIdle reference with public game catalogs. If the guide is unavailable, game catalogs are used instead. Only the authenticated game server confirms unlocked hunts."
-        ));
     }
     ui.add_space(6.0);
 
@@ -2589,7 +2562,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 ui.label(RichText::new(format!(
                     "{:.2}s / {} · {:.0}% {}",
                     forecast.seconds_per_kill,tr("kill"),forecast.coverage*100.0,
-                    tr("guide species coverage")
+                    tr("species modeled")
                 )).size(10.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
                     ui.label(format!(
