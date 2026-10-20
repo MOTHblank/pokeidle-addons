@@ -1529,20 +1529,9 @@ fn draw_atlas_weakness_grid(
                 ui.label(RichText::new(tr("Type matchup data unavailable"))
                     .size(10.0).color(MUTED));
             }
-            // Keep the full grid visible on desktop, but give it an
-            // independent scroll region on narrow windows so the results pane
-            // never disappears below a tall nine-row selection grid.
-            if ui.available_width()<500.0 {
-                egui::ScrollArea::vertical()
-                    .id_salt(("atlas-weak-types-scroll",account))
-                    .max_height(164.0)
-                    .auto_shrink([false,true])
-                    .show(ui,|ui|{
-                        draw_atlas_weakness_tiles(ui,f,page,reference,account);
-                    });
-            }else{
-                draw_atlas_weakness_tiles(ui,f,page,reference,account);
-            }
+            // Let the page scroll instead of trapping wheel input inside the
+            // weakness grid on narrow windows.
+            draw_atlas_weakness_tiles(ui,f,page,reference,account);
 
         });
 }
@@ -1561,12 +1550,9 @@ fn atlas_filters_panel(
                     f.clear();*page=0;
                 }
             });
-            // General filters stay compact; the type grid is always visible
-            // below them instead of being buried in this scrolling area.
-            egui::ScrollArea::vertical()
-                .id_salt(("atlas-filter-card",account))
-                .max_height(if ui.available_width()>=700.0{180.0}else{158.0})
-                .auto_shrink([false,true]).show(ui,|ui|{
+            // Keep filters in the same document flow as the results, so the
+            // user can scroll the entire Atlas page from any section.
+            ui.vertical(|ui|{
                 ui.set_min_width(ui.available_width());
                 ui.horizontal_wrapped(|ui|{
                     let width=(ui.available_width()*0.37).clamp(150.0,320.0);
@@ -2045,87 +2031,50 @@ fn draw_atlas_explorer(
             .filter(|id|slice.iter().any(|row|row.id==*id))
             .unwrap_or(slice[0].id);
         filters.selected_species=Some(selected);
-        let pane_height=ui.available_height().max(160.0);
         let gap=ui.spacing().item_spacing.x;
         let total_width=ui.available_width();
         let list_width=(total_width*0.36).clamp(290.0,430.0);
         let details_width=(total_width-list_width-gap).max(0.0);
 
-        // Reserve an actual rectangle for each pane. max_height() on its own
-        // does NOT reserve viewport height: within a parent vertical
-        // ScrollArea its child can receive zero/indefinite available height,
-        // which previously clipped the twenty rows to a single row.
-        ui.horizontal(|ui|{
-            ui.allocate_ui_with_layout(
-                egui::vec2(list_width,pane_height),
-                Layout::top_down(Align::Min),
-                |ui|{
-                    ui.label(RichText::new("POKÉMON")
-                        .size(10.0).strong().color(DIM));
-                    ui.add_space(5.0);
-                    let list_height=ui.available_height().max(120.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt(("atlas-species-list",index))
-                        .max_height(list_height)
-                        .auto_shrink([false,false])
-                        .show(ui,|ui|{
-                            ui.set_min_width(ui.available_width());
-                            for row in slice{
-                                if draw_atlas_species_selector(
-                                    ui,row,filters.sort,
-                                    filters.selected_species==Some(row.id),
-                                    reference,filters,view.active_pokemon.as_ref(),aoe_enabled
-                                ){
-                                    filters.selected_species=Some(row.id);
-                                }
-                            }
-                        });
+        // Both panes take their natural content height. A single enclosing
+        // ScrollArea handles page scrolling, including the filters above.
+        // Fixed-height nested scrollers previously trapped the mouse wheel
+        // and made the rest of Hunt Atlas impossible to scroll.
+        ui.horizontal_top(|ui|{
+            ui.vertical(|ui|{
+                ui.set_width(list_width);
+                ui.label(RichText::new("POKÉMON")
+                    .size(10.0).strong().color(DIM));
+                ui.add_space(5.0);
+                for row in slice{
+                    if draw_atlas_species_selector(
+                        ui,row,filters.sort,
+                        filters.selected_species==Some(row.id),
+                        reference,filters,view.active_pokemon.as_ref(),aoe_enabled
+                    ){
+                        filters.selected_species=Some(row.id);
+                    }
                 }
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(details_width,pane_height),
-                Layout::top_down(Align::Min),
-                |ui|{
-                    ui.label(RichText::new(tr("SPECIES DETAILS"))
-                        .size(10.0).strong().color(DIM));
-                    ui.add_space(5.0);
-                    let details_height=ui.available_height().max(120.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt(("atlas-species-details",index,filters.selected_species))
-                        .max_height(details_height)
-                        .auto_shrink([false,false])
-                        .show(ui,|ui|{
-                            ui.set_min_width(ui.available_width());
-                            if let Some(row)=slice.iter().find(|row|
-                                filters.selected_species==Some(row.id)){
-                                draw_atlas_species(ui,row,filters.sort,view,reference,
-                                    filters,native,live,&mut error,aoe_enabled);
-                            }
-                        });
+            });
+            ui.vertical(|ui|{
+                ui.set_width(details_width);
+                ui.label(RichText::new(tr("SPECIES DETAILS"))
+                    .size(10.0).strong().color(DIM));
+                ui.add_space(5.0);
+                if let Some(row)=slice.iter().find(|row|
+                    filters.selected_species==Some(row.id)){
+                    draw_atlas_species(ui,row,filters.sort,view,reference,
+                        filters,native,live,&mut error,aoe_enabled);
                 }
-            );
+            });
         });
     }else{
-        let pane_height=ui.available_height().max(160.0);
-        let pane_width=ui.available_width();
-        ui.allocate_ui_with_layout(
-            egui::vec2(pane_width,pane_height),
-            Layout::top_down(Align::Min),
-            |ui|{
-                egui::ScrollArea::vertical()
-                    .id_salt(("atlas-species-mobile",index))
-                    .max_height(ui.available_height().max(120.0))
-                    .auto_shrink([false,false])
-                    .show(ui,|ui|{
-                        ui.set_min_width(ui.available_width());
-                        for row in rows.iter().skip(visible.start)
-                            .take(visible.end-visible.start){
-                            draw_atlas_species(ui,row,filters.sort,view,reference,
-                                filters,native,live,&mut error,aoe_enabled);
-                        }
-                    });
-            }
-        );
+        // On narrow windows the same page scroll contains all result cards.
+        for row in rows.iter().skip(visible.start)
+            .take(visible.end-visible.start){
+            draw_atlas_species(ui,row,filters.sort,view,reference,
+                filters,native,live,&mut error,aoe_enabled);
+        }
     }
     if let Some(error)=error {*command_error=Some(error);}
 }
@@ -2158,6 +2107,20 @@ fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
 }
 
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    if app.hunt_subtab==HuntSubtab::Explorer {
+        egui::ScrollArea::vertical()
+            .id_salt(("hunt-atlas-explorer-page",app.hunt_account))
+            .auto_shrink([false,false])
+            .show(ui,|ui|{
+                ui.set_min_width(ui.available_width());
+                draw_hunt_atlas_panel_contents(app,ui);
+            });
+    }else{
+        draw_hunt_atlas_panel_contents(app,ui);
+    }
+}
+
+fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Only load the independent public reference when this tab is actually
     // opened; game socket, Twitch and normal dashboard stay extremely light.
     if app.hunt_reference.is_none() && app.hunt_reference_error.is_none() &&
@@ -2291,9 +2254,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     draw_atlas_outland_tier(ui,&view,native,index,live,
         &mut app.hunt_action_error[index]);
     ui.add_space(6.0);
-    // Explorer owns the remaining CentralPanel height. Do not wrap it in
-    // a full-page vertical ScrollArea: that makes available_height() inside
-    // its nested list/detail panes meaningless and leaves the view blank.
+    // Explorer uses one full-page ScrollArea; its result panes now size to
+    // their contents rather than relying on available_height().
     if app.hunt_subtab==HuntSubtab::Explorer{
         draw_atlas_explorer(ui,&view,native,live,index,
             app.ui_options.atlas_aoe_enabled[index],
