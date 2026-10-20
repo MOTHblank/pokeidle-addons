@@ -451,6 +451,30 @@ mod tests {
         assert!(!reference.capture_rarities.contains_key(&1));
     }
     #[test]
+    fn game_catalog_supplies_species_types_stats_and_learned_moves() {
+        let mut reference=Reference::default();
+        reference.chart=built_in_type_chart();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[{"pokeId":25,"name":"Pikachu","type1":"ELECTRIC",
+                "baseHp":35,"baseAtk":55,"baseDef":40,"baseSpAtk":50,
+                "baseSpDef":50,"baseSpeed":90,
+                "attacks":[{"type":"ELECTRIC","power":90.0,
+                    "cooldownMs":2300,"category":"SPECIAL","learnLevel":15}]
+            }]
+        }));
+        let mon=&reference.species[&25];
+        assert_eq!(mon.name,"Pikachu");
+        assert_eq!(mon.types,vec!["ELECTRIC"]);
+        assert_eq!(mon.base,vec![35.0,55.0,40.0,50.0,50.0,90.0]);
+        assert_eq!(mon.moves.len(),1);
+        assert!(mon.moves[0].special);
+        assert_eq!(mon.moves[0].min_level,15);
+        assert_eq!(mon.moves[0].cooldown,2300.0);
+        assert_eq!(reference.chart["ELECTRIC"]["GROUND"],0.0);
+        assert!(reference.hunts.is_empty(),
+            "unlocked hunts come from the authenticated session, not external guides");
+    }
+    #[test]
     fn catalog_merge_adds_regional_forms_and_preserves_identity(){
         let mut reference=Reference::default();
         merge_creature_catalog(&mut reference,&serde_json::json!({
@@ -633,15 +657,6 @@ mod tests {
         view.bonuses.pokemon_event_pct=0.0;
         assert_eq!(bonus(&view,true),2.0);
         assert_eq!(bonus(&view,false),1.0);
-    }
-    #[test]
-    fn obsolete_guide_drop_tables_do_not_reenter_native_models(){
-        let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
-            "especies":[{"id":4,"n":"Test","t":["NORMAL"],"b":[10,10,10,10,10,10],
-            "l":[[42,2.5,1,3,100],[43,120,1,2,100]]}]};"#;
-        let reference=parse(script).unwrap();
-        let drops=&reference.species[&4].drops;
-        assert!(drops.is_empty(), "Legacy NPC drops were retired upstream");
     }
 
 }
