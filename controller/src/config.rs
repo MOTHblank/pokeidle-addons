@@ -228,6 +228,9 @@ pub struct UiOptions {
     /// Same choice for a window hidden in the system tray. Tray wins over
     /// focus, so the controls can be configured independently.
     pub reduce_updates_in_tray: bool,
+    /// Hunt Atlas modeling only; selected explicitly, per account, never
+    /// inferred from partial server Pokémon data.
+    pub atlas_aoe_enabled: [bool; 4],
 }
 
 impl Default for UiOptions {
@@ -235,6 +238,7 @@ impl Default for UiOptions {
         Self {
             reduce_updates_unfocused: true,
             reduce_updates_in_tray: true,
+            atlas_aoe_enabled: [false; 4],
         }
     }
 }
@@ -249,6 +253,11 @@ impl UiOptions {
             reduce_updates_in_tray: value.get("reduceUpdatesInTray")
                 .and_then(Value::as_bool)
                 .unwrap_or(defaults.reduce_updates_in_tray),
+            atlas_aoe_enabled: std::array::from_fn(|index|
+                value.get("atlasAoeEnabled")
+                    .and_then(Value::as_array)
+                    .and_then(|items|items.get(index))
+                    .and_then(Value::as_bool).unwrap_or(false)),
         }
     }
 
@@ -257,6 +266,7 @@ impl UiOptions {
             "version": 1,
             "reduceUpdatesUnfocused": self.reduce_updates_unfocused,
             "reduceUpdatesInTray": self.reduce_updates_in_tray,
+            "atlasAoeEnabled": self.atlas_aoe_enabled,
         })
     }
 }
@@ -321,6 +331,7 @@ mod ui_options_tests {
         let options = UiOptions::default();
         assert!(options.reduce_updates_unfocused);
         assert!(options.reduce_updates_in_tray);
+        assert_eq!(options.atlas_aoe_enabled,[false;4]);
     }
 
     #[test]
@@ -328,15 +339,25 @@ mod ui_options_tests {
         let options = UiOptions {
             reduce_updates_unfocused: false,
             reduce_updates_in_tray: false,
+            atlas_aoe_enabled: [true,false,true,false],
         };
         assert_eq!(UiOptions::from_value(&options.to_value()), options);
+        assert_eq!(UiOptions::from_value(&json!({
+            "atlasAoeEnabled":[true,false,true,false]
+        })).atlas_aoe_enabled,[true,false,true,false]);
+        assert_eq!(UiOptions::from_value(&json!({
+            "atlasAoeEnabled":[true,"invalid",null]
+        })).atlas_aoe_enabled,[true,false,false,false]);
+
         assert_eq!(
             UiOptions::from_value(&json!({"reduceUpdatesUnfocused": false})),
-            UiOptions { reduce_updates_unfocused: false, reduce_updates_in_tray: true }
+            UiOptions { reduce_updates_unfocused: false, reduce_updates_in_tray: true,
+                atlas_aoe_enabled: [false;4] }
         );
         assert_eq!(
             UiOptions::from_value(&json!({"reduceUpdatesInTray": false})),
-            UiOptions { reduce_updates_unfocused: true, reduce_updates_in_tray: false }
+            UiOptions { reduce_updates_unfocused: true, reduce_updates_in_tray: false,
+                atlas_aoe_enabled: [false;4] }
         );
         assert_eq!(
             UiOptions::from_value(&json!({"reduceUpdatesUnfocused": "no"})),
