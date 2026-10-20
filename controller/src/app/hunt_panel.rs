@@ -1414,13 +1414,17 @@ fn atlas_type_text_color(background:Color32)->Color32{
         0.7152*linear(background.g())+0.0722*linear(background.b());
     if luminance>0.179{Color32::BLACK}else{Color32::WHITE}
 }
+fn atlas_type_grid_columns(available:f32)->usize{
+    let gap=6.0f32;
+    (((available.max(0.0)+gap)/(112.0+gap)).floor() as usize).clamp(1,6)
+}
 fn draw_atlas_weakness_tiles(
     ui:&mut egui::Ui,f:&mut AtlasFilters,page:&mut usize,
     reference:Option<&AtlasReference>,account:usize,
 ){
     let available=ui.available_width();
     let gap=6.0f32;
-    let columns=(((available+gap)/(112.0+gap)).floor() as usize).clamp(1,6);
+    let columns=atlas_type_grid_columns(available);
     let width=((available-gap*(columns.saturating_sub(1) as f32))
         /columns as f32).max(64.0);
     egui::Grid::new(("atlas-weak-type-grid",account))
@@ -2861,6 +2865,21 @@ mod tests {
             }else{1.05/(brightness+0.05)};
             assert!(contrast>=4.5,
                 "type button label lacks readable contrast: {kind} {contrast}");
+        }
+    }
+    #[test]
+    fn weakness_tiles_reflow_without_horizontal_overflow() {
+        assert_eq!(atlas_type_grid_columns(180.0),1);
+        assert_eq!(atlas_type_grid_columns(280.0),2);
+        assert_eq!(atlas_type_grid_columns(420.0),3);
+        assert_eq!(atlas_type_grid_columns(620.0),5);
+        assert_eq!(atlas_type_grid_columns(1100.0),6);
+        for width in [180.0,280.0,420.0,620.0,1100.0] {
+            let columns=atlas_type_grid_columns(width);
+            let gap=6.0;
+            let tile=(width-gap*(columns-1) as f32)/columns as f32;
+            assert!(columns as f32*tile+(columns-1) as f32*gap<=width+0.1);
+            assert!(tile>=112.0 || columns==1);
         }
     }
     #[test]
