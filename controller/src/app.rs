@@ -1755,6 +1755,8 @@ pub struct ControllerApp {
     // Live official channels are discovered from the native PokéIdle socket,
     // not copied into the user's saved manual preferences.
     kick_discovered_live: [Vec<String>; 4],
+    // Only changes in the native official roster trigger Kick worker reconciliation.
+    kick_discovered_roster: [Option<Vec<crate::native_kick::OfficialKickChannel>>; 4],
     kick_discovery_available: [bool; 4],
     kick_channel_new: [String; 4],
     kick_saved_login: [bool; 4],
@@ -1889,6 +1891,7 @@ impl ControllerApp {
                 std::array::from_fn(|_| String::new())
             }),
             kick_discovered_live: std::array::from_fn(|_| Vec::new()),
+            kick_discovered_roster: std::array::from_fn(|_| None),
             kick_discovery_available: [false; 4],
             kick_channel_new: std::array::from_fn(|_| String::new()),
             kick_saved_login: std::array::from_fn(|index| {

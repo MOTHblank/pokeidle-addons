@@ -140,9 +140,9 @@ fn marker_slot(atlas: &Value, looktype: u64) -> Option<(String, u32, u32, u32)> 
     Some((image, x.checked_mul(cell)?, y.checked_mul(cell)?, cell))
 }
 
-// All frames from one outfit sheet are decoded once on the visual worker,
-// rather than decoding the same (potentially large) atlas for every animation
-// frame. Reject oversized sheets and invalid rectangles before cropping.
+// Crop only the first valid still frame from an outfit sheet. Decode the
+// source at most once, and never allocate PNGs for unused animation frames.
+// Reject oversized sheets and invalid rectangles before cropping.
 fn crop_frames_png(bytes: &[u8], rectangles: &[[u32; 4]]) -> Option<Vec<Vec<u8>>> {
     let reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format().ok()?;
@@ -163,7 +163,7 @@ fn crop_frames_png(bytes: &[u8], rectangles: &[[u32; 4]]) -> Option<Vec<Vec<u8>>
         if sheet.crop_imm(x, y, width, height)
             .write_to(&mut output, image::ImageFormat::Png).is_ok() {
             let png = output.into_inner();
-            if valid_image(&png) { frames.push(png); }
+            if valid_image(&png) { frames.push(png); break; }
         }
     }
     (!frames.is_empty()).then_some(frames)
@@ -182,8 +182,8 @@ fn marker_sprite(client: &Client, root: &Path, looktype: u64) -> Option<Vec<u8>>
 }
 
 /// Exact frame rectangles taken from the game outfit manifest, not inferred
-/// from a grid or synthesized from the Pokémon species ID. Preserve the
-/// original first frame and bound animated copies to twelve.
+/// from a grid or synthesized from the Pokémon species ID. Keep a bounded
+/// fallback list to find the first valid still frame.
 fn outfit_frames(manifest: &Value) -> Option<(String, Vec<[u32; 4]>)> {
     let categories = manifest.get("categories")?.as_object()?;
     let category = categories.values().next()?;

@@ -361,6 +361,7 @@ fn pokemon_scan_rows<'a>(frame: &'a Value, currency: &str, page: u64) -> Option<
 pub struct MarketBuyer {
     profile: GameProfile, session: u64, journal: Journal,
     last_housekeeping: Option<Instant>,
+    last_snatch_maintenance: Option<Instant>,
     pub status: MarketStatus, nick: String, balances: [Option<u64>;2],
     server_offset_ms: i64, offers: Vec<Offer>, summary: BTreeMap<u64,[u64;2]>,
     // Up to five in-flight orders per account and three per item listing, as
@@ -394,6 +395,7 @@ impl MarketBuyer {
             if o.status=="submitted" {o.status="unknown".into();}
         }
         Self { profile, session: clock_ms(), journal, last_housekeeping: None,
+            last_snatch_maintenance: None,
             status: MarketStatus {error:error.clone(),..Default::default()},
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
             summary:BTreeMap::new(),pending:VecDeque::new(),pending_scan:None,last_scan:HashMap::new(),
@@ -419,6 +421,7 @@ impl MarketBuyer {
         self.urgent_details.clear();
         self.snatch.clear();self.snatch_closed.clear();self.snatch_verifying.clear();
         self.snatch_last_verify.clear();self.snatch_last_send.clear();
+        self.last_snatch_maintenance = None;
         self.status.snatches.clear();
         self.status.held_offers.clear();
         self.summary.clear(); self.nick.clear(); self.balances=[None,None];
@@ -1050,7 +1053,12 @@ impl MarketBuyer {
         self.snatch.remove(&id);
         self.snatch_closed.insert(id,"Listing invalid, changed or not available".into());
     }
+    // Maintain Snatch authorization and release state at most once per second.
+    // Exact quotes, verification, and purchase dispatch remain on the fast path.
     fn snatch_sync(&mut self,cfg:&MarketRules,now:Instant) {
+        if self.last_snatch_maintenance.is_some_and(|at|
+            now.saturating_duration_since(at)<Duration::from_secs(1)) {return}
+        self.last_snatch_maintenance=Some(now);
         let now_ms=clock_ms();
         let server_ms=(now_ms as i64-self.server_offset_ms).max(0) as u64;
         let manual=cfg.snatch_targets.iter().map(|t|t.id).collect::<HashSet<_>>();
@@ -1073,6 +1081,14 @@ impl MarketBuyer {
             .collect::<Vec<_>>() {
             self.snatch_record(offer,cfg,now);
         }
+    }
+
+    /// Display-only projections. The hot Snatch dispatcher must not sort
+    /// presentation rows, format labels, or clone lists of held offers.
+    pub fn publish_snatch_status(&mut self,cfg:&MarketRules,now:Instant) {
+        let now_ms=clock_ms();
+        let server_ms=(now_ms as i64-self.server_offset_ms).max(0) as u64;
+        let manual=cfg.snatch_targets.iter().map(|t|t.id).collect::<HashSet<_>>();
         let mut rows=Vec::new();
         for t in &cfg.snatch_targets {
             let entry=self.snatch.get(&t.id);
@@ -1306,6 +1322,21 @@ mod tests {
         buyer.snatch_exact_response(&json!({"t":"market","aba":"anuncio","id":292,
             "anuncio":null}),&cfg,now);
         assert!(buyer.snatch_closed.contains_key(&292));
+    }
+    #[test] fn snatch_display_rows_are_published_independently_of_dispatch() {
+        let mut buyer=MarketBuyer::new(GameProfile::Game4);
+        buyer.nick="me".into();buyer.balances=[Some(5000),Some(100)];
+        let mut target=SnatchTarget{id:992,kind:"item".into(),currency:"gold".into(),
+            item_id:42,max_price:100,..Default::default()};
+        target.arm();
+        let cfg=MarketRules{enabled:true,snatch_targets:vec![target],..Default::default()};
+        let now=Instant::now();
+        assert_eq!(buyer.snatch_actions(&cfg,now).len(),1);
+        assert!(buyer.status.snatches.is_empty());
+        buyer.publish_snatch_status(&cfg,now);
+        assert_eq!(buyer.status.snatches.len(),1);
+        assert_eq!(buyer.status.snatches[0].id,992);
+        assert_eq!(buyer.snatch_actions(&cfg,now+Duration::from_millis(150)).len(),0);
     }
     #[test] fn manual_unknown_listing_is_looked_up_before_buying() {
         let mut buyer=MarketBuyer::new(GameProfile::Game4);

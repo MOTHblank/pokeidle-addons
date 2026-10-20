@@ -32,10 +32,17 @@ impl ControllerApp {
     /// Browser-bridge telemetry is a fallback during sign-in only.
     pub(super) fn sync_pokeidle_kick_streamers(&mut self) {
         for index in 0..4 {
-            let native = self.games[index].native.as_ref()
-                .and_then(|session| session.official_kick_live());
-            let found = if native.is_some() {
-                native
+            let native_roster = self.games[index].native.as_ref()
+                .and_then(|session|session.official_kick_roster());
+            let official_roster_changed = self.kick_discovered_roster[index] != native_roster;
+            if official_roster_changed {
+                self.kick_discovered_roster[index] = native_roster.clone();
+            }
+            let native_live = native_roster.as_ref().map(|roster|
+                roster.iter().filter(|creator|creator.live)
+                    .map(|creator|creator.slug.clone()).collect::<Vec<_>>());
+            let found = if native_live.is_some() {
+                native_live
             } else {
                 let health = self.games[index].health();
                 if health.kick_state_available && health.telemetry_is_fresh() {
@@ -65,7 +72,8 @@ impl ControllerApp {
             {
                 self.kick_saved_login[index] = true;
             }
-            if self.kick_saved_login[index] && self.kick_monitors[index].is_none() {
+            let monitor_was_missing = self.kick_monitors[index].is_none();
+            if self.kick_saved_login[index] && monitor_was_missing {
                 self.start_kick_account(index);
             }
             let desired = if roster_changed {
@@ -74,16 +82,18 @@ impl ControllerApp {
             // Query balances for any official creators *not* currently
             // supervised, including online creators beyond the HLS limit.
             // A single read-only poller handles them without video downloads.
-            let remaining: Vec<String> = if self.kick_monitors[index].is_some() {
-                self.games[index].native.as_ref()
-                    .and_then(|game| game.official_kick_roster())
-                    .unwrap_or_default().into_iter()
+            let sync_offline = official_roster_changed || monitor_was_missing;
+            let remaining: Vec<String> = if sync_offline && self.kick_monitors[index].is_some() {
+                native_roster.unwrap_or_default().into_iter()
                     .map(|creator| creator.slug).collect()
             } else { Vec::new() };
             if let Some(monitor) = self.kick_monitors[index].as_mut() {
                 let outcome = desired.as_ref()
                     .map(|names| monitor.sync_channels(names))
-                    .transpose().and_then(|_| monitor.sync_offline_officials(&remaining));
+                    .transpose().and_then(|_| {
+                        if sync_offline {monitor.sync_offline_officials(&remaining)}
+                        else {Ok(())}
+                    });
                 if let Err(error) = outcome {
                     logging::warn(&format!("Kick channel synchronization failed: {error}"));
                     self.set_status(error, true);

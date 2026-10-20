@@ -304,9 +304,10 @@ impl VisualCache {
     }
 
     fn put(&mut self, ctx: &egui::Context, key: (Kind, u64), frames: &[Vec<u8>]) {
-        let mut textures = Vec::with_capacity(frames.len().min(12));
+        // Only one still frame is ever uploaded for a Pokémon or item icon.
+        let mut textures = Vec::with_capacity(1);
         let mut pixels = 0usize;
-        for (frame, bytes) in frames.iter().take(12).enumerate() {
+        for (frame, bytes) in frames.iter().take(1).enumerate() {
             let Ok(img) = image::load_from_memory(bytes) else { continue };
             if img.width() == 0 || img.height() == 0 ||
                 img.width() > MAX_EDGE || img.height() > MAX_EDGE { continue; }
@@ -404,9 +405,8 @@ impl VisualCache {
         texture
     }
 
-    /// Animation runs only when a Pokémon is actually painted by a focused
-    /// window. The four-frame-per-second repaint is independent of game
-    /// polling, and an atlas marker or offline fallback remains static.
+    /// Always display a static first frame. Pokémon artwork never schedules
+    /// animation repaints or uploads additional texture frames.
     pub fn pokemon_texture_id(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64)
         -> Option<egui::TextureId>
     {
@@ -414,12 +414,8 @@ impl VisualCache {
         self.pokemon_requested.insert((kind,id));
         self.ensure(ui, kind, id, None);
         if self.textures.contains_key(&(kind,id)) {self.touch((kind,id));}
-        let frames = self.textures.get(&(kind, id))?;
-        let frame = if frames.len() > 1 && ui.input(|input| input.focused) {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
-            ui.input(|input| (input.time.max(0.0) * 4.0) as usize) % frames.len()
-        } else { 0 };
-        let texture=frames.get(frame).map(TextureHandle::id);
+        let texture=self.textures.get(&(kind,id))
+            .and_then(|frames|frames.first().map(TextureHandle::id));
         if texture.is_some() {self.pokemon_visible.insert((kind,id));}
         texture
     }

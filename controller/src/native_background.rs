@@ -481,6 +481,10 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
 fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
     desired: &Arc<Mutex<Vec<String>>>) {
     let state = payload.get("estado");
+    let twitch_rooms_updated = state.and_then(|value|value.get("twitch"))
+        .is_some_and(|twitch|
+            twitch.get("lives").and_then(Value::as_array).is_some() ||
+            twitch.get("assistindoEm").and_then(Value::as_array).is_some());
     update(snapshot, |status| {
         status.frames = status.frames.saturating_add(1);
         status.last_received = Some(Instant::now());
@@ -540,15 +544,18 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
             }
         }
     });
-    // Use the same source of truth as stream-auto-open: game server live rooms
-    // PLUS reward-active rooms, so a temporarily omitted stream is preserved.
-    if let Ok(game) = snapshot.lock() {
+    // Combat and market packets do not affect Twitch room membership.
+    // Avoid cloning/sorting channels or taking a second lock for those frames.
+    // Preserve both live rooms and reward-active rooms when a list changes.
+    if twitch_rooms_updated {
+        if let Ok(game) = snapshot.lock() {
         let mut names = game.twitch_live.clone();
         names.extend(game.twitch_watching.iter().cloned());
         names.sort_unstable();
         names.dedup();
         if let Ok(mut current) = desired.lock() {
             if *current != names { *current = names; }
+        }
         }
     }
 }
@@ -603,6 +610,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
                 let mut last_status_publish = Instant::now();
+                let mut last_snatch_status_publish = Instant::now() - Duration::from_secs(5);
                 let mut last_config = capture_config.lock().map(|v|v.clone())
                     .unwrap_or_default();
                 gameplay.configure(&last_config);
@@ -858,6 +866,14 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // These snapshots are for egui, not for purchasing or capturing.
                     // Do not rebuild rule rows and clone market state 16 times/sec.
                     if last_status_publish.elapsed() >= Duration::from_secs(1) {
+                        // Snatch display rows are nonessential telemetry. Never
+                        // build them inside the 60 ms purchase dispatcher or
+                        // during an active release-time buying burst.
+                        if last_snatch_status_publish.elapsed() >= Duration::from_secs(5)
+                            && !market.snatch_critical(&market_cfg) {
+                            market.publish_snatch_status(&market_cfg,Instant::now());
+                            last_snatch_status_publish=Instant::now();
+                        }
                         restock.publish_status();
                         update(&snapshot, |s| {
                             s.native_automation = automation_writer.status.clone();
