@@ -32,7 +32,7 @@ enum AtlasAvailability { All, Unlocked, Locked }
 enum AtlasCollection { All, InDepot, NotInDepot }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AtlasSort {
-    Xp, Gold, Capture, ShinyCaught, OutlandRare, SaleValue, Shiny, Level, Name,
+    Kills, Xp, Gold, Capture, ShinyCaught, OutlandRare, SaleValue, Shiny, Level, Name,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +46,7 @@ pub(super) struct AtlasFilters {
     collection: AtlasCollection,
     weak_to: std::collections::BTreeSet<String>,
     weakness_match_all: bool,
+    aoe_gain_only: bool,
     sort: AtlasSort,
     ascending: bool,
     /// Per-account Explorer selection; stable across repaint and socket snapshots.
@@ -58,7 +59,7 @@ impl Default for AtlasFilters {
             min_level:0,max_level:0,availability:AtlasAvailability::All,
             collection:AtlasCollection::All,
             weak_to:std::collections::BTreeSet::new(),weakness_match_all:false,
-            sort:AtlasSort::Xp,ascending:false,selected_species:None,
+            aoe_gain_only:false,sort:AtlasSort::Xp,ascending:false,selected_species:None,
         }
     }
 }
@@ -76,7 +77,8 @@ impl AtlasFilters {
         usize::from(self.min_level>0)+usize::from(self.max_level>0)+
         usize::from(self.availability!=AtlasAvailability::All)+
         usize::from(self.collection!=AtlasCollection::All)+
-        usize::from(!self.weak_to.is_empty())
+        usize::from(!self.weak_to.is_empty())+
+        usize::from(self.aoe_gain_only)
     }
 }
 
@@ -314,6 +316,99 @@ fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
             HuntRanking::PokemonXp=>b.pokemon_event_known,
             HuntRanking::Gold=>true,
         }
+}
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+enum AtlasAoeCue { NoLead, SingleTarget, Equipped, Accelerated, SpawnLimited }
+
+fn atlas_aoe_cue(
+    lead:Option<&native_hunts::PokemonInfo>,
+    forecast:Option<&native_atlas::Forecast>,
+)->AtlasAoeCue{
+    match lead {
+        None => AtlasAoeCue::NoLead,
+        Some(mon) if !mon.tm_aoe => AtlasAoeCue::SingleTarget,
+        Some(_) => match forecast {
+            Some(f) if f.aoe => AtlasAoeCue::Accelerated,
+            Some(_) => AtlasAoeCue::SpawnLimited,
+            None => AtlasAoeCue::Equipped,
+        }
+    }
+}
+fn atlas_aoe_label(cue:AtlasAoeCue)->(&'static str,Color32){
+    match cue {
+        AtlasAoeCue::NoLead => (tr("Lead unavailable"),MUTED),
+        AtlasAoeCue::SingleTarget => (tr("Single-target · no AoE TM"),MUTED),
+        AtlasAoeCue::Equipped => (tr("TM AoE equipped"),ACCENT),
+        AtlasAoeCue::Accelerated => (tr("TM AoE · faster here"),GOOD),
+        AtlasAoeCue::SpawnLimited => (tr("TM AoE · spawn-limited"),MUTED),
+    }
+}
+/// One consistent, visually prominent combat signal across the recommendations,
+/// Explorer list/details, current hunt and account comparison panels.
+fn draw_atlas_combat_cues(
+    ui:&mut egui::Ui,
+    lead:Option<&native_hunts::PokemonInfo>,
+    forecast:Option<&native_atlas::Forecast>,
+){
+    let (aoe_label,aoe_color)=atlas_aoe_label(atlas_aoe_cue(lead,forecast));
+    ui.horizontal_wrapped(|ui|{
+        ui.label(RichText::new(aoe_label).size(11.0).strong().color(aoe_color));
+        if let Some(f)=forecast {
+            ui.label(RichText::new(format!(
+                "{} {}",format_hunt_amount(f.kills_h),tr("kills/h")
+            )).size(11.0).strong().color(TEXT));
+            if f.aoe {
+                ui.label(RichText::new(format!(
+                    "≈{:.1} {}",f.engaged,tr("engaged targets")
+                )).size(10.0).color(ACCENT));
+            }
+            let (risk,risk_color)=if f.one_hit {
+                (tr("Lethal burst").to_owned(),BAD)
+            }else if f.worst_hit_fraction>=0.5 {
+                (format!("{} {:.0}% HP",tr("Hit risk"),f.worst_hit_fraction*100.0),WARN)
+            }else{
+                (format!("{} {:.0}% HP",tr("Worst hit"),f.worst_hit_fraction*100.0),MUTED)
+            };
+            ui.label(RichText::new(risk).size(10.0).strong().color(risk_color))
+                .on_hover_text(tr("Worst modeled simultaneous hit as a share of your Pokémon's full HP; assumes automatic healing."));
+            if f.deaths_h>0.0 {
+                ui.label(RichText::new(format!(
+                    "{:.1} {}",f.deaths_h,tr("deaths/h")
+                )).size(10.0).color(WARN));
+            }
+        }
+    });
+}
+fn draw_atlas_combat_profile(
+    ui:&mut egui::Ui,view:&HuntView,cache:&EstimateCache,
+){
+    let current=view.hunt_slug.as_deref().and_then(|slug|cache.get(slug));
+    egui::Frame::new().fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0,BORDER))
+        .corner_radius(8.0).inner_margin(egui::Margin::symmetric(11,7))
+        .show(ui,|ui|{
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui|{
+                ui.label(RichText::new(tr("COMBAT PROFILE"))
+                    .size(10.0).strong().color(DIM));
+                if let Some(lead)=view.active_pokemon.as_ref() {
+                    ui.label(RichText::new(format!("{} · Lv {}",lead.name,lead.level))
+                        .size(11.0).strong().color(TEXT));
+                    if let Some(element)=lead.tm_elemental.as_deref() {
+                        ui.label(RichText::new(format!("Z-Move {element}"))
+                            .size(10.0).color(ACCENT));
+                    }
+                }
+                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current.as_ref());
+                if view.hunt_slug.is_none() {
+                    ui.label(RichText::new(tr("Select a hunt for combat projections"))
+                        .size(10.0).color(MUTED));
+                }else if current.is_none() && cache.is_pending(){
+                    ui.label(RichText::new(tr("Computing combat forecasts"))
+                        .size(10.0).color(WARN));
+                }
+            });
+        });
 }
 fn draw_rate(ui:&mut egui::Ui,label:&str,value:Option<f64>,source:RateSource){
     ui.vertical(|ui|{
@@ -765,6 +860,7 @@ fn atlas_objective(
         AtlasSort::Name=>None,
         AtlasSort::Level=>Some(hunt.level as f64),
         // Exactly one XP stream: never add trainer and Pokémon experience.
+        AtlasSort::Kills=>forecast.map(|f|f.kills_h),
         AtlasSort::Xp=>forecast.map(|f|f.trainer_xp_h),
         AtlasSort::Gold=>forecast.map(|f|f.combat_gold_h),
         AtlasSort::SaleValue=>sale_value,
@@ -777,6 +873,7 @@ fn atlas_objective(
 }
 fn atlas_sort_label(sort:AtlasSort)->&'static str {
     match sort {
+        AtlasSort::Kills=>tr("Kills/h · combat speed"),
         AtlasSort::Xp=>tr("XP/h"),
         AtlasSort::Gold=>tr("Gross gold/h"),
         AtlasSort::Capture=>tr("Capture chance"),
@@ -905,6 +1002,10 @@ fn atlas_species_rows(
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
+        let hunt_forecast=cache.get(&hunt.slug);
+        if filters.aoe_gain_only && !hunt_forecast.as_ref().is_some_and(|f|f.aoe) {
+            continue;
+        }
         // Only allocate a compact destination label if at least one species
         // actually passes the current filters.
         let mut destination_label:Option<Arc<AtlasHuntLabel>>=None;
@@ -936,28 +1037,11 @@ fn atlas_species_rows(
             if filters.collection==AtlasCollection::InDepot && !owned ||
                filters.collection==AtlasCollection::NotInDepot && owned {continue}
             let share=spawn.weight.max(0.0)/sum;
-            let forecast=cache.get(&hunt.slug);
-            let base=if filters.sort==AtlasSort::Gold {
-                let m=&view.measurements;
-                let pace_valid=m.seconds>=30.0 && m.kills>=5
-                    && m.last_battle_age_secs.is_none_or(|age|age<=180)
-                    && m.kills_h.is_finite() && m.kills_h>0.0;
-                if pace_valid && view.hunt_slug.as_deref()==Some(hunt.slug.as_str())
-                    && m.valid_gross_gold {
-                    Some(m.gold_gross_h)
-                }else if pace_valid {
-                    // This is explicitly a same-speed comparison, not a
-                    // promise of achievable DPS or earnings in another hunt.
-                    native_hunts::atlas_pace_scenario(hunt,m.kills_h)
-                        .map(|(_,gold)|gold)
-                }else{
-                    atlas_objective(filters.sort,forecast.as_ref(),hunt,
-                        share,reference.and_then(|r|r.catalog_sell_values.get(&spawn.id)).copied())
-                }
-            }else{
-                atlas_objective(filters.sort,forecast.as_ref(),hunt,
-                    share,reference.and_then(|r|r.catalog_sell_values.get(&spawn.id)).copied())
-            };
+            let forecast=hunt_forecast.clone();
+            // The same full-wave simulator must feed both XP and gold.
+            // Measured gold is available in Current hunt, never mixed into rankings.
+            let base=atlas_objective(filters.sort,forecast.as_ref(),hunt,
+                share,reference.and_then(|r|r.catalog_sell_values.get(&spawn.id)).copied());
 
             let objective=match filters.sort {
                 AtlasSort::Capture=>reference.and_then(|r|{
@@ -1318,7 +1402,7 @@ fn atlas_filters_panel(
                     egui::ComboBox::from_id_salt(("atlas-quick-sort",account))
                         .selected_text(atlas_sort_label(f.sort)).show_ui(ui,|ui|{
                             for item in [
-                                AtlasSort::Xp,AtlasSort::Gold,AtlasSort::Capture,
+                                AtlasSort::Kills,AtlasSort::Xp,AtlasSort::Gold,AtlasSort::Capture,
                                 AtlasSort::SaleValue,AtlasSort::ShinyCaught,
                                 AtlasSort::OutlandRare,AtlasSort::Shiny,
                                 AtlasSort::Level,AtlasSort::Name
@@ -1329,10 +1413,28 @@ fn atlas_filters_panel(
                                 }
                             }
                         });
+                    if ui.selectable_label(f.sort==AtlasSort::Kills,
+                        tr("Fastest kills")).clicked(){
+                        f.sort=AtlasSort::Kills;f.ascending=false;*page=0;
+                    }
                     if ui.small_button(if f.ascending{"↑"}else{"↓"})
                         .on_hover_text(if f.ascending{tr("Ascending sort")}
                             else{tr("Descending sort")}).clicked(){
                         f.ascending=!f.ascending;*page=0;
+                    }
+                });
+                ui.horizontal_wrapped(|ui|{
+                    let equipped=view.active_pokemon.as_ref().is_some_and(|p|p.tm_aoe);
+                    if !equipped && f.aoe_gain_only {
+                        f.aoe_gain_only=false;*page=0;
+                    }
+                    ui.add_enabled_ui(equipped,|ui|{
+                        if ui.checkbox(&mut f.aoe_gain_only,
+                            tr("Only hunts where AoE increases kills")).changed(){*page=0;}
+                    });
+                    if !equipped {
+                        ui.label(RichText::new(tr("Equip AoE TM to filter by AoE benefit"))
+                            .size(10.0).color(MUTED));
                     }
                 });
                 ui.horizontal_wrapped(|ui|{
@@ -1768,7 +1870,7 @@ fn draw_atlas_explorer(
         ).size(10.0).color(WARN));
     }
     if filters.sort==AtlasSort::Gold {
-        ui.label(RichText::new(tr("Gold comparisons use measured combat gold for the current hunt; other hunts use its kill pace as a scenario, not predicted DPS."))
+        ui.label(RichText::new(tr("Gold rankings use simulated kills/h for every hunt; measured current-hunt gold is shown separately."))
             .size(10.0).color(MUTED));
     }
     if filters.sort==AtlasSort::SaleValue {
