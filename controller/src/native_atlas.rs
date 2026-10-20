@@ -1,15 +1,13 @@
-//! Read-only Hunt Atlas reference: fetched only when Hunts tab opens.
-//! Never execute public JavaScript or send credentials to the reference host.
-//! The account's own welcome.hunts is authoritative for unlocked destinations.
-use crate::native_hunts::{HuntEntry, HuntSpecies, HuntView, PokemonInfo, base_xp, gross_gold_per_kill};
+//! Native Hunt Atlas reference: public game creature catalogs plus the bundled
+//! upstream type chart; loaded only when Hunt Atlas opens.
+//! No third-party guide request. Authenticated hunts remain server-authoritative.
+use crate::native_hunts::{HuntEntry, HuntView, PokemonInfo, base_xp, gross_gold_per_kill};
+#[cfg(test)]
+use crate::native_hunts::HuntSpecies;
 #[path = "native_atlas_combat.rs"]
 mod combat;
 use serde_json::Value;
 use std::{collections::{BTreeMap,BTreeSet}, io::Read, sync::OnceLock, time::Duration};
-
-const URL: &str = "https://guiapokeidlehardtocapture.site/data.js?v=32";
-const HOST: &str = "guiapokeidlehardtocapture.site";
-const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ReferenceSpecies {
@@ -22,7 +20,7 @@ pub struct ReferenceSpecies {
 #[derive(Clone, Debug)]
 pub struct ReferenceDrop {
     pub item_id: Option<u64>,
-    /// The public guide often identifies loot by a name, not by a numeric ID.
+    /// Retained for compatibility with historical NPC loot fixture data.
     pub item_name: Option<String>,
     pub chance_pct: f64,
     pub minimum: f64,
@@ -41,10 +39,10 @@ pub struct ReferenceMove {
 pub struct Reference {
     pub species: BTreeMap<u64, ReferenceSpecies>,
     pub chart: BTreeMap<String, BTreeMap<String, f64>>,
-    /// Public-guide destinations, INCLUDING locked ones. Never infer game
-    /// unlocks from these; only the authenticated welcome.hunts may do that.
+    /// Optional destination fixtures for legacy tests. Runtime destinations
+    /// come exclusively from the authenticated game catalog.
     pub hunts: Vec<HuntEntry>,
-    /// Public client-catalog derived capture rarity (not guide loot prices).
+    /// Public game-catalog derived capture rarity (not market listing prices).
     pub capture_rarities: BTreeMap<u64,f64>,
     /// Upstream evolutionary-stage capture cap (20/40/100), inferred from
     /// current public creature evolution chains after all catalogs merge.
@@ -107,95 +105,7 @@ pub struct Forecast {
     pub incoming_damage_per_kill:f64,
 }
 
-pub fn parse(script: &str) -> Result<Reference, String> {
-    let (_, data) = script.split_once("window.PI_DATA =")
-        .ok_or_else(|| "Unexpected public hunt guide reference format".to_owned())?;
-    let value: Value = serde_json::from_str(data.trim().trim_end_matches(';').trim())
-        .map_err(|_| "Public guide reference is not valid JSON".to_owned())?;
-    let all = value.get("especies").and_then(Value::as_array)
-        .ok_or_else(|| "Guide has no species catalog".to_owned())?;
-    let types = value.get("tipos").and_then(Value::as_object)
-        .ok_or_else(|| "Guide has no type chart".to_owned())?;
-    let mut result = Reference::default();
-    for (attack, coverage) in types {
-        if let Some(coverage) = coverage.as_object() {
-            let mut row = BTreeMap::new();
-            for (defend, effectiveness) in coverage {
-                if let Some(n) = effectiveness.as_f64().filter(|n|n.is_finite() && *n >= 0.0) {
-                    row.insert(defend.clone(),n);
-                }
-            }
-            result.chart.insert(attack.clone(),row);
-        }
-    }
-    for p in all {
-        let Some(id) = p.get("id").and_then(Value::as_u64) else { continue };
-        let Some(name) = p.get("n").and_then(Value::as_str) else { continue };
-        let Some(types) = p.get("t").and_then(Value::as_array) else { continue };
-        let Some(base) = p.get("b").and_then(Value::as_array) else { continue };
-        if base.len() < 6 { continue }
-        let base = base.iter().filter_map(Value::as_f64).collect::<Vec<_>>();
-        if base.len() < 6 { continue }
-        let mut moves = Vec::new();
-        if let Some(entries) = p.get("m").and_then(Value::as_array) {
-            for entry in entries {
-                let Some(m) = entry.as_array().filter(|v|v.len()>=6) else { continue };
-                let (Some(move_type),Some(power),Some(cooldown),Some(min_level)) =
-                    (m[1].as_str(),m[3].as_f64(),m[4].as_f64(),m[5].as_u64()) else {continue};
-                if power < 0.0 || cooldown <= 0.0 || !power.is_finite() {continue}
-                moves.push(ReferenceMove {
-                    move_type:move_type.to_owned(),
-                    special:m[2].as_u64().unwrap_or(0)!=0,
-                    power,cooldown,min_level:min_level.min(u32::MAX as u64) as u32
-                });
-            }
-        }
-        // Legacy guide NPC drops are no longer awarded by the game.
-        let drops=Vec::new();
-        result.species.insert(id,ReferenceSpecies {
-            name:name.to_owned(),
-            types:types.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
-            base,moves,drops
-        });
-    }
-    if let Some(hunts)=value.get("hunts").and_then(Value::as_array) {
-        let mut dedup=std::collections::BTreeSet::new();
-        for raw in hunts.iter().take(10_000) {
-            let (Some(slug),Some(name),Some(level))=(
-                raw.get("s").and_then(Value::as_str),
-                raw.get("n").and_then(Value::as_str),
-                raw.get("nv").and_then(Value::as_u64)
-            ) else {continue};
-            if slug.is_empty() || slug.len()>128 || !slug.bytes()
-                .all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_')
-                || name.is_empty() || name.len()>160
-                || level==0 || level>u32::MAX as u64 || !dedup.insert(slug.to_owned())
-            {continue}
-            let species=raw.get("e").and_then(Value::as_array)
-                .map(|list|list.iter().filter_map(|row|{
-                    let pair=row.as_array().filter(|a|a.len()>=2)?;
-                    let id=pair[0].as_u64()?;
-                    let weight=pair[1].as_f64()?;
-                    if id==0 || !weight.is_finite() || weight<=0.0 {return None}
-                    Some(HuntSpecies{id,weight})
-                }).collect::<Vec<_>>()).unwrap_or_default();
-            if species.is_empty(){continue}
-            result.hunts.push(HuntEntry {
-                slug:slug.to_owned(),name:name.to_owned(),
-                area:raw.get("a").and_then(Value::as_str).unwrap_or("").to_owned(),
-                region:String::new(),level:level as u32,
-                species,total_spawns:0,looktype:None,
-            });
-        }
-    }
-    if result.species.is_empty() || result.chart.is_empty() {
-        return Err("Incomplete public hunt reference".into());
-    }
-    Ok(result)
-}
-/// Fallback from the upstream game's elemental effectiveness contract.
-/// The public guide is helpful for locked destination previews but must not
-/// be a single point of failure for authenticated live Hunt Atlas data.
+/// The type chart is bundled from upstream; no download or guide is required.
 fn built_in_type_chart()->BTreeMap<String,BTreeMap<String,f64>>{
     const TYPES:[&str;18]=[
         "NORMAL","FIRE","WATER","ELECTRIC","GRASS","ICE","FIGHTING",
@@ -218,43 +128,10 @@ fn built_in_type_chart()->BTreeMap<String,BTreeMap<String,f64>>{
 }
 pub fn load() -> Result<Reference, String> {
     crate::native_tls::ensure()?;
-    let client=reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(6))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() > 2 || attempt.url().host_str()!=Some(HOST) {
-                attempt.stop()
-            } else { attempt.follow() }
-        }))
-        .build().map_err(|_| "Could not initialize guide downloader")?;
-    let guide=(||->Result<Reference,String>{
-        let response=client.get(URL)
-            .send().map_err(|e|format!("Guide unavailable: {e}"))?
-            .error_for_status().map_err(|e|format!("Guide returned error: {e}"))?;
-        if response.content_length().is_some_and(|n|n>MAX_BYTES){
-            return Err("Guide reference is larger than the allowed 4 MB".into())
-        }
-        let mut bytes=Vec::new();
-        response.take(MAX_BYTES+1).read_to_end(&mut bytes)
-            .map_err(|_|"Could not read guide reference".to_owned())?;
-        if bytes.len() as u64>MAX_BYTES{
-            return Err("Guide reference exceeded size limit".into())
-        }
-        let script=std::str::from_utf8(&bytes)
-            .map_err(|_|"Guide reference is not UTF-8".to_owned())?;
-        parse(script)
-    })();
-    let mut reference=match guide {
-        Ok(guide)=>guide,
-        Err(error)=>{
-            crate::logging::warn(&format!(
-                "Hunt Atlas guide unavailable; using game catalogs: {error}"));
-            Reference::default()
-        }
-    };
-    if reference.chart.is_empty(){reference.chart=built_in_type_chart();}
-    // Only public static assets. Never send BiDi credentials or game cookies.
-    // Missing optional assets do NOT prevent Atlas from loading.
+    let mut reference=Reference::default();
+    reference.chart=built_in_type_chart();
+    // Public game-hosted static assets only. No credentials or game cookies.
+    // Missing individual asset files do not prevent loading the remaining ones.
     let assets=reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(7))
@@ -283,7 +160,7 @@ pub fn load() -> Result<Reference, String> {
         }
     }
     if reference.species.is_empty(){
-        return Err("Neither the guide nor the game's public creature catalogs could be loaded".into())
+        return Err("Game creature catalogs are unavailable".into())
     }
     finalize_capture_stages(&mut reference);
     merge_upstream_megas(&mut reference);
@@ -651,13 +528,6 @@ mod tests {
         assert!(!reference.capture_stages.contains_key(&9006));
     }
     #[test]
-    fn parses_json_only_and_rejects_executable_script(){
-        let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"GHOST":0.0}},"especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],"m":[]}],"hunts":[]};"#;
-        assert_eq!(parse(text).unwrap().species.len(),1);
-        assert!(parse("window.PI_DATA = alert(document.cookie);").is_err());
-        assert!(parse("alert('hi');").is_err());
-    }
-    #[test]
     fn forecast_uses_simulation_instead_of_current_hunt_pace_without_double_counting_xp() {
         let mut view=HuntView::default();
         let hunt=HuntEntry{
@@ -755,29 +625,6 @@ mod tests {
         let result=estimate(&view,&hunt,&guide).unwrap();
         assert!((result.gold_h-result.combat_gold_h-result.npc_loot_gold_h).abs()<0.001);
         assert!(result.trainer_xp_per_kill>result.pokemon_xp_per_kill);
-    }
-    #[test]
-    fn obsolete_guide_npc_drops_are_not_loaded(){
-        let script=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
-            "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[1,2,3,4,5,6],
-            "l":[["Moon Stone",2.5,1,3,400]]}]};"#;
-        let guide=parse(script).unwrap();
-        assert!(guide.species[&1].drops.is_empty());
-    }
-    #[test]
-    fn guide_catalog_is_read_only_and_does_not_fake_unlocks(){
-        let text=r#"window.PI_DATA = {"tipos":{"NORMAL":{"NORMAL":1}},
-            "especies":[{"id":1,"n":"A","t":["NORMAL"],"b":[10,10,10,10,10,10]}],
-            "hunts":[{"s":"forest-1","n":"Forest","a":"Kanto","nv":70,
-                "e":[[1,75],[2,25]]},
-                {"s":"bad slug","n":"Invalid","nv":30,"e":[[1,100]]}]};"#;
-        let guide=parse(text).unwrap();
-        assert_eq!(guide.hunts.len(),1);
-        assert_eq!(guide.hunts[0].slug,"forest-1");
-        assert_eq!(guide.hunts[0].species[0].weight,75.0);
-        // Being in the public guide says nothing about authenticated access.
-        let view=HuntView::default();
-        assert!(!view.hunts.iter().any(|hunt|hunt.slug=="forest-1"));
     }
     #[test]
     fn xp_calculation_keeps_separate_channels(){
