@@ -36,6 +36,29 @@ fn pokemon_texture_size(width:u32, height:u32)->(u32,u32) {
      ((height as u64*scale)/longest).max(1) as u32)
 }
 
+// Sprite sheets and Pokédex PNGs often contain large transparent borders.
+// Remove that dead space once at texture upload, not on every UI frame.
+// Non-Pokémon item/ball artwork is deliberately left untouched.
+fn crop_pokemon_transparency(image: image::RgbaImage) -> image::RgbaImage {
+    let (width, height) = image.dimensions();
+    let (mut left, mut top) = (width, height);
+    let (mut right, mut bottom) = (0, 0);
+    for (x, y, pixel) in image.enumerate_pixels() {
+        if pixel[3] == 0 { continue; }
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x);
+        bottom = bottom.max(y);
+    }
+    // Fully transparent sprites have no bounds; preserve their original size.
+    if left == width || (left == 0 && top == 0 &&
+        right + 1 == width && bottom + 1 == height) {
+        return image;
+    }
+    image::imageops::crop_imm(&image, left, top,
+        right - left + 1, bottom - top + 1).to_image()
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind { Ball, Item, Pokemon, PokemonLooktype }
 impl Kind {
@@ -313,6 +336,7 @@ impl VisualCache {
                 img.width() > MAX_EDGE || img.height() > MAX_EDGE { continue; }
             let rgba = img.into_rgba8();
             let rgba=if matches!(key.0,Kind::Pokemon|Kind::PokemonLooktype) {
+                let rgba = crop_pokemon_transparency(rgba);
                 let (w,h)=pokemon_texture_size(rgba.width(),rgba.height());
                 if w!=rgba.width() || h!=rgba.height() {
                     image::imageops::resize(&rgba,w,h,image::imageops::FilterType::Nearest)
@@ -420,6 +444,16 @@ impl VisualCache {
         texture
     }
 
+    /// Overview needs the cropped texture's dimensions so rectangular Pokémon
+    /// keep their proportions when fitted into the existing square sprite slot.
+    pub fn pokemon_texture_sized(&mut self, ui: &mut egui::Ui, kind: Kind, id: u64)
+        -> Option<(egui::TextureId, egui::Vec2)>
+    {
+        let id_texture = self.pokemon_texture_id(ui, kind, id)?;
+        let size = self.textures.get(&(kind, id))?.first()?.size_vec2();
+        Some((id_texture, size))
+    }
+
     /// Returns true if an icon was drawn. Always fall back to text if false.
     /// Pokémon textures are resolved from verified game looktypes and sprite
     /// atlases on the worker, never by guessing an image URL from species ID.
@@ -455,6 +489,26 @@ mod tests {
         assert_eq!(pokemon_texture_size(32,64),(32,64));
         assert_eq!(pokemon_texture_size(1,512),(1,128));
         assert!(MAX_POKEMON_TEXTURE_PIXELS<=2*1024*1024);
+    }
+
+    #[test]
+    fn pokemon_art_crops_only_transparent_margins() {
+        let mut image = image::RgbaImage::new(96, 96);
+        for y in 20..72 {
+            for x in 30..66 {
+                image.put_pixel(x, y, image::Rgba([10, 150, 75, 255]));
+            }
+        }
+        let cropped = crop_pokemon_transparency(image);
+        assert_eq!(cropped.dimensions(), (36, 52));
+        assert_eq!(cropped.get_pixel(0, 0).0, [10, 150, 75, 255]);
+        assert_eq!(cropped.get_pixel(35, 51).0, [10, 150, 75, 255]);
+
+        // A blank or already tight image should not be needlessly transformed.
+        assert_eq!(crop_pokemon_transparency(image::RgbaImage::new(96, 96))
+            .dimensions(), (96, 96));
+        let solid = image::RgbaImage::from_pixel(12, 24, image::Rgba([1, 2, 3, 255]));
+        assert_eq!(crop_pokemon_transparency(solid).dimensions(), (12, 24));
     }
 
     #[test]

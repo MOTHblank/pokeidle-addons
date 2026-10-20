@@ -4333,7 +4333,7 @@ fn overview_combat_image(
         (SpriteKind::Pokemon, species_id),
     ].into_iter().find_map(|(kind, id)| {
         id.filter(|id| *id > 0)
-            .and_then(|id| visuals.pokemon_texture_id(ui, kind, id))
+            .and_then(|id| visuals.pokemon_texture_sized(ui, kind, id))
     });
     egui::Frame::new()
         .fill(PANEL_ALT)
@@ -4341,8 +4341,21 @@ fn overview_combat_image(
         .corner_radius(10.0)
         .inner_margin(egui::Margin::same(4))
         .show(ui, |ui| {
-            if let Some(texture) = texture {
-                ui.image((texture, egui::vec2(OVERVIEW_POKEMON_SPRITE_SIZE, OVERVIEW_POKEMON_SPRITE_SIZE)));
+            if let Some((texture, image_size)) = texture {
+                // Keep the existing 72px slot/frame; scale only the visible
+                // Pokémon, centered and without stretching rectangular sprites.
+                let (slot, _) = ui.allocate_exact_size(
+                    egui::vec2(OVERVIEW_POKEMON_SPRITE_SIZE, OVERVIEW_POKEMON_SPRITE_SIZE),
+                    egui::Sense::hover(),
+                );
+                let longest = image_size.x.max(image_size.y);
+                if longest > 0.0 {
+                    let size = image_size * (OVERVIEW_POKEMON_SPRITE_SIZE / longest);
+                    ui.painter().image(texture,
+                        egui::Rect::from_center_size(slot.center(), size),
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                        Color32::WHITE);
+                }
             } else {
                 ui.add_sized([OVERVIEW_POKEMON_SPRITE_SIZE; 2], egui::Label::new(
                     RichText::new(if opponent { "◇" } else { "◈" })
