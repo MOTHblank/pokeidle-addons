@@ -46,9 +46,9 @@ fn iv_cooldown_ms(base_ms: f64, mon: &PokemonInfo) -> f64 {
 /// Exact shared/cooldown-golpes.mjs skill cooldown: base species Speed
 /// determines up to 7% reduction, scaled by the Pokémon's Speed IV.
 fn skill_cooldown_ms(base_ms:f64, base_speed:f64, mon:&PokemonInfo)->f64 {
-    let potential=if base_speed<=120.0 {
+    let potential=(if base_speed<=120.0 {
         base_speed.max(0.0)/20.0
-    }else{6.0+(base_speed-120.0)/40.0}.min(7.0);
+    }else{6.0+(base_speed-120.0)/40.0}).min(7.0);
     (base_ms*(1.0-potential*speed_iv(mon)/3200.0)).round()
 }
 fn wild_stat(base: f64, level: u32, iv: f64) -> f64 {
@@ -212,7 +212,7 @@ pub(super) fn simulate(
         }
         // Z-Move is a permanent 2800-power SPECIAL TM with a 60s base cooldown.
         if let Some(element)=mon.tm_elemental.as_deref().filter(|kind|
-            player.types.iter().any(|t|t==*kind)) {
+            player.types.iter().any(|t|t.as_str()==*kind)) {
             attacks.push(Attack{
                 damage:move_damage(r,mon.level,2800.0,stats[3],
                     wild_stat(foe.base[4],hunt.level,16.0),
