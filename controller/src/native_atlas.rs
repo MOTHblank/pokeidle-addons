@@ -39,9 +39,6 @@ pub struct ReferenceMove {
 pub struct Reference {
     pub species: BTreeMap<u64, ReferenceSpecies>,
     pub chart: BTreeMap<String, BTreeMap<String, f64>>,
-    /// Optional destination fixtures for legacy tests. Runtime destinations
-    /// come exclusively from the authenticated game catalog.
-    pub hunts: Vec<HuntEntry>,
     /// Public game-catalog derived capture rarity (not market listing prices).
     pub capture_rarities: BTreeMap<u64,f64>,
     /// Upstream evolutionary-stage capture cap (20/40/100), inferred from
@@ -471,8 +468,6 @@ mod tests {
         assert_eq!(mon.moves[0].min_level,15);
         assert_eq!(mon.moves[0].cooldown,2300.0);
         assert_eq!(reference.chart["ELECTRIC"]["GROUND"],0.0);
-        assert!(reference.hunts.is_empty(),
-            "unlocked hunts come from the authenticated session, not external guides");
     }
     #[test]
     fn catalog_merge_adds_regional_forms_and_preserves_identity(){
