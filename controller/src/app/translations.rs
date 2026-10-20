@@ -296,8 +296,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "● In depot" => "● No depósito",
         "Top result locked" => "Melhor resultado bloqueado",
         "● Current hunt" => "● Hunt atual",
-        "Hunt best →" => "Caçar melhor →",
-        "Hunt unlocked →" => "Caçar hunt liberada →",
         "No unlocked destination" => "Nenhum destino liberado",
         "Species comparison against your active Pokémon. The type chart is not a guarantee of a particular encounter or move." => "Comparação de espécies com seu Pokémon ativo. A tabela de tipos não garante um encontro ou golpe específico.",
         "Showing the first 35 ranked destinations." => "Exibindo os primeiros 35 destinos classificados.",
