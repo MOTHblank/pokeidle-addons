@@ -477,7 +477,7 @@ fn draw_atlas_encounter(
 fn draw_hunt_row(
     ui:&mut egui::Ui,result:&RankedHunt<'_>,rank:usize,
     ranking:HuntRanking,view:&HuntView,reference:Option<&AtlasReference>,
-    live:bool,native:&NativeSession,error:&mut Option<String>,
+    live:bool,native:&NativeSession,error:&mut Option<String>,aoe_enabled:bool,
 ){
     let hunt=result.hunt;
     let current=view.hunt_slug.as_deref()==Some(hunt.slug.as_str());
@@ -514,7 +514,7 @@ fn draw_hunt_row(
                 });
             });
             ui.add_space(6.0);
-            draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),result.forecast.as_ref());
+            draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),result.forecast.as_ref(),aoe_enabled);
             ui.add_space(5.0);
             ui.horizontal_wrapped(|ui|{
                 draw_rate(ui,rate_label(ranking),result.value,result.source);
@@ -1297,7 +1297,8 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         )).size(10.0).color(MUTED));
                         let current_model=view.hunt_slug.as_deref()
                             .and_then(|slug|app.hunt_estimate_cache[*index].get(slug));
-                        draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current_model.as_ref());
+                        draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current_model.as_ref(),
+                            app.ui_options.atlas_aoe_enabled[*index]);
                         ui.add_space(5.0);
                         ui.horizontal_wrapped(|ui|{
                             let m=&view.measurements;
@@ -1336,7 +1337,8 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                                 rank+1,hunt.name,format_hunt_amount(forecast.trainer_xp_h),
                                 tr("Trainer XP/h")
                             )).size(11.0).strong().color(TEXT));
-                            draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),Some(forecast));
+                            draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),Some(forecast),
+                                app.ui_options.atlas_aoe_enabled[*index]);
                         }
                         if estimates.is_empty(){
                             ui.label(RichText::new(if *live &&
@@ -1533,7 +1535,7 @@ fn atlas_first_unlocked(row:&AtlasSpeciesRow)->Option<&AtlasDestination>{
 /// once per destination, and the Hunt action never targets a guide-only entry.
 fn draw_atlas_destination(
     ui:&mut egui::Ui,dest:&AtlasDestination,view:&HuntView,
-    native:&NativeSession,live:bool,error:&mut Option<String>
+    native:&NativeSession,live:bool,error:&mut Option<String>,aoe_enabled:bool,
 ){
     let current=view.hunt_slug.as_deref()==Some(dest.hunt.slug.as_str());
     let pending=view.pending_hunt_slug.as_deref()==Some(dest.hunt.slug.as_str());
@@ -1561,7 +1563,7 @@ fn draw_atlas_destination(
                 }
             });
             if let Some(f)=dest.forecast.as_ref(){
-                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),Some(f));
+                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),Some(f),aoe_enabled);
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
@@ -1596,7 +1598,7 @@ fn draw_atlas_species(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow,sort:AtlasSort,
     view:&HuntView,reference:Option<&AtlasReference>,
     filters:&AtlasFilters,native:&NativeSession,live:bool,
-    error:&mut Option<String>,
+    error:&mut Option<String>,aoe_enabled:bool,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
         egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -1653,7 +1655,7 @@ fn draw_atlas_species(
                     ui,reference,&row.types,&filters.weak_to
                 );
                 if let Some(best)=row.destinations.first(){
-                    draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),best.forecast.as_ref());
+                    draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),best.forecast.as_ref(),aoe_enabled);
                     ui.add_space(5.0);
                     // The highest projected destination may be guide-only. The
                     // action instead uses the highest ranked unlocked location.
@@ -1708,7 +1710,7 @@ fn draw_atlas_species(
                         for dest in row.destinations.iter().take(4){
                             ui.push_id(&dest.hunt.slug,|ui|{
                                 draw_atlas_destination(
-                                    ui,dest,view,native,live,error);
+                                    ui,dest,view,native,live,error,aoe_enabled);
                             });
                             ui.add_space(4.0);
                         }
@@ -1720,7 +1722,7 @@ fn draw_atlas_species(
                                 for dest in row.destinations.iter().skip(4).take(31){
                                     ui.push_id(&dest.hunt.slug,|ui|{
                                         draw_atlas_destination(
-                                            ui,dest,view,native,live,error);
+                                            ui,dest,view,native,live,error,aoe_enabled);
                                     });
                                     ui.add_space(4.0);
                                 }
@@ -1749,6 +1751,7 @@ fn draw_atlas_species_selector(
     sort:AtlasSort,selected:bool,
     reference:Option<&AtlasReference>,filters:&AtlasFilters,
     lead:Option<&native_hunts::PokemonInfo>,
+    aoe_enabled:bool,
 )->bool{
     let row_frame=egui::Frame::new()
         .fill(if selected{ACCENT.linear_multiply(0.13)}else{PANEL})
@@ -1787,7 +1790,7 @@ fn draw_atlas_species_selector(
                 });
             });
             if let Some(top)=row.destinations.first(){
-                draw_atlas_combat_cues(ui,lead,top.forecast.as_ref());
+                draw_atlas_combat_cues(ui,lead,top.forecast.as_ref(),aoe_enabled);
             }
             draw_atlas_selected_weaknesses(
                 ui,reference,&row.types,&filters.weak_to
@@ -1804,7 +1807,7 @@ fn draw_atlas_species_selector(
 
 fn draw_atlas_explorer(
     ui:&mut egui::Ui,view:&HuntView,
-    native:&NativeSession,live:bool,index:usize,
+    native:&NativeSession,live:bool,index:usize,aoe_enabled:bool,
     reference:Option<&AtlasReference>,filters:&mut AtlasFilters,
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
     results:&mut ExplorerCache,
@@ -1925,7 +1928,7 @@ fn draw_atlas_explorer(
                                 if draw_atlas_species_selector(
                                     ui,row,filters.sort,
                                     filters.selected_species==Some(row.id),
-                                    reference,filters,view.active_pokemon.as_ref()
+                                    reference,filters,view.active_pokemon.as_ref(),aoe_enabled
                                 ){
                                     filters.selected_species=Some(row.id);
                                 }
@@ -1950,7 +1953,7 @@ fn draw_atlas_explorer(
                             if let Some(row)=slice.iter().find(|row|
                                 filters.selected_species==Some(row.id)){
                                 draw_atlas_species(ui,row,filters.sort,view,reference,
-                                    filters,native,live,&mut error);
+                                    filters,native,live,&mut error,aoe_enabled);
                             }
                         });
                 }
@@ -1972,7 +1975,7 @@ fn draw_atlas_explorer(
                         for row in rows.iter().skip(visible.start)
                             .take(visible.end-visible.start){
                             draw_atlas_species(ui,row,filters.sort,view,reference,
-                                filters,native,live,&mut error);
+                                filters,native,live,&mut error,aoe_enabled);
                         }
                     });
             }
@@ -2113,7 +2116,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         app.hunt_subtab=HuntSubtab::Current;
     }
     ui.add_space(6.0);
-    draw_atlas_combat_profile(ui,&view,&app.hunt_estimate_cache[index]);
+    draw_atlas_combat_profile(ui,&view,&app.hunt_estimate_cache[index],
+        app.ui_options.atlas_aoe_enabled[index]);
     ui.add_space(6.0);
     draw_atlas_outland_tier(ui,&view,native,index,live,
         &mut app.hunt_action_error[index]);
@@ -2123,6 +2127,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
     // its nested list/detail panes meaningless and leaves the view blank.
     if app.hunt_subtab==HuntSubtab::Explorer{
         draw_atlas_explorer(ui,&view,native,live,index,
+            app.ui_options.atlas_aoe_enabled[index],
             app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
             &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
             &app.atlas_scenarios[index],&mut app.atlas_results[index],
@@ -2336,7 +2341,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 .size(12.0).strong().color(TEXT));
             if let Some(forecast)=hunts.hunt_slug.as_deref()
                 .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
-                draw_atlas_combat_cues(ui,hunts.active_pokemon.as_ref(),Some(&forecast));
+                draw_atlas_combat_cues(ui,hunts.active_pokemon.as_ref(),Some(&forecast),
+                    app.ui_options.atlas_aoe_enabled[index]);
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui|{
                     for (label,value) in [
@@ -2622,7 +2628,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     for (offset,result) in ranked.iter().skip(visible.start)
                         .take(visible.end-visible.start).enumerate(){
                         draw_hunt_row(ui,result,visible.start+offset+1,app.hunt_ranking,
-                            hunts,reference,live,native,&mut app.hunt_action_error[index]);
+                            hunts,reference,live,native,&mut app.hunt_action_error[index],
+                            app.ui_options.atlas_aoe_enabled[index]);
                         ui.add_space(5.0);
                     }
                     if ranked.is_empty(){
