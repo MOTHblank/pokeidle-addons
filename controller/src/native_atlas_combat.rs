@@ -29,6 +29,8 @@ pub(super) struct CombatPace {
     pub one_hit: bool,
     pub aoe: bool,
     pub engaged: f64,
+    pub worst_hit_fraction: f64,
+    pub incoming_damage_per_kill: f64,
 }
 #[derive(Clone, Copy)]
 struct Attack { damage: f64, cooldown_s: f64 }
@@ -192,6 +194,7 @@ pub(super) fn simulate(
     let mut ttk=0.0;
     let mut hit_mean=0.0;
     let mut hit_max=0.0f64;
+    let mut incoming_dps=0.0;
     for encounter in &hunt.species {
         let foe=match r.species.get(&encounter.id) {
             Some(s) if s.base.len()>=6 => s, _=>continue
@@ -234,6 +237,7 @@ pub(super) fn simulate(
         let threat=incoming(r,foe,hunt.level,player,stats);
         weight+=w;
         ttk+=w*time;
+        incoming_dps+=w*threat.dps;
         hit_mean+=w*threat.mean_hit;
         hit_max=hit_max.max(threat.worst_hit);
     }
@@ -243,6 +247,7 @@ pub(super) fn simulate(
     if coverage<0.6{return None}
     ttk/=weight;
     hit_mean/=weight;
+    incoming_dps/=weight;
     let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
     let mut kills_h=single_target_kills(&d,cycle,hunt);
     let mut aoe=false;
@@ -256,6 +261,7 @@ pub(super) fn simulate(
         .unwrap_or_else(||(stats[0]*12.0).round().max(24.0));
     let fatal_hit=hit_max+(engaged-1.0)*hit_mean;
     let one_hit=fatal_hit>=own_hp;
+    let incoming_damage_per_kill=incoming_dps*engaged*ttk;
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
     let recovery=RESPAWN_S+d.iter().sum::<f64>()/count as f64*PLAYER_TILE_S;
@@ -266,6 +272,8 @@ pub(super) fn simulate(
     if !kills_h.is_finite()||!ttk.is_finite() {return None}
     Some(CombatPace {
         kills_h,seconds_per_kill:ttk,coverage,deaths_h,one_hit,aoe,engaged,
+        worst_hit_fraction:fatal_hit/own_hp,
+        incoming_damage_per_kill,
     })
 }
 
