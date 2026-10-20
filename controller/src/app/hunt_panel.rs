@@ -3123,19 +3123,33 @@ mod tests {
         }
     }
     #[test]
-    fn aoe_cue_distinguishes_equipped_from_effective() {
+    fn aoe_cue_reflects_checkbox_not_server_tm_flag() {
         let mut mon=native_hunts::PokemonInfo::default();
-        assert_eq!(atlas_aoe_cue(None,None),AtlasAoeCue::NoLead);
-        assert_eq!(atlas_aoe_cue(Some(&mon),None),AtlasAoeCue::SingleTarget);
-        mon.tm_aoe=true;
-        assert_eq!(atlas_aoe_cue(Some(&mon),None),AtlasAoeCue::Equipped);
-        let no_gain=simulated_forecast(100.0,false);
-        assert_eq!(atlas_aoe_cue(Some(&mon),Some(&no_gain)),AtlasAoeCue::NoGain);
-        let gain=simulated_forecast(300.0,true);
-        assert_eq!(atlas_aoe_cue(Some(&mon),Some(&gain)),AtlasAoeCue::Accelerated);
+        assert_eq!(atlas_aoe_cue(None,false),AtlasAoeCue::NoLead);
+        assert_eq!(atlas_aoe_cue(Some(&mon),false),AtlasAoeCue::SingleTarget);
+        mon.tm_aoe=true; // partial game state must not silently opt the user in
+        assert_eq!(atlas_aoe_cue(Some(&mon),false),AtlasAoeCue::SingleTarget);
+        mon.tm_aoe=false;
+        assert_eq!(atlas_aoe_cue(Some(&mon),true),AtlasAoeCue::Enabled);
     }
     #[test]
-    fn aoe_explorer_filter_and_speed_sort_use_simulated_throughput() {
+    fn changing_account_aoe_checkbox_invalidates_forecast_cache() {
+        let mut view=HuntView::default();
+        view.active_pokemon=Some(native_hunts::PokemonInfo {
+            id:99,level:100,..Default::default()
+        });
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        let single=cache.active_signature.clone();
+        cache.refresh(0,&view,None,true,true);
+        assert_ne!(cache.active_signature,single);
+        let enabled=cache.active_signature.clone();
+        cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.active_signature,single);
+        assert_ne!(enabled,single);
+    }
+    #[test]
+    fn explorer_speed_sort_uses_simulated_throughput_for_all_hunts() {
         let mut view=HuntView::default();
         view.hunts=Arc::new(vec![
             native_hunts::HuntEntry{
@@ -3159,21 +3173,15 @@ mod tests {
         let rows=atlas_species_rows(&view,Some(&guide),&estimates,&filters,
             &AtlasScenario::default());
         assert_eq!(rows.len(),2);
-        assert_eq!(rows[0].id,2,"higher simulated kills/h wins without AoE-only filter");
-        filters.aoe_gain_only=true;
-        let rows=atlas_species_rows(&view,Some(&guide),&estimates,&filters,
-            &AtlasScenario::default());
-        assert_eq!(rows.len(),1);
-        assert_eq!(rows[0].id,1);
-        assert_eq!(rows[0].best,Some(300.0));
+        assert_eq!(rows[0].id,2,"higher simulated kills/h wins across all hunts");
         filters.sort=AtlasSort::Gold;
         view.measurements.valid_gross_gold=true;
         view.measurements.gold_gross_h=100_000.0;
         view.hunt_slug=Some("aoe".into());
         let rows=atlas_species_rows(&view,Some(&guide),&estimates,&filters,
             &AtlasScenario::default());
-        assert_eq!(rows[0].best,Some(1500.0),
-            "even the current hunt must use simulated gross gold for comparisons");
+        assert_eq!(rows[0].best,Some(2250.0),
+            "all hunts use simulated gold and the faster hunt stays first");
     }
     #[test]
     fn gold_ranking_never_compares_net_wallet_spend_to_gross_rewards(){
