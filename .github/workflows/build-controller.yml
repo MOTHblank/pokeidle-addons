@@ -30,7 +30,7 @@ permissions:
 
 concurrency:
   group: controller-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   versao:
@@ -273,6 +273,21 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "::error::Release $tag já existe. Atualize a versão antes de publicar outra release."
             exit 1
+          fi
+
+          # A deleted release can leave its old Git tag in place. Release
+          # assets are built from this run, so the tag MUST point to this
+          # exact source revision (including hotfixes), not a stale binary.
+          latest_master="$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq '.commit.sha')"
+          if [[ "$GITHUB_SHA" != "$latest_master" ]]; then
+            echo "::error::Master advanced after this build; refusing to publish a stale release."
+            exit 1
+          fi
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null || true)"
+          if [[ -n "$tag_sha" && "$tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "Moving unpublished $tag from $tag_sha to $GITHUB_SHA"
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
           fi
 
           notes=".github/release-notes/$tag.md"
