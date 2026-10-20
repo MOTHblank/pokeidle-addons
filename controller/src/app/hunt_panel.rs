@@ -2256,10 +2256,11 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         });
     } else if let Some(reference) = app.hunt_reference.as_deref() {
         ui.label(RichText::new(format!(
-            "● Guide loaded · {} species",reference.species.len()
-        )).size(10.0).color(GOOD)).on_hover_text(
-            tr("The guide is read-only; the game server alone unlocks hunts.")
-        );
+            "● {} · {} {}",tr("Public guide reference loaded"),
+            reference.species.len(),tr("species")
+        )).size(10.0).color(GOOD)).on_hover_text(tr(
+            "Guia PokéIdle is a third-party read-only reference for species, types, moves and possible hunts. Only the game server confirms which hunts your account has unlocked."
+        ));
     }
     ui.add_space(6.0);
 
