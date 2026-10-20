@@ -131,7 +131,7 @@ pub(super) struct EstimateCache {
 }
 impl EstimateCache {
     fn refresh(&mut self, account:usize,view:&HuntView,
-        reference:Option<&Arc<AtlasReference>>,live:bool,
+        reference:Option<&Arc<AtlasReference>>,live:bool,aoe_enabled:bool,
     ){
         use std::sync::mpsc::TryRecvError;
         // Publish only for this cache generation. Account/lead/catalog changes
@@ -154,7 +154,7 @@ impl EstimateCache {
         let geo_ptr=Arc::as_ptr(&view.geo_distances) as usize;
         let active_signature=view.active_pokemon.as_ref().map(|p|
             (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny,
-                p.tm_aoe,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
+                aoe_enabled,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
                 p.tm_elemental.clone(),p.types.clone()));
         let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
             || self.reference_ptr!=reference_ptr || self.geo_ptr!=geo_ptr || self.live!=live
@@ -185,12 +185,12 @@ impl EstimateCache {
             let mut values=std::collections::BTreeMap::new();
             for hunt in snapshot.hunts.iter(){
                 values.insert(hunt.slug.clone(),
-                    native_atlas::estimate(&snapshot,hunt,&guide));
+                    native_atlas::estimate_with_aoe(&snapshot,hunt,&guide,aoe_enabled));
             }
             for hunt in guide.hunts.iter(){
                 if !values.contains_key(&hunt.slug) {
                     values.insert(hunt.slug.clone(),
-                        native_atlas::estimate(&snapshot,hunt,&guide));
+                        native_atlas::estimate_with_aoe(&snapshot,hunt,&guide,aoe_enabled));
                 }
             }
             let _=tx.send(values);
@@ -1260,7 +1260,8 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
         if let Some(native)=app.games[index].native.as_ref(){
             let view=native.hunt_snapshot();
             let live=account_is_live(native);
-            app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),live);
+            app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),
+                live,app.ui_options.atlas_aoe_enabled[index]);
             views.push((index,name,view,live));
         }else{
             views.push((index,name,HuntView::default(),false));
@@ -2109,7 +2110,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             .color(WARN));
         return;
     }
-    app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),live);
+    app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),
+        live,app.ui_options.atlas_aoe_enabled[index]);
     if live {
         if let Some(slug)=view.hunt_slug.as_deref() {
             let cache=&mut app.hunt_estimate_cache[index];
@@ -3028,7 +3030,7 @@ mod tests {
             slug:"a".into(),name:"A".into(),level:100,..Default::default()
         }]);
         let mut cache=EstimateCache::default();
-        cache.refresh(0,&view,None,true);
+        cache.refresh(0,&view,None,true,false);
         let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","",&cache);
         assert_eq!(rows.len(),1);
         assert!(rows[0].value.is_none());
@@ -3048,7 +3050,7 @@ mod tests {
         view.measurements.trainer_xp_h=1200.0;
         view.measurements.valid_trainer=true;
         let mut cache=EstimateCache::default();
-        cache.refresh(0,&view,None,true);
+        cache.refresh(0,&view,None,true,false);
         let rows=ranked_hunts(&view,None,HuntRanking::TrainerXp,true,"","","",&cache);
         assert_eq!(rows.iter().find(|r|r.hunt.slug=="a").unwrap().source,RateSource::Measured);
         assert_eq!(rows.iter().find(|r|r.hunt.slug=="b").unwrap().source,RateSource::Scenario);
@@ -3176,7 +3178,7 @@ mod tests {
         view.measurements.valid_gold=true;
         view.measurements.gold_net_h=-50_000.0;
         let mut cache=EstimateCache::default();
-        cache.refresh(0,&view,None,true);
+        cache.refresh(0,&view,None,true,false);
         let rows=ranked_hunts(&view,None,HuntRanking::Gold,true,"","","",&cache);
         assert_eq!(rows.len(),1);
         assert!(rows[0].value.is_none());
