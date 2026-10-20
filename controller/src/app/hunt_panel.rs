@@ -1464,20 +1464,21 @@ fn draw_atlas_weakness_grid(
                     for (i,kind) in ATLAS_TYPES.iter().enumerate(){
                         let selected=f.weak_to.contains(*kind);
                         let base=atlas_type_color(kind);
-                        let fill=if selected{base}else{base.gamma_multiply(0.59)};
-                        let fg=atlas_type_text_color(fill);
+                        // Keep the exact classic hue visible in both states.
+                        // The checkmark and contrast-colored border, not dimming,
+                        // communicate which type is selected.
+                        let fg=atlas_type_text_color(base);
                         let response=ui.add_enabled(
                             reference.is_some(),
                             egui::Button::new(RichText::new(if selected{
                                 format!("✓ {}",atlas_type_name(kind))
                             }else{atlas_type_name(kind).to_owned()})
-                                .size(11.0).strong().color(fg))
-                                .fill(fill)
-                                .stroke(Stroke::new(if selected{2.0}else{1.0},
-                                    if selected{Color32::WHITE}
-                                    else{base.gamma_multiply(0.85)}))
+                                .size(12.0).strong().color(fg))
+                                .fill(base)
+                                .stroke(Stroke::new(if selected{2.5}else{1.0},
+                                    if selected{fg}else{base.gamma_multiply(0.84)}))
                                 .corner_radius(6.0)
-                                .min_size(egui::vec2(width,32.0))
+                                .min_size(egui::vec2(width,36.0))
                         ).on_hover_text(tr("Filter Pokémon by weakness to this attack type"));
                         if response.clicked(){
                             if selected{f.weak_to.remove(*kind);}
@@ -1508,7 +1509,7 @@ fn atlas_filters_panel(
             // below them instead of being buried in this scrolling area.
             egui::ScrollArea::vertical()
                 .id_salt(("atlas-filter-card",account))
-                .max_height(158.0)
+                .max_height(if ui.available_width()>=700.0{180.0}else{158.0})
                 .auto_shrink([false,true]).show(ui,|ui|{
                 ui.set_min_width(ui.available_width());
                 ui.horizontal_wrapped(|ui|{
@@ -2807,6 +2808,57 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn weakness_palette_matches_all_eighteen_classic_pokemon_colors() {
+        let expected=[
+            ("NORMAL",0xA8A77A),("FIRE",0xEE8130),
+            ("WATER",0x6390F0),("ELECTRIC",0xF7D02C),
+            ("GRASS",0x7AC74C),("ICE",0x96D9D6),
+            ("FIGHTING",0xC22E28),("POISON",0xA33EA1),
+            ("GROUND",0xE2BF65),("FLYING",0xA98FF3),
+            ("PSYCHIC",0xF95587),("BUG",0xA6B91A),
+            ("ROCK",0xB6A136),("GHOST",0x735797),
+            ("DRAGON",0x6F35FC),("DARK",0x705746),
+            ("STEEL",0xB7B7CE),("FAIRY",0xD685AD),
+        ];
+        assert_eq!(ATLAS_TYPES.len(),expected.len());
+        for (index,(kind,hex)) in expected.iter().enumerate(){
+            assert_eq!(ATLAS_TYPES[index],*kind);
+            let color=atlas_type_color(kind);
+            let actual=((color.r() as u32)<<16)
+                |((color.g() as u32)<<8)|(color.b() as u32);
+            assert_eq!(actual,*hex,"incorrect Pokémon type color for {kind}");
+            let text=atlas_type_text_color(color);
+            let linear=|byte:u8|{
+                let x=byte as f64/255.0;
+                if x<=0.04045{x/12.92}else{((x+0.055)/1.055).powf(2.4)}
+            };
+            let brightness=0.2126*linear(color.r())+
+                0.7152*linear(color.g())+0.0722*linear(color.b());
+            let contrast=if text==Color32::BLACK{
+                (brightness+0.05)/0.05
+            }else{1.05/(brightness+0.05)};
+            assert!(contrast>=4.5,
+                "type button label lacks readable contrast: {kind} {contrast}");
+        }
+    }
+    #[test]
+    fn weakness_selection_preserves_all_and_any_matching() {
+        let mut guide=AtlasReference::default();
+        guide.chart.insert("FIRE".into(),
+            [("GRASS".into(),2.0)].into_iter().collect());
+        guide.chart.insert("ICE".into(),
+            [("GRASS".into(),2.0)].into_iter().collect());
+        guide.chart.insert("WATER".into(),
+            [("GRASS".into(),0.5)].into_iter().collect());
+        let defender=vec!["GRASS".to_owned()];
+        let selected=["FIRE".to_owned(),"WATER".to_owned()]
+            .into_iter().collect::<std::collections::BTreeSet<_>>();
+        let is_weak=|attack:&String|atlas_type_multiplier(&guide,attack,&defender)
+            .is_some_and(|multiplier|multiplier>1.0);
+        assert!(selected.iter().any(is_weak));
+        assert!(!selected.iter().all(is_weak));
+    }
     fn guide_fixture()->AtlasReference{
         let mut guide=AtlasReference::default();
         guide.chart.insert("FIGHTING".into(),
