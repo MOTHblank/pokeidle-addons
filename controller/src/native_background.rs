@@ -627,7 +627,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         break;
                     }
                     if snapshot.lock().ok().and_then(|s| s.last_received)
-                        .is_some_and(|last| last.elapsed() > CONNECTION_STALE_AFTER) { break; }
+                        .is_some_and(|last| last.elapsed() > CONNECTION_STALE_AFTER) {
+                        crate::logging::warn(&format!("{}: reconnecting game socket after 90s without server frames or pong",profile.label()));
+                        break;
+                    }
                     // Every mutating action has one owner: this game socket.
                     // Never enqueue commands against an older/disconnected
                     // browser or replay unconfirmed writes after reconnect.
@@ -926,11 +929,17 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
                             update(&snapshot, |s| s.last_received = Some(Instant::now()));
                         }
-                        Ok(Message::Close(_)) => break,
+                        Ok(Message::Close(frame)) => {
+                            crate::logging::warn(&format!("{}: game server closed WebSocket: {:?}",profile.label(),frame.as_ref().map(|f|f.code)));
+                            break;
+                        },
                         Err(tungstenite::Error::Io(ref error))
                             if matches!(error.kind(),
                                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
-                        Err(_) => break,
+                        Err(error) => {
+                            crate::logging::warn(&format!("{}: game WebSocket read failed: {}",profile.label(),error));
+                            break;
+                        },
                         _ => {}
                     }
                 }
