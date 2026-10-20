@@ -4,6 +4,8 @@
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
         "COMBAT PROFILE" => "PERFIL DE COMBATE",
+        "● Measured spawn geometry" => "● Geometria de spawns medida",
+        "≈ Default spawn geometry" => "≈ Geometria padrão de spawns",
         "Lead unavailable" => "Pokémon principal indisponível",
         "Single-target · no AoE TM" => "Alvo único · sem TM AoE",
         "TM AoE equipped" => "TM AoE equipado",
