@@ -394,12 +394,22 @@ fn draw_atlas_combat_profile(
                 if let Some(lead)=view.active_pokemon.as_ref() {
                     ui.label(RichText::new(format!("{} · Lv {}",lead.name,lead.level))
                         .size(11.0).strong().color(TEXT));
+                }
+                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current.as_ref());
+                if let Some(lead)=view.active_pokemon.as_ref() {
                     if let Some(element)=lead.tm_elemental.as_deref() {
                         ui.label(RichText::new(format!("Z-Move {element}"))
                             .size(10.0).color(ACCENT));
                     }
                 }
-                draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current.as_ref());
+                if let Some(slug)=view.hunt_slug.as_deref() {
+                    let measured=view.geo_distances.get(slug)
+                        .is_some_and(|samples|!samples.is_empty());
+                    ui.label(RichText::new(if measured {
+                        tr("● Measured spawn geometry")
+                    }else{tr("≈ Default spawn geometry")})
+                        .size(10.0).color(if measured {GOOD}else{MUTED}));
+                }
                 if view.hunt_slug.is_none() {
                     ui.label(RichText::new(tr("Select a hunt for combat projections"))
                         .size(10.0).color(MUTED));
