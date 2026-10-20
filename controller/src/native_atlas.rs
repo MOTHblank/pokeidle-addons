@@ -498,6 +498,10 @@ fn bonus(view:&HuntView, trainer:bool)->f64 {
         *(1.0+b.guild_pct/100.0)
         *(if b.guild_boost_active{1.1}else{1.0})
         *(1.0+b.twitch_pct/100.0)
+        *(1.0+b.kick_xp_pct/100.0)
+        *(if trainer {b.shop_trainer_xp_multiplier.max(1.0)}
+          else {b.shop_pokemon_xp_multiplier.max(1.0)})
+        *b.delayed_xp_multiplier.max(1.0)
         *(1.0+(if trainer{b.trainer_event_pct}else{b.pokemon_event_pct})/100.0)
 }
 pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<Forecast> {
