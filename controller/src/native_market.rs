@@ -284,6 +284,12 @@ struct Offer {
     at: Instant,
 }
 impl Offer {
+    // Both item and Pokémon listings use the same server purchase command.
+    // Keep the wire format in one place so regression tests cover both.
+    fn purchase_request(&self, qty: u64) -> Value {
+        json!({"t":"market.comprar","id":self.id,
+            "qtd":qty,"preco":self.price,"moeda":self.currency})
+    }
     fn from_listing(v: &Value, kind: &str, item_id: u64, currency: &str, now: Instant) -> Option<Self> {
         let id = number(v, "id")?;
         let price = number(v, "preco")?;
@@ -927,8 +933,7 @@ impl MarketBuyer {
             self.status.last=format!("Rule {}: sent {}x listing #{}",rule.id,qty,offer.id);
         }
         self.update_pending();
-        Some(json!({"t":"market.comprar","id":offer.id,
-            "qtd":qty,"preco":offer.price,"moeda":offer.currency}))
+        Some(offer.purchase_request(qty))
     }
     fn snatch_rule<'a>(&self,cfg:&'a MarketRules,offer:&Offer,server_ms:u64)
         ->Option<&'a BuyRule> {
@@ -1362,6 +1367,43 @@ mod tests {
     #[test] fn imported_watch_rules_are_disarmed_globally() {
         let rules=MarketRules::import_watch(r#"{"fixedRulesEnabled":true,"fixedItemRules":[{"itemId":42,"buyMax":100,"currency":"gold","buyEnabled":true}],"pokemonBuyRules":[{"kind":"shiny","buyMax":2,"currency":"gold"}]}"#).unwrap();
         assert!(!rules.enabled);assert_eq!(rules.rules.len(),1);assert!(rules.rules[0].enabled);
+    }
+    #[test]
+    fn pokemon_gold_listing_matches_p5_rule_and_builds_purchase_packet() {
+        let now=Instant::now();
+        let frame=json!({"t":"market","aba":"vitrine","tipo":"pokemon","moeda":"gold",
+            "pagina":0,"linhas":[{"id":9123,"preco":35,"qtd":1,
+            "vendedor":"Other","ficha":{"shiny":false,"potencia":5}}]});
+        let rows=pokemon_scan_rows(&frame,"gold",0).expect("Pokémon listing response");
+        let offer=Offer::from_listing(&rows[0],"pokemon",0,"gold",now)
+            .expect("Valid Pokémon listing");
+        let rule=BuyRule{id:"p5".into(),kind:"pokemon_p5".into(),currency:"gold".into(),
+            enabled:true,buy_max:40,..Default::default()};
+        assert!(offer.matches(&rule,"Me",clock_ms()));
+        let mut buyer=MarketBuyer::new(GameProfile::Game4);
+        buyer.journal=Journal::default(); // Never touch a player's purchase journal.
+        buyer.balances=[Some(400),Some(200)];
+        let cfg=MarketRules{enabled:true,rules:vec![rule.clone()],..Default::default()};
+        let qty=buyer.budget_for(&cfg,&rule,&offer,false);
+        assert_eq!(qty,1); // One unique Pokémon, unlike stackable items.
+        assert_eq!(offer.purchase_request(qty),json!({"t":"market.comprar",
+            "id":9123,"qtd":1,"preco":35,"moeda":"gold"}));
+    }
+    #[test]
+    fn shiny_pokemon_rule_buys_with_gems_not_coins() {
+        let now=Instant::now();
+        let shiny=json!({"id":9124,"preco":3,"qtd":1,"vendedor":"Other",
+            "ficha":{"shiny":true,"potencia":3}});
+        let offer=Offer::from_listing(&shiny,"pokemon",0,"orb",now).unwrap();
+        let rule=BuyRule{id:"shiny".into(),kind:"pokemon_shiny".into(),
+            currency:"orb".into(),enabled:true,buy_max:5,..Default::default()};
+        assert!(offer.matches(&rule,"Me",clock_ms()));
+        assert_eq!(offer.purchase_request(1),json!({"t":"market.comprar",
+            "id":9124,"qtd":1,"preco":3,"moeda":"orb"}));
+        let coins=Offer::from_listing(&shiny,"pokemon",0,"gold",now).unwrap();
+        let coins_rule=BuyRule{kind:"pokemon_any".into(),currency:"gold".into(),
+            buy_max:5,..Default::default()};
+        assert!(!coins.matches(&coins_rule,"Me",clock_ms()));
     }
     #[test] fn item_buy_uses_maximum_affordable_quantity_and_actual_listing() {
         let mut buyer=MarketBuyer::new(GameProfile::Game1);
