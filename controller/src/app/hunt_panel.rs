@@ -478,6 +478,65 @@ fn atlas_pager(ui:&mut egui::Ui,page:&mut usize,count:usize,per_page:usize)
 /// The hunt comes from authoritative location state, not the transient
 /// wild slot. Combat receipts only refine activity; a missing encounter
 /// never means the player left the hunt.
+/// Restore the last confirmed destination, not a guide-only or pending hunt.
+/// The server-provided catalog is the only authority for executable hunts.
+fn atlas_return_hunt_slug(view:&HuntView)->Option<&str>{
+    let slug=view.hunt_slug.as_deref()?;
+    view.hunts.iter().any(|hunt|hunt.slug==slug).then_some(slug)
+}
+fn draw_atlas_navigation_actions(
+    ui:&mut egui::Ui,view:&HuntView,native:&NativeSession,
+    live:bool,error:&mut Option<String>,
+){
+    ui.horizontal(|ui|{
+        if ui.add_enabled(live && !view.in_center,
+            egui::Button::new(tr("Pokémon Center"))
+        ).on_hover_text(tr("Travel to the Pokémon Center"))
+            .clicked(){
+            match native.send_command(GameCommand::Center){
+                Ok(())=>*error=None,
+                Err(message)=>*error=Some(message),
+            }
+        }
+        let return_slug=atlas_return_hunt_slug(view);
+        if ui.add_enabled(live && return_slug.is_some() &&
+            view.pending_hunt_slug.is_none(),
+            egui::Button::new(tr("Return to hunt"))
+        ).on_hover_text(return_slug.unwrap_or(tr("No confirmed hunt to return to")))
+            .clicked(){
+            if let Some(slug)=return_slug {
+                match native.send_command(GameCommand::Hunt(slug.to_owned())){
+                    Ok(())=>*error=None,
+                    Err(message)=>*error=Some(message),
+                }
+            }
+        }
+    });
+}
+/// Explorer-only pagination toolbar: the Center and Return controls occupy
+/// the right half of the pager row, above Pokémon and species details.
+fn atlas_explorer_pager(
+    ui:&mut egui::Ui,page:&mut usize,count:usize,per_page:usize,
+    view:&HuntView,native:&NativeSession,live:bool,error:&mut Option<String>,
+)->std::ops::Range<usize>{
+    if ui.available_width()>=880.0 {
+        let mut visible=0..0;
+        ui.columns(2,|cols|{
+            visible=atlas_pager(&mut cols[0],page,count,per_page);
+            cols[1].with_layout(Layout::right_to_left(Align::Center),|ui|{
+                draw_atlas_navigation_actions(ui,view,native,live,error);
+            });
+        });
+        visible
+    }else{
+        let visible=atlas_pager(ui,page,count,per_page);
+        ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+            draw_atlas_navigation_actions(ui,view,native,live,error);
+        });
+        visible
+    }
+}
+
 fn atlas_combat_status(view:&HuntView,live:bool)->(&'static str,Color32){
     match overview_combat_state(Some(view),live) {
         OverviewCombatState::Offline => (tr("Offline / stale"),WARN),
@@ -2002,6 +2061,14 @@ fn draw_atlas_explorer(
         ui.label(RichText::new(tr("Conditional model; capture odds use the selected ball and modifiers."))
             .size(10.0).color(MUTED));
     }
+    // Keep travel controls accessible even when the active filters return
+    // zero matches; they should never depend on Explorer search results.
+    let desktop=ui.available_width()>=880.0;
+    let visible=atlas_explorer_pager(
+        ui,page,rows.len(),if desktop{20}else{8},
+        view,native,live,command_error,
+    );
+    ui.add_space(7.0);
     if rows.is_empty(){
         egui::Frame::new().fill(PANEL).corner_radius(9.0)
             .stroke(Stroke::new(1.0,BORDER))
@@ -2030,9 +2097,6 @@ fn draw_atlas_explorer(
     // At desktop widths the list remains short and scannable while a stable
     // details pane exposes destinations, drop assumptions and hunt controls.
     // On narrow windows a single column avoids cramped dual-scroll panels.
-    let desktop=ui.available_width()>=880.0;
-    let visible=atlas_pager(ui,page,rows.len(),if desktop{20}else{8});
-    ui.add_space(7.0);
     let mut error=None;
     if desktop{
         let slice=&rows[visible.clone()];
