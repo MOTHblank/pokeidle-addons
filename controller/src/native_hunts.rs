@@ -111,6 +111,11 @@ pub struct PokemonInfo {
     pub shiny: bool,
     pub ivs: [Option<u64>; 6],
     pub types: Vec<String>,
+    /// Server-computed battle stats take precedence over reconstructed IV stats.
+    pub battle_stats: Option<[f64; 6]>,
+    /// AoE TM reaches multiple wild Pokémon in the hunt's 11×11 tile square.
+    pub tm_aoe: bool,
+    pub tm_elemental: Option<String>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct WildInfo {
@@ -514,6 +519,21 @@ impl HuntIntel {
                     existing.ivs[i] = raw.as_u64();
                 }
             }
+        }
+        if let Some(raw) = value.get("stats").and_then(Value::as_object) {
+            let fields = ["hp", "atk", "def", "spAtk", "spDef", "speed"];
+            let numbers = fields.map(|key|raw.get(key).and_then(Value::as_f64));
+            if numbers.iter().all(|n|n.is_some_and(|v|v.is_finite()&&v>0.0)) {
+                existing.battle_stats = Some(numbers.map(|n|n.unwrap_or(1.0)));
+            }
+        }
+        if let Some(v) = value.get("tmAoe").or_else(||value.get("tm_aoe")) {
+            existing.tm_aoe = v.as_bool()==Some(true) || v.as_u64()==Some(1)
+                || v.as_str()==Some("true");
+        }
+        if let Some(v) = value.get("tmElemental") {
+            existing.tm_elemental = v.as_str().map(str::to_owned)
+                .or_else(||v.as_u64().map(|n|n.to_string()));
         }
     }
     /// Merge full or partial server-confirmed wild state. A missing slot is
