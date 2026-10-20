@@ -318,7 +318,7 @@ fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
         }
 }
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
-enum AtlasAoeCue { NoLead, SingleTarget, Equipped, Accelerated, SpawnLimited }
+enum AtlasAoeCue { NoLead, SingleTarget, Equipped, Accelerated, NoGain }
 
 fn atlas_aoe_cue(
     lead:Option<&native_hunts::PokemonInfo>,
@@ -329,7 +329,7 @@ fn atlas_aoe_cue(
         Some(mon) if !mon.tm_aoe => AtlasAoeCue::SingleTarget,
         Some(_) => match forecast {
             Some(f) if f.aoe => AtlasAoeCue::Accelerated,
-            Some(_) => AtlasAoeCue::SpawnLimited,
+            Some(_) => AtlasAoeCue::NoGain,
             None => AtlasAoeCue::Equipped,
         }
     }
@@ -340,7 +340,7 @@ fn atlas_aoe_label(cue:AtlasAoeCue)->(&'static str,Color32){
         AtlasAoeCue::SingleTarget => (tr("Single-target · no AoE TM"),MUTED),
         AtlasAoeCue::Equipped => (tr("TM AoE equipped"),ACCENT),
         AtlasAoeCue::Accelerated => (tr("TM AoE · faster here"),GOOD),
-        AtlasAoeCue::SpawnLimited => (tr("TM AoE · spawn-limited"),MUTED),
+        AtlasAoeCue::NoGain => (tr("TM AoE · no speed gain here"),MUTED),
     }
 }
 /// One consistent, visually prominent combat signal across the recommendations,
@@ -904,7 +904,6 @@ pub(super) struct ExplorerCache {
     roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
     roster_ready:bool,
     ball_quotes:Option<Arc<std::collections::BTreeMap<u64,native_hunts::BallQuote>>>,
-    gold_data_signature:Option<(u64,u64,bool,bool)>,
     initialized:bool,
     #[cfg(test)]
     rebuilds:usize,
@@ -924,20 +923,14 @@ impl ExplorerCache {
         // Retaining the previous source Arc prevents pointer reuse from
         // hiding a genuine server roster/catalog update.
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
-        // Measurements change every second. Invalidate only gold-sorted rows,
-        // and bucket by elapsed time and kills to avoid recomputing each repaint.
-        let gold_data_signature=(filters.sort==AtlasSort::Gold).then(||{
-            let m=&view.measurements;
-            ((m.seconds/20.0).max(0.0) as u64,m.kills/5,m.valid_gross_gold,
-                m.last_battle_age_secs.is_some_and(|age|age>180))
-        });
+        // Explorer gold now comes from the same immutable combat forecasts
+        // as XP and kills; unrelated live reward receipts cannot reorder it.
         let changed=!self.initialized ||
             self.filters.as_ref()!=Some(&key_filters) ||
             self.scenario.as_ref()!=Some(scenario) ||
             self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
             self.reference_ptr!=reference_ptr ||
             self.forecast_at!=estimates.refreshed ||
-            self.gold_data_signature!=gold_data_signature ||
             self.model_signature!=estimates.active_signature ||
             self.hunt_slug!=view.hunt_slug ||
             self.trainer_level!=view.trainer_level ||
@@ -954,7 +947,6 @@ impl ExplorerCache {
             self.catalog=Some(Arc::clone(&view.hunts));
             self.reference_ptr=reference_ptr;
             self.forecast_at=estimates.refreshed;
-            self.gold_data_signature=gold_data_signature;
             self.model_signature=estimates.active_signature.clone();
             self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
@@ -3086,7 +3078,7 @@ mod tests {
         assert_eq!(results.rebuilds,2);
     }
     #[test]
-    fn explorer_gold_cache_refreshes_on_new_combat_receipts(){
+    fn explorer_gold_ignores_unrelated_combat_receipts_and_reuses_forecast_cache(){
         let mut view=HuntView::default();
         let estimates=EstimateCache::default();
         let scenario=AtlasScenario::default();
@@ -3094,15 +3086,74 @@ mod tests {
         let mut results=ExplorerCache::default();
         results.update(&view,None,&estimates,&filters,&scenario);
         assert_eq!(results.rebuilds,1);
-        results.update(&view,None,&estimates,&filters,&scenario);
-        assert_eq!(results.rebuilds,1);
         view.measurements.seconds=40.0;
         view.measurements.kills=10;
         view.measurements.valid_gross_gold=true;
         results.update(&view,None,&estimates,&filters,&scenario);
-        assert_eq!(results.rebuilds,2);
-        results.update(&view,None,&estimates,&filters,&scenario);
-        assert_eq!(results.rebuilds,2);
+        assert_eq!(results.rebuilds,1,
+            "receipts must not invalidate identical simulated gold rankings");
+    }
+    fn simulated_forecast(kills:f64,aoe:bool)->native_atlas::Forecast {
+        native_atlas::Forecast{
+            kills_h:kills,trainer_xp_h:kills*10.0,pokemon_xp_h:kills*10.0,
+            gold_h:kills*5.0,combat_gold_h:kills*5.0,npc_loot_gold_h:0.0,
+            trainer_xp_per_kill:10.0,pokemon_xp_per_kill:10.0,
+            seconds_per_kill:5.0,coverage:1.0,calibrated:false,
+            deaths_h:0.0,one_hit:false,aoe,engaged:if aoe {4.0}else{1.0},
+            worst_hit_fraction:0.2,incoming_damage_per_kill:10.0,
+        }
+    }
+    #[test]
+    fn aoe_cue_distinguishes_equipped_from_effective() {
+        let mut mon=native_hunts::PokemonInfo::default();
+        assert_eq!(atlas_aoe_cue(None,None),AtlasAoeCue::NoLead);
+        assert_eq!(atlas_aoe_cue(Some(&mon),None),AtlasAoeCue::SingleTarget);
+        mon.tm_aoe=true;
+        assert_eq!(atlas_aoe_cue(Some(&mon),None),AtlasAoeCue::Equipped);
+        let no_gain=simulated_forecast(100.0,false);
+        assert_eq!(atlas_aoe_cue(Some(&mon),Some(&no_gain)),AtlasAoeCue::NoGain);
+        let gain=simulated_forecast(300.0,true);
+        assert_eq!(atlas_aoe_cue(Some(&mon),Some(&gain)),AtlasAoeCue::Accelerated);
+    }
+    #[test]
+    fn aoe_explorer_filter_and_speed_sort_use_simulated_throughput() {
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![
+            native_hunts::HuntEntry{
+                slug:"aoe".into(),name:"AoE".into(),level:100,
+                species:vec![native_hunts::HuntSpecies{id:1,weight:16.0}],
+                ..Default::default()
+            },
+            native_hunts::HuntEntry{
+                slug:"single".into(),name:"Single".into(),level:120,
+                species:vec![native_hunts::HuntSpecies{id:2,weight:16.0}],
+                ..Default::default()
+            },
+        ]);
+        let mut guide=guide_fixture();
+        guide.species.insert(2,guide.species[&1].clone());
+        let mut estimates=EstimateCache::default();
+        estimates.values.insert("aoe".into(),Some(simulated_forecast(300.0,true)));
+        estimates.values.insert("single".into(),Some(simulated_forecast(450.0,false)));
+        let mut filters=AtlasFilters{sort:AtlasSort::Kills,..Default::default()};
+        let rows=atlas_species_rows(&view,Some(&guide),&estimates,&filters,
+            &AtlasScenario::default());
+        assert_eq!(rows.len(),2);
+        assert_eq!(rows[0].id,2,"higher simulated kills/h wins without AoE-only filter");
+        filters.aoe_gain_only=true;
+        let rows=atlas_species_rows(&view,Some(&guide),&estimates,&filters,
+            &AtlasScenario::default());
+        assert_eq!(rows.len(),1);
+        assert_eq!(rows[0].id,1);
+        assert_eq!(rows[0].best,Some(300.0));
+        filters.sort=AtlasSort::Gold;
+        view.measurements.valid_gross_gold=true;
+        view.measurements.gold_gross_h=100_000.0;
+        view.hunt_slug=Some("aoe".into());
+        let rows=atlas_species_rows(&view,Some(&guide),&estimates,&filters,
+            &AtlasScenario::default());
+        assert_eq!(rows[0].best,Some(1500.0),
+            "even the current hunt must use simulated gross gold for comparisons");
     }
     #[test]
     fn gold_ranking_never_compares_net_wallet_spend_to_gross_rewards(){
