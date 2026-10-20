@@ -1414,6 +1414,47 @@ fn atlas_type_text_color(background:Color32)->Color32{
         0.7152*linear(background.g())+0.0722*linear(background.b());
     if luminance>0.179{Color32::BLACK}else{Color32::WHITE}
 }
+fn draw_atlas_weakness_tiles(
+    ui:&mut egui::Ui,f:&mut AtlasFilters,page:&mut usize,
+    reference:Option<&AtlasReference>,account:usize,
+){
+    let available=ui.available_width();
+    let gap=6.0f32;
+    let columns=(((available+gap)/(112.0+gap)).floor() as usize).clamp(1,6);
+    let width=((available-gap*(columns.saturating_sub(1) as f32))
+        /columns as f32).max(64.0);
+    egui::Grid::new(("atlas-weak-type-grid",account))
+        .num_columns(columns).spacing([gap,gap])
+        .show(ui,|ui|{
+            for (i,kind) in ATLAS_TYPES.iter().enumerate(){
+                let selected=f.weak_to.contains(*kind);
+                let base=atlas_type_color(kind);
+                // Keep the exact classic hue visible in both states.
+                // The checkmark and contrast-colored border, not dimming,
+                // communicate which type is selected.
+                let fg=atlas_type_text_color(base);
+                let response=ui.add_enabled(
+                    reference.is_some(),
+                    egui::Button::new(RichText::new(if selected{
+                        format!("✓ {}",atlas_type_name(kind))
+                    }else{atlas_type_name(kind).to_owned()})
+                        .size(12.0).strong().color(fg))
+                        .fill(base)
+                        .stroke(Stroke::new(if selected{2.5}else{1.0},
+                            if selected{fg}else{base.gamma_multiply(0.84)}))
+                        .corner_radius(6.0)
+                        .min_size(egui::vec2(width,36.0))
+                ).on_hover_text(tr("Filter Pokémon by weakness to this attack type"));
+                if response.clicked(){
+                    if selected{f.weak_to.remove(*kind);}
+                    else{f.weak_to.insert((*kind).to_owned());}
+                    *page=0;
+                }
+                if (i+1)%columns==0{ui.end_row();}
+            }
+        });
+}
+
 /// Equal-width grid tiles, with selected checkmark AND outline; selection
 /// never relies on hue alone. At narrow widths columns decrease instead of
 /// wrapping eighteen tiny buttons into an unpredictable line.
@@ -1453,41 +1494,21 @@ fn draw_atlas_weakness_grid(
                 ui.label(RichText::new(tr("Guide type chart unavailable"))
                     .size(10.0).color(MUTED));
             }
-            let available=ui.available_width();
-            let gap=6.0f32;
-            let columns=(((available+gap)/(112.0+gap)).floor() as usize).clamp(1,6);
-            let width=((available-gap*(columns.saturating_sub(1) as f32))
-                /columns as f32).max(64.0);
-            egui::Grid::new(("atlas-weak-type-grid",account))
-                .num_columns(columns).spacing([gap,gap])
-                .show(ui,|ui|{
-                    for (i,kind) in ATLAS_TYPES.iter().enumerate(){
-                        let selected=f.weak_to.contains(*kind);
-                        let base=atlas_type_color(kind);
-                        // Keep the exact classic hue visible in both states.
-                        // The checkmark and contrast-colored border, not dimming,
-                        // communicate which type is selected.
-                        let fg=atlas_type_text_color(base);
-                        let response=ui.add_enabled(
-                            reference.is_some(),
-                            egui::Button::new(RichText::new(if selected{
-                                format!("✓ {}",atlas_type_name(kind))
-                            }else{atlas_type_name(kind).to_owned()})
-                                .size(12.0).strong().color(fg))
-                                .fill(base)
-                                .stroke(Stroke::new(if selected{2.5}else{1.0},
-                                    if selected{fg}else{base.gamma_multiply(0.84)}))
-                                .corner_radius(6.0)
-                                .min_size(egui::vec2(width,36.0))
-                        ).on_hover_text(tr("Filter Pokémon by weakness to this attack type"));
-                        if response.clicked(){
-                            if selected{f.weak_to.remove(*kind);}
-                            else{f.weak_to.insert((*kind).to_owned());}
-                            *page=0;
-                        }
-                        if (i+1)%columns==0{ui.end_row();}
-                    }
-                });
+            // Keep the full grid visible on desktop, but give it an
+            // independent scroll region on narrow windows so the results pane
+            // never disappears below a tall nine-row selection grid.
+            if ui.available_width()<500.0 {
+                egui::ScrollArea::vertical()
+                    .id_salt(("atlas-weak-types-scroll",account))
+                    .max_height(164.0)
+                    .auto_shrink([false,true])
+                    .show(ui,|ui|{
+                        draw_atlas_weakness_tiles(ui,f,page,reference,account);
+                    });
+            }else{
+                draw_atlas_weakness_tiles(ui,f,page,reference,account);
+            }
+
         });
 }
 fn atlas_filters_panel(
