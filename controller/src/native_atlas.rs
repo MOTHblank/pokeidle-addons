@@ -693,6 +693,15 @@ mod tests {
         assert!(!forecast.calibrated);
         assert!(forecast.kills_h>0.0 && forecast.kills_h.is_finite());
         assert_eq!(forecast.trainer_xp_h,forecast.pokemon_xp_h);
+        // Detection is not consent to apply the AoE simulation.
+        view.active_pokemon.as_mut().unwrap().tm_aoe=true;
+        let unchecked=estimate_with_aoe(&view,&hunt,&data,false).unwrap();
+        assert!(!unchecked.aoe);
+        // Checked mode is explicitly modeled even if the server omits its flag.
+        view.active_pokemon.as_mut().unwrap().tm_aoe=false;
+        let checked=estimate_with_aoe(&view,&hunt,&data,true).unwrap();
+        assert!(checked.aoe);
+        assert!(checked.kills_h>=unchecked.kills_h);
         view.bonuses.trainer_event_pct=100.0;
         let forecast=estimate(&view,&hunt,&data).unwrap();
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
