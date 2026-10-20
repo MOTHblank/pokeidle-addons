@@ -121,6 +121,7 @@ mod adaptive_monitor_ui_tests {
         let normal_unfocused = UiOptions {
             reduce_updates_unfocused: false,
             reduce_updates_in_tray: true,
+        atlas_aoe_enabled: [false;4],
         };
         assert!(!reduce_updates_for_window(false, Some(false), normal_unfocused));
         assert!(reduce_updates_for_window(true, Some(false), normal_unfocused));
@@ -128,6 +129,7 @@ mod adaptive_monitor_ui_tests {
         let full_speed_tray = UiOptions {
             reduce_updates_unfocused: true,
             reduce_updates_in_tray: false,
+        atlas_aoe_enabled: [false;4],
         };
         assert!(reduce_updates_for_window(false, Some(false), full_speed_tray));
         assert!(!reduce_updates_for_window(true, Some(false), full_speed_tray));
@@ -135,6 +137,7 @@ mod adaptive_monitor_ui_tests {
         let full_speed_everywhere = UiOptions {
             reduce_updates_unfocused: false,
             reduce_updates_in_tray: false,
+        atlas_aoe_enabled: [false;4],
         };
         for hidden in [true, false] {
             for focused in [Some(true), Some(false), None] {
@@ -3357,7 +3360,11 @@ fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
         .size(11.0).color(if slowed { WARN } else { GOOD }));
     if ui.small_button(tr("Restore default performance settings")).clicked() {
-        app.save_ui_options(UiOptions::default());
+        // Performance reset must not wipe per-account Hunt Atlas choices.
+        app.save_ui_options(UiOptions {
+            atlas_aoe_enabled: app.ui_options.atlas_aoe_enabled,
+            ..UiOptions::default()
+        });
     }
     ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
         .size(11.0).color(DIM));
