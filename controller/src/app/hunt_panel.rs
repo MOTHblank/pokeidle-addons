@@ -2256,10 +2256,10 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         });
     } else if let Some(reference) = app.hunt_reference.as_deref() {
         ui.label(RichText::new(format!(
-            "● {} · {} {}",tr("Public guide reference loaded"),
+            "● {} · {} {}",tr("Reference data available"),
             reference.species.len(),tr("species")
         )).size(10.0).color(GOOD)).on_hover_text(tr(
-            "Guia PokéIdle is a third-party read-only reference for species, types, moves and possible hunts. Only the game server confirms which hunts your account has unlocked."
+            "Hunt Atlas combines the third-party Guia PokéIdle reference with public game catalogs. If the guide is unavailable, game catalogs are used instead. Only the authenticated game server confirms unlocked hunts."
         ));
     }
     ui.add_space(6.0);
