@@ -1851,8 +1851,8 @@ mod tests {
         let mut intel=HuntIntel::new();
         intel.ingest_value(&json!({"t":"welcome","estado":{
             "servidorAgora":1_800_000_000,
-            "loja":{"vipAte":1_800_000_060_000},
-            "guild":{"boostAte":1_800_000_090_000}
+            "loja":{"vipAte":1_800_000_060_000_i64},
+            "guild":{"boostAte":1_800_000_090_000_i64}
         }}),now);
         assert!(intel.view.bonuses.vip_active);
         assert!(intel.view.bonuses.guild_boost_active);

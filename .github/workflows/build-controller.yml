@@ -1,13 +1,16 @@
 name: Build e release do Moth Controller (Windows e Linux)
 
 on:
-  # Release da nova versão por alteração do Cargo.toml em master
-  # ou pelo envio da tag correspondente. O token do workflow não
+  # Release da nova versão por alteração do Cargo.toml em master.
+  # Mudanças no lockfile e notas também reexecutam builds pendentes.
+  # O envio da tag correspondente pode iniciar a publicação; o token não
   # dispara uma segunda execução quando a release cria a tag.
   push:
     branches: [master]
     paths:
       - 'controller/Cargo.toml'
+      - 'controller/Cargo.lock'
+      - '.github/release-notes/v*.md'
       # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
       - '.github/workflows/build-controller.yml'
     tags:
