@@ -370,6 +370,15 @@ mod tests {
         assert!(outfit_frames(&manifest).is_none());
     }
     #[test]
+    fn static_outfit_crops_only_one_frame() {
+        let mut sheet=Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(32,16)
+            .write_to(&mut sheet,image::ImageFormat::Png).unwrap();
+        let frames=crop_frames_png(&sheet.into_inner(),
+            &[[0,0,16,16],[16,0,16,16]]).unwrap();
+        assert_eq!(frames.len(),1);
+    }
+    #[test]
     fn rejects_frames_outside_sheet_without_losing_valid_first_frame() {
         let manifest = serde_json::json!({
             "categories":{"main":{"pages":[{

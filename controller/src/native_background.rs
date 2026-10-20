@@ -549,13 +549,13 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
     // Preserve both live rooms and reward-active rooms when a list changes.
     if twitch_rooms_updated {
         if let Ok(game) = snapshot.lock() {
-        let mut names = game.twitch_live.clone();
-        names.extend(game.twitch_watching.iter().cloned());
-        names.sort_unstable();
-        names.dedup();
-        if let Ok(mut current) = desired.lock() {
-            if *current != names { *current = names; }
-        }
+            let mut names = game.twitch_live.clone();
+            names.extend(game.twitch_watching.iter().cloned());
+            names.sort_unstable();
+            names.dedup();
+            if let Ok(mut current) = desired.lock() {
+                if *current != names { *current = names; }
+            }
         }
     }
 }

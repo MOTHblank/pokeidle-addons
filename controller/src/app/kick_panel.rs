@@ -111,8 +111,15 @@ impl ControllerApp {
         // Channel preferences remain editable during automatic monitoring.
         // Apply changes immediately without restarting unaffected streams.
         let desired = desired_kick_channels(self, index);
+        // Changing manual channels changes which official creators are
+        // supervised. Reconcile the offline point poller immediately rather
+        // than waiting for another server roster event.
+        let official: Vec<String> = self.kick_discovered_roster[index].as_ref()
+            .map(|roster|roster.iter().map(|creator|creator.slug.clone()).collect())
+            .unwrap_or_default();
         if let Some(monitor) = self.kick_monitors[index].as_mut() {
-            if let Err(error) = monitor.sync_channels(&desired) {
+            if let Err(error) = monitor.sync_channels(&desired)
+                .and_then(|_|monitor.sync_offline_officials(&official)) {
                 logging::warn(&format!("Kick channel synchronization failed: {error}"));
                 self.set_status(error, true);
             }
