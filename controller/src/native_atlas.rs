@@ -506,12 +506,20 @@ fn bonus(view:&HuntView, trainer:bool)->f64 {
         *b.delayed_xp_multiplier.max(1.0)
         *(1.0+(if trainer{b.trainer_event_pct}else{b.pokemon_event_pct})/100.0)
 }
+/// The legacy entry point intentionally models a single-target Pokémon.
+/// Live UI must pass the user's explicit AoE preference to estimate_with_aoe.
+#[cfg(test)]
 pub fn estimate(view:&HuntView,hunt:&HuntEntry,reference:&Reference)->Option<Forecast> {
+    estimate_with_aoe(view,hunt,reference,false)
+}
+pub fn estimate_with_aoe(
+    view:&HuntView,hunt:&HuntEntry,reference:&Reference,aoe_enabled:bool,
+)->Option<Forecast> {
     let mon=view.active_pokemon.as_ref()?;
     let player=reference.species.get(&mon.species_id?)?;
     let stats=pokemon_stats(mon,player)?;
     let geometry=view.geo_distances.get(&hunt.slug);
-    let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry)?;
+    let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry,aoe_enabled)?;
     let kills_h=pace.kills_h;
     let loot_pct=(if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0})
         + view.bonuses.extra_loot_pct;
