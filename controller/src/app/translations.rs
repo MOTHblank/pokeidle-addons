@@ -3,6 +3,10 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Public guide reference loaded" => "Referência pública carregada",
+        "Guia PokéIdle is a third-party read-only reference for species, types, moves and possible hunts. Only the game server confirms which hunts your account has unlocked." => "O Guia PokéIdle é uma referência externa, somente para leitura, de espécies, tipos, golpes e possíveis hunts. Somente o servidor do jogo confirma quais hunts sua conta liberou.",
+        "Travel to the Pokémon Center" => "Ir ao Centro Pokémon",
+        "No confirmed hunt to return to" => "Nenhuma hunt confirmada para retornar",
         "COMBAT PROFILE" => "PERFIL DE COMBATE",
         "● Measured spawn geometry" => "● Geometria de spawns medida",
         "≈ Default spawn geometry" => "≈ Geometria padrão de spawns",
