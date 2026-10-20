@@ -1984,6 +1984,31 @@ fn draw_atlas_explorer(
     if let Some(error)=error {*command_error=Some(error);}
 }
 
+/// Per-account modeling preference. The controller never sends this flag to
+/// the game; users tick it only when their Pokémon actually has AoE.
+fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
+    let index=app.hunt_account;
+    let mut aoe_enabled=app.ui_options.atlas_aoe_enabled[index];
+    egui::Frame::new().fill(PANEL_ALT)
+        .stroke(Stroke::new(1.0,BORDER))
+        .corner_radius(8.0).inner_margin(egui::Margin::symmetric(12,7))
+        .show(ui,|ui|{
+            ui.horizontal_wrapped(|ui|{
+                ui.checkbox(&mut aoe_enabled,tr("My Pokémon has AoE"))
+                    .on_hover_text(tr("Check only if this account's active Pokémon has AoE. The checkbox changes Hunt Atlas simulations, not game settings."));
+                ui.label(RichText::new(tr(
+                    "Off by default · per-account · applies to every Hunt Atlas estimate"
+                )).size(10.0).color(MUTED));
+            });
+        });
+    if aoe_enabled!=app.ui_options.atlas_aoe_enabled[index] {
+        let mut next=app.ui_options;
+        next.atlas_aoe_enabled[index]=aoe_enabled;
+        app.save_ui_options(next);
+        ui.ctx().request_repaint();
+    }
+}
+
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Only load the independent public reference when this tab is actually
     // opened; game socket, Twitch and normal dashboard stay extremely light.
@@ -1998,6 +2023,8 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         });
     }
     draw_atlas_view_controls(app,ui);
+    draw_atlas_aoe_checkbox(app,ui);
+    ui.add_space(6.0);
     if app.hunt_subtab==HuntSubtab::Compare {
         egui::ScrollArea::vertical()
             .id_salt("hunt-atlas-all-accounts")
