@@ -765,7 +765,7 @@ fn atlas_objective(
         AtlasSort::Level=>Some(hunt.level as f64),
         // Exactly one XP stream: never add trainer and Pokémon experience.
         AtlasSort::Xp=>forecast.map(|f|f.trainer_xp_h),
-        AtlasSort::Gold=>forecast.filter(|f|f.calibrated).map(|f|f.combat_gold_h),
+        AtlasSort::Gold=>forecast.map(|f|f.combat_gold_h),
         AtlasSort::SaleValue=>sale_value,
         AtlasSort::Capture|AtlasSort::ShinyCaught|AtlasSort::OutlandRare=>None,
         AtlasSort::Shiny=>forecast.and_then(|f|{
@@ -809,7 +809,7 @@ pub(super) struct ExplorerCache {
     catalog:Option<Arc<Vec<native_hunts::HuntEntry>>>,
     reference_ptr:usize,
     forecast_at:Option<Instant>,
-    model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool)>,
+    model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     hunt_slug:Option<String>,
     trainer_level:Option<u32>,
     outland_catalog:Option<[(u32,f64);8]>,
@@ -867,7 +867,7 @@ impl ExplorerCache {
             self.reference_ptr=reference_ptr;
             self.forecast_at=estimates.refreshed;
             self.gold_data_signature=gold_data_signature;
-            self.model_signature=estimates.active_signature;
+            self.model_signature=estimates.active_signature.clone();
             self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
             self.outland_catalog=view.outland_catalog;
@@ -1268,7 +1268,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                                     rank+1,hunt.name,format_hunt_amount(*score),tr("Trainer XP/h")
                                 )).size(11.0).color(TEXT));
                                 ui.label(RichText::new(if *calibrated{tr("calibrated")}
-                                    else{tr("experimental")}).size(9.0).color(WARN));
+                                    else{tr("simulated")}).size(9.0).color(MUTED));
                             });
                         }
                         if estimates.is_empty(){
@@ -1494,7 +1494,7 @@ fn draw_atlas_destination(
                     for (label,value) in [
                         (tr("Trainer XP/h"),Some(f.trainer_xp_h)),
                         (tr("Pokémon XP/h"),Some(f.pokemon_xp_h)),
-                        (tr("Gross gold/h"),f.calibrated.then_some(f.gold_h)),
+                        (tr("Gross gold/h"),Some(f.gold_h)),
                         (tr("Kills/h"),Some(f.kills_h)),
                     ]{
                         ui.vertical(|ui|{
@@ -1508,10 +1508,9 @@ fn draw_atlas_destination(
                 });
                 ui.label(RichText::new(format!(
                     "{} · {:.0}% {} · {} {} / h",
-                    if f.calibrated{tr("Calibrated estimate")}else{tr("Early estimate")},
+                    tr("Simulated combat"),
                     f.coverage*100.0,tr("species modeled"),tr("combat gold"),
-                    if f.calibrated{format_hunt_amount(f.combat_gold_h)}
-                    else{"—".into()}
+                    format_hunt_amount(f.combat_gold_h)
                 )).size(10.0).color(MUTED));
             }else{
                 ui.label(RichText::new(tr("Combat forecast unavailable for this location"))
@@ -2259,7 +2258,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     for (label,value) in [
                         (tr("Trainer XP/h"),Some(forecast.trainer_xp_h)),
                         (tr("Pokémon XP/h"),Some(forecast.pokemon_xp_h)),
-                        (tr("Gross gold/h"),forecast.calibrated.then_some(forecast.gold_h)),
+                        (tr("Gross gold/h"),Some(forecast.gold_h)),
                         (tr("Kills/h"),Some(forecast.kills_h)),
                     ]{
                         draw_rate(ui,label,value,
@@ -2280,9 +2279,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         tr("Pokémon XP/kill"),format_hunt_amount(forecast.pokemon_xp_per_kill)
                     ));
                     ui.label(format!("{} {}",
-                        tr("Combat gold/h"),if forecast.calibrated {
-                            format_hunt_amount(forecast.combat_gold_h)
-                        }else{"—".into()}));
+                        tr("Combat gold/h"),format_hunt_amount(forecast.combat_gold_h)));
                 });
                 for (channel,observed,valid,estimate) in [
                     (tr("Trainer XP"),m.trainer_xp_h,m.valid_trainer,forecast.trainer_xp_h),
@@ -2578,7 +2575,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
                         ));
                         ui.label(tr("Guide estimates include the bonuses shown above. Same-speed comparisons do not add these bonuses again. Any boost the game has not reported is excluded."));
                     });
-                    ui.label(RichText::new(tr("Gross combat gold from battle receipts is measured separately from wallet net gold. Other-hunt rates are calibrated estimates or same-pace scenarios; missing loot boosts are not guessed."))
+                    ui.label(RichText::new(tr("Combat gold/h from confirmed receipts is separate from net wallet changes. Other-hunt gold/h uses comparable full-wave combat simulations; unknown loot boosts are excluded."))
                         .size(10.0).color(MUTED));
                 }
             }
@@ -2873,8 +2870,10 @@ mod tests {
             gold_h:80.0,combat_gold_h:80.0,npc_loot_gold_h:0.0,
             trainer_xp_per_kill:10.0,pokemon_xp_per_kill:9.0,
             seconds_per_kill:36.0,coverage:1.0,calibrated:false,
+            deaths_h:0.0,one_hit:false,aoe:false,engaged:1.0,
+            worst_hit_fraction:0.25,incoming_damage_per_kill:0.0,
         };
-        assert_eq!(atlas_objective(AtlasSort::Gold,Some(&forecast),&hunt,1.0,None),None);
+        assert_eq!(atlas_objective(AtlasSort::Gold,Some(&forecast),&hunt,1.0,None),Some(80.0));
         let calibrated=native_atlas::Forecast{calibrated:true,..forecast.clone()};
         assert_eq!(atlas_objective(AtlasSort::Gold,Some(&calibrated),&hunt,1.0,None),Some(80.0));
         assert_eq!(atlas_objective(AtlasSort::Xp,Some(&forecast),&hunt,1.0,None),Some(1000.0));
