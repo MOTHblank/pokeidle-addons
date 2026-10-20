@@ -8,7 +8,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Single-target · no AoE TM" => "Alvo único · sem TM AoE",
         "TM AoE equipped" => "TM AoE equipado",
         "TM AoE · faster here" => "TM AoE · acelera esta hunt",
-        "TM AoE · spawn-limited" => "TM AoE · limitado pelos spawns",
+        "TM AoE · no speed gain here" => "TM AoE · sem ganho de velocidade aqui",
         "engaged targets" => "alvos simultâneos",
         "Lethal burst" => "Golpe fatal",
         "Hit risk" => "Risco de dano",
