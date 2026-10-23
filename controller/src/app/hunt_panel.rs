@@ -681,6 +681,7 @@ struct AtlasDestination {
     share:f64,
     forecast:Option<native_atlas::Forecast>,
     objective:Option<f64>,
+    mkt_value:Option<f64>,
 }
 struct AtlasSpeciesRow {
     id:u64,
@@ -922,7 +923,7 @@ fn atlas_sort_label(sort:AtlasSort)->&'static str {
         AtlasSort::Capture=>tr("Capture chance"),
         AtlasSort::ShinyCaught=>tr("Conditional shiny caught/h"),
         AtlasSort::OutlandRare=>tr("Outland rare units/h"),
-        AtlasSort::SaleValue=>tr("Catalog sale value"),
+        AtlasSort::SaleValue=>tr("MKT sale value"),
         AtlasSort::Shiny=>tr("Shiny encounter/h (conditional)"),
         AtlasSort::Level=>tr("Hunt level"),
         AtlasSort::Name=>tr("Species name"),
@@ -1025,6 +1026,16 @@ fn atlas_species_rows(
     let known_roster:std::collections::BTreeSet<_>=view.pokemon_roster.iter()
         .filter_map(|mon|mon.species_id).collect();
     let mut grouped=std::collections::BTreeMap::<u64,AtlasSpeciesRow>::new();
+    let mut lowest_hunt_levels=std::collections::BTreeMap::<u64,u32>::new();
+    for hunt in view.hunts.iter(){
+        for spawn in &hunt.species{
+            if spawn.weight>0.0&&hunt.level>0{
+                lowest_hunt_levels.entry(spawn.id)
+                    .and_modify(|n|*n=(*n).min(hunt.level))
+                    .or_insert(hunt.level);
+            }
+        }
+    }
     for (hunt,unlocked) in atlas_destinations(view,reference) {
         if filters.min_level>0 && hunt.level<filters.min_level
             || filters.max_level>0 && hunt.level>filters.max_level
@@ -1065,10 +1076,13 @@ fn atlas_species_rows(
                filters.collection==AtlasCollection::NotInDepot && owned {continue}
             let share=spawn.weight.max(0.0)/sum;
             let forecast=hunt_forecast.clone();
+            let mkt_value=reference.and_then(|r|native_atlas::mkt_sale_estimate(
+                r,spawn.id,hunt.level,
+                lowest_hunt_levels.get(&spawn.id).copied().unwrap_or(hunt.level)
+            ));
             // The same full-wave simulator must feed both XP and gold.
             // Measured gold is available in Current hunt, never mixed into rankings.
-            let base=atlas_objective(filters.sort,forecast.as_ref(),hunt,
-                share,reference.and_then(|r|r.catalog_sell_values.get(&spawn.id)).copied());
+            let base=atlas_objective(filters.sort,forecast.as_ref(),hunt,share,mkt_value);
 
             let objective=match filters.sort {
                 AtlasSort::Capture=>reference.and_then(|r|{
@@ -1107,7 +1121,7 @@ fn atlas_species_rows(
                 id:spawn.id,name:name.to_owned(),types,owned,
                 destinations:Vec::new(),best:None,
             }).destinations.push(AtlasDestination{
-                hunt:Arc::clone(label),unlocked,share,forecast,objective,
+                hunt:Arc::clone(label),unlocked,share,forecast,objective,mkt_value,
             });
         }
     }
@@ -1758,9 +1772,9 @@ fn draw_atlas_species(
                             ui.label(RichText::new(format!(
                                 "{} {}",row.destinations.len(),tr("destinations")
                             )).size(10.0).color(MUTED));
-                            ui.label(RichText::new(format!("{}: {}",tr("Catalog sale value"),
-                                reference.and_then(|r|r.catalog_sell_values.get(&row.id))
-                                    .map(|v|format_hunt_amount(*v))
+                            ui.label(RichText::new(format!("{}: {}",tr("MKT estimate"),
+                                row.destinations.first().and_then(|d|d.mkt_value)
+                                    .map(format_hunt_amount)
                                     .unwrap_or_else(||"—".into())))
                                 .size(10.0).color(MUTED));
                         });
@@ -1897,9 +1911,9 @@ fn draw_atlas_species_selector(
                 ui.vertical(|ui|{
                     ui.label(RichText::new(&row.name)
                         .strong().size(12.0).color(TEXT));
-                    ui.label(RichText::new(format!("{}: {}",tr("Catalog sale value"),
-                        reference.and_then(|r|r.catalog_sell_values.get(&row.id))
-                            .map(|v|format_hunt_amount(*v))
+                    ui.label(RichText::new(format!("{}: {}",tr("MKT estimate"),
+                        row.destinations.first().and_then(|d|d.mkt_value)
+                            .map(format_hunt_amount)
                             .unwrap_or_else(||"—".into())))
                         .size(9.0).color(MUTED));
                     ui.label(RichText::new(format!(
@@ -1980,7 +1994,7 @@ fn draw_atlas_explorer(
             .size(10.0).color(MUTED));
     }
     if filters.sort==AtlasSort::SaleValue {
-        ui.label(RichText::new(tr("Catalog reference, not an observed market sale average."))
+        ui.label(RichText::new(tr("Estimated MKT NPC buyback for a non-shiny quality-1 capture, using its caught level. Not RMT player-market prices."))
             .size(10.0).color(MUTED));
     } else if matches!(filters.sort,AtlasSort::Capture|AtlasSort::ShinyCaught|AtlasSort::OutlandRare){
         ui.label(RichText::new(tr("Conditional model; capture odds use the selected ball and modifiers."))
@@ -2994,11 +3008,11 @@ mod tests {
             destinations:vec![
                 AtlasDestination{
                     hunt:Arc::new(AtlasHuntLabel::from_hunt(&locked)),unlocked:false,share:0.7,
-                    forecast:None,objective:Some(200.0)
+                    forecast:None,objective:Some(200.0),mkt_value:None
                 },
                 AtlasDestination{
                     hunt:Arc::new(AtlasHuntLabel::from_hunt(&accessible)),unlocked:true,share:0.3,
-                    forecast:None,objective:Some(100.0)
+                    forecast:None,objective:Some(100.0),mkt_value:None
                 }
             ],
         };
@@ -3190,7 +3204,7 @@ mod tests {
         assert_eq!(atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario)[0].best,None);
         guide.catalog_sell_values.insert(1,400.0);
         let after=atlas_species_rows(&view,Some(&guide),&cache,&filters,&scenario);
-        assert_eq!(after[0].best,Some(400.0));
+        assert_eq!(after[0].best,Some(560.0)); // ×1.4: wild 120, capture tier 20
     }
     #[test]
     fn unknown_rate_is_never_turned_into_zero(){
