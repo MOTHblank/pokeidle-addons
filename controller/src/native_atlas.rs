@@ -49,6 +49,8 @@ pub struct Reference {
     pub npc_sell_prices: BTreeMap<u64,f64>,
     /// Static catalog sellValue; not an observed player-to-player market average.
     pub catalog_sell_values: BTreeMap<u64,f64>,
+    /// Untouched catalog hunt level, independent of the wild hunt level.
+    pub catalog_hunt_levels: BTreeMap<u64,u32>,
 }
 /// Lendários, míticos e Megas seguem contratos próprios: não devem
 /// receber chances de captura normais, mesmo que apareçam em um catálogo
@@ -79,6 +81,46 @@ pub fn special_capture_species(id:u64)->bool{
 pub fn capture_inputs(reference:&Reference,id:u64)->(Option<u32>,Option<f64>){
     if special_capture_species(id){return (None,None)}
     (reference.capture_stages.get(&id).copied(),None)
+}
+/// NPC MKT buyback, not a player-to-player RMT listing.
+///
+/// v1.357.3 caps the species base at ouroDoNivel(2500) = 64,907,
+/// and the captured Pokémon level multiplier at level 100.
+/// The reference is quality 1.0, non-shiny, without an individual IV price.
+pub fn mkt_sale_estimate(
+    reference:&Reference,id:u64,wild_level:u32,lowest_hunt_level:u32,
+)->Option<f64>{
+    if wild_level==0{return None}
+    let raw_sell=reference.catalog_sell_values.get(&id).copied();
+    let raw_npc=reference.npc_sell_prices.get(&id).copied();
+    let catalog_level=reference.catalog_hunt_levels.get(&id).copied();
+    if raw_sell.is_none()&&raw_npc.is_none()&&catalog_level.is_none(){return None}
+    let level=catalog_level.unwrap_or(wild_level).max(1);
+    let ouro_do_nivel=|n:u32|(12_000.0*(n.max(1) as f64/150.0).powf(0.6)).round();
+    let cap=ouro_do_nivel(2500);
+    // aplicarEconomiaRegiaoAlta replaces the old mirror value above 150.
+    let mut base=if level>150{ouro_do_nivel(level)}else{
+        raw_sell.filter(|v|*v<=500_000.0)
+            .or(raw_npc.filter(|v|*v<=500_000.0))
+            .unwrap_or_else(||ouro_do_nivel(level))
+    };
+    // elevarAoNivelDaHunt only promotes a Kanto-scale catalog species
+    // when ALL its authentic hunts are above the level-150 boundary.
+    if level<=150&&lowest_hunt_level>150{
+        base=base.max(ouro_do_nivel(lowest_hunt_level));
+    }
+    base=match id{
+        2027|2050=>60_000.0,
+        2006=>32_000.0,
+        212|3212=>88_000.0,
+        _=>base,
+    }.min(cap);
+    // nivelDeCaptura preserves wild levels <=100; higher ones use
+    // 20/40/100 evolutionary-stage caps. Unknown stages stay unknown.
+    let captured_level=if wild_level<=100{wild_level}
+        else{reference.capture_stages.get(&id).copied()?.min(100)};
+    let value=(base*(1.0+captured_level as f64/50.0)).floor().max(1.0);
+    value.is_finite().then_some(value)
 }
 #[derive(Clone, Debug)]
 pub struct Forecast {
@@ -181,10 +223,11 @@ pub fn merge_creature_catalog(reference:&mut Reference,data:&Value){
             .filter(|n|n.is_finite()&&*n>0.0);
         let sell=positive("sellValue");
         let npc=positive("priceNpc");
-        if let Some(price)=sell {reference.catalog_sell_values.insert(id,price);}
-        if let Some(price)=npc.or(sell) {
-            reference.npc_sell_prices.insert(id,price);
+        if let Some(level)=level.filter(|n|*n>0){
+            reference.catalog_hunt_levels.insert(id,level);
         }
+        if let Some(price)=sell {reference.catalog_sell_values.insert(id,price);}
+        if let Some(price)=npc {reference.npc_sell_prices.insert(id,price);}
         if let Some(rarity)=crate::native_atlas_models::catalog_rarity(level,sell,npc){
             reference.capture_rarities.insert(id,rarity);
         }
@@ -609,6 +652,46 @@ mod tests {
             reference.capture_stages.insert(id,100);
             assert_eq!(capture_inputs(&reference,id),(Some(100),None));
         }
+    }
+    #[test]
+    fn upstream_v1357_3_mkt_caps_base_and_captured_level(){
+        let mut reference=Reference::default();
+        for (id,level) in [(1,25),(2,25),(3,25),(212,100),
+            (2006,150),(555,5000),(556,160300)]{
+            reference.catalog_hunt_levels.insert(id,level);
+        }
+        for id in [1,2,3]{reference.catalog_sell_values.insert(id,500.0);}
+        for id in [555,556]{reference.catalog_sell_values.insert(id,3000.0);}
+        for (id,stage) in [(1,20),(2,40),(3,100),
+            (212,100),(2006,100),(555,20),(556,100)]{
+            reference.capture_stages.insert(id,stage);
+        }
+        // Kanto low-level catches retain the wild level.
+        assert_eq!(mkt_sale_estimate(&reference,1,30,30),Some(800.0));
+        // The old high-region catalog raw value is not the MKT price.
+        assert_eq!(mkt_sale_estimate(&reference,555,5000,5000),Some(90_869.0));
+        assert_eq!(mkt_sale_estimate(&reference,556,160300,160300),Some(194_721.0));
+        assert_eq!(mkt_sale_estimate(&reference,212,120,120),Some(194_721.0));
+        assert_eq!(mkt_sale_estimate(&reference,2006,150,150),Some(96_000.0));
+        assert_eq!(mkt_sale_estimate(&reference,2,120,120),Some(900.0));
+        assert_eq!(mkt_sale_estimate(&reference,3,120,120),Some(1500.0));
+        reference.capture_stages.remove(&556);
+        assert_eq!(mkt_sale_estimate(&reference,556,160300,160300),None);
+        assert_eq!(mkt_sale_estimate(&Reference::default(),9,500,500),None);
+    }
+    #[test]
+    fn upstream_v1357_3_mkt_uses_lowest_hunt_for_legacy_species(){
+        let mut reference=Reference::default();
+        reference.catalog_hunt_levels.insert(99,100);
+        reference.catalog_sell_values.insert(99,3000.0);
+        reference.capture_stages.insert(99,100);
+        // The species' only hunt is high-level: its base is promoted.
+        let price=mkt_sale_estimate(&reference,99,2000,2000).unwrap();
+        let expected=((12_000.0_f64*(2000.0_f64/150.0).powf(0.6))
+            .round().min(64_907.0)*3.0).floor();
+        assert_eq!(price,expected);
+        // Having any low-level hunt prevents that promotion.
+        assert_eq!(mkt_sale_estimate(&reference,99,2000,100),Some(9000.0));
     }
     #[test]
     fn forecast_uses_simulation_instead_of_current_hunt_pace_without_double_counting_xp() {
