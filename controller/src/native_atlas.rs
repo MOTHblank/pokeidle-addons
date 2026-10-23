@@ -547,6 +547,70 @@ mod tests {
         assert!(!reference.capture_stages.contains_key(&9006));
     }
     #[test]
+    fn upstream_v1357_3_mega_reference_uses_latest_types_stats_and_second_megas() {
+        // These compact rows supplement the live creature JSON for Megas.
+        // Every new upstream Mega and the changed Aggron typing must survive
+        // the base-species lookup used by the native battle simulator.
+        let mut reference=Reference::default();
+        let base=ReferenceSpecies{
+            name:"Base".into(),types:vec!["NORMAL".into()],
+            base:vec![100.0;6],moves:Vec::new(),drops:Vec::new(),
+        };
+        for id in [26,306,373,445,500,531,952] {
+            reference.species.insert(id,base.clone());
+        }
+        merge_upstream_megas(&mut reference);
+        for (id,types,stats) in [
+            (3373,vec!["DRAGON","FLYING"],vec![95.0,145.0,130.0,120.0,90.0,120.0]),
+            (3500,vec!["FIRE","FIGHTING"],vec![110.0,148.0,75.0,110.0,110.0,75.0]),
+            (3531,vec!["NORMAL","FAIRY"],vec![103.0,60.0,126.0,80.0,126.0,50.0]),
+            (3952,vec!["GRASS","FIRE"],vec![65.0,138.0,85.0,138.0,85.0,75.0]),
+            (9026,vec!["ELECTRIC"],vec![60.0,135.0,95.0,90.0,95.0,110.0]),
+            (9445,vec!["DRAGON"],vec![108.0,130.0,85.0,141.0,85.0,151.0]),
+        ] {
+            let mega=reference.species.get(&id)
+                .unwrap_or_else(||panic!("Missing upstream Mega {id}"));
+            assert_eq!(mega.types,types,"Mega {id} types");
+            assert_eq!(mega.base,stats,"Mega {id} stats");
+            assert_eq!(mega.moves.len(),1,"Mega {id} signature attack");
+            assert_eq!(mega.moves[0].power,600.0);
+            assert!(special_capture_species(id),"Mega {id} must not use ordinary capture odds");
+        }
+        let aggron=&reference.species[&3306];
+        assert_eq!(aggron.types,vec!["STEEL"]);
+        assert_eq!(aggron.base[2],230.0);
+        assert_eq!(include_str!("../assets/visual/upstream-megas.tsv").lines()
+            .filter(|line|line.starts_with(|c:char|c.is_ascii_digit())).count(),93);
+    }
+    #[test]
+    fn upstream_v1357_3_forms_map_to_base_dex_and_exclude_special_captures() {
+        let mut form_dex=BTreeMap::<u64,u64>::new();
+        for line in include_str!("../assets/visual/upstream-form-base.tsv").lines() {
+            let Some((id,dex))=line.split_once('\t') else{continue};
+            if let (Ok(id),Ok(dex))=(id.parse::<u64>(),dex.parse::<u64>()){
+                assert!(form_dex.insert(id,dex).is_none(),"Duplicate form {id}");
+            }
+        }
+        assert_eq!(form_dex.len(),97);
+        for (id,dex) in [
+            (4053,53),(8413,413),(9413,413),(8483,483),(8484,484),
+            (8492,492),(8555,555),(9555,555),(9646,646),
+        ] {
+            assert_eq!(form_dex.get(&id),Some(&dex),"Form {id} must use its national dex");
+        }
+        let mut reference=Reference::default();
+        for id in [8483,8484,8492,9646] {
+            assert!(special_capture_species(id),"Legendary/mythical form {id}");
+            reference.capture_stages.insert(id,100);
+            assert_eq!(capture_inputs(&reference,id),(None,None));
+        }
+        for id in [4053,8413,9413,8555,9555] {
+            assert!(!special_capture_species(id),"Ordinary form {id}");
+            reference.capture_stages.insert(id,100);
+            assert_eq!(capture_inputs(&reference,id),(Some(100),None));
+        }
+    }
+    #[test]
     fn forecast_uses_simulation_instead_of_current_hunt_pace_without_double_counting_xp() {
         let mut view=HuntView::default();
         let hunt=HuntEntry{
