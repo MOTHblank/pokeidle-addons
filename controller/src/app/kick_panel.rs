@@ -192,8 +192,8 @@ impl ControllerApp {
         self.kick_display_cache[index]=KickDisplayCache::default();
         self.kick_api_token_input[index].clear();
         let mut message = kick_label(pt_br(),
-            "Checking the Kick API. Your saved login has not been verified yet.",
-            "Consultando a API Kick. A credencial salva ainda não foi verificada.").to_owned();
+            "Checking Kick access. The connection has not been verified yet.",
+            "Verificando o acesso à Kick. A conexão ainda não foi confirmada.").to_owned();
         let mut error = false;
         if !entered.is_empty() && self.kick_remember_login[index] {
             match native_auth::save_kick_token(profile, &token) {
