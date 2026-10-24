@@ -578,6 +578,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Confirmed" => "Confirmado",
         "Refused" => "Recusado",
         "Failed" => "Falhou",
+        "Stopped" => "Parado",
+        "PokéIdle connection stopped unexpectedly. See the controller log." => "Conexão com PokéIdle encerrada inesperadamente. Consulte o log do controlador.",
         "NeedsLogin" => "Login necessário",
         "AuthDenied" => "Autenticação recusada",
         _ => en,
@@ -607,6 +609,41 @@ mod tests {
         assert_eq!(super::dynamic("Capture forecasts · 12 species · 3 with evolution-stage input".to_owned()),
             "Previsões de captura · 12 espécies · 3 com dados do estágio evolutivo");
     }
+
+    #[test]
+    fn market_display_translates_protocol_currency_without_mutating_identifiers() {
+        assert_eq!(super::dynamic("Snatch #13 · 2 units at 500 gold".to_owned()),
+            "Snatch #13 · 2 unidades por 500 ouro");
+        assert_eq!(super::dynamic("Confirmed #44 · 1 × 120 orb".to_owned()),
+            "Confirmado nº 44 · 1 × 120 gemas");
+        assert_eq!(super::pt("pokeidle:market:rule"), "pokeidle:market:rule");
+    }
+
+    #[test]
+    fn static_ui_labels_must_have_dictionary_entries() {
+        let inline = include_str!("../app.rs");
+        let additional = include_str!("translations.rs");
+        for source in [
+            inline,
+            include_str!("hunt_panel.rs"),
+            include_str!("hunt_panel/models_panel.rs"),
+            include_str!("market_panel.rs"),
+            include_str!("kick_panel.rs"),
+        ] {
+            let mut remainder = source;
+            while let Some((_, after)) = remainder.split_once("tr(") {
+                let trimmed = after.trim_start();
+                if let Some(quoted) = trimmed.strip_prefix('"') {
+                    if let Some((key, _)) = quoted.split_once('"') {
+                        let lookup = format!(r#""{key}" =>"#);
+                        assert!(inline.contains(&lookup) || additional.contains(&lookup),
+                            "missing pt-BR dictionary entry for {key}");
+                    }
+                }
+                remainder = after;
+            }
+        }
+    }
 }
 
 /// Translate UI-only interpolated messages after their data has been formatted.
@@ -617,6 +654,15 @@ pub(super) fn dynamic(mut english: String) -> String {
     if let Some(tier) = english.strip_prefix("Waiting for Outland ")
         .and_then(|suffix| suffix.strip_suffix(" confirmation")) {
         return format!("Aguardando confirmação de Outland {tier}");
+    }
+    // Translate protocol currency tokens only in Market purchase summaries.
+    if english.starts_with("Snatch #") || english.starts_with("Confirmed #")
+        || english.starts_with("Refused #") {
+        if let Some(prefix) = english.strip_suffix(" gold") {
+            english = format!("{prefix} ouro");
+        } else if let Some(prefix) = english.strip_suffix(" orb") {
+            english = format!("{prefix} gemas");
+        }
     }
     for (from, to) in [
         ("Showing ", "Exibindo "),
@@ -695,6 +741,15 @@ pub(super) fn dynamic(mut english: String) -> String {
         ("Held · ", "Reservado · "),
         ("s to unlock", "s para liberar"),
         ("Unlocks in ", "Libera em "),
+        ("Market directory: ", "Pasta do mercado: "),
+        ("Market save: ", "Salvamento do mercado: "),
+        ("Market atomic replace: ", "Substituição atômica do mercado: "),
+        ("Market read: ", "Leitura do mercado: "),
+        ("Market JSON: ", "JSON do mercado: "),
+        ("Moth Watch JSON: ", "JSON do Moth Watch: "),
+        ("Invalid or duplicated Snatch listing #", "Anúncio do Snatch inválido ou duplicado nº "),
+        ("Invalid or duplicate rule ", "Regra inválida ou duplicada "),
+        (" needs a price ceiling", " precisa de um preço máximo"),
         ("Waiting for purchase confirmation: ", "Aguardando confirmação da compra: "),
         ("Buying rules (", "Regras de compra ("),
         (" saved offers · buy when available", " ofertas salvas · comprar quando liberadas"),
