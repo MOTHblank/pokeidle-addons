@@ -374,7 +374,7 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
             if let Some(error) = &channel.error {
                 // Keep errors visible once, without duplicating them inside
                 // expanded diagnostics or the account summary.
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
             }
             if let Some(detail) = &channel.details {
                 ui.collapsing(kick_label(br, "Technical details", "Detalhes técnicos"), |ui| {
@@ -384,16 +384,28 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
                             .size(10.0).color(MUTED));
                     }
                     let watch = &detail.watch;
-                    ui.label(format!("WebSocket: {} · handshake: {}",
-                        watch.ws_connected, watch.handshake_received));
-                    ui.label(format!("HLS: {} segments · {:.1} MiB",
-                        watch.media.segments, watch.media.bytes as f64 / 1_048_576.0));
-                    ui.label(format!("Tracking: {} events", watch.events_sent));
+                    let yes_no = |value: bool| if value {
+                        kick_label(br, "yes", "sim")
+                    } else {
+                        kick_label(br, "no", "não")
+                    };
+                    ui.label(format!("WebSocket: {} · {}: {}",
+                        yes_no(watch.ws_connected),
+                        kick_label(br, "handshake", "negociação"),
+                        yes_no(watch.handshake_received)));
+                    ui.label(format!("HLS: {} {} · {:.1} MiB",
+                        watch.media.segments,
+                        kick_label(br, "segments", "segmentos"),
+                        watch.media.bytes as f64 / 1_048_576.0));
+                    ui.label(format!("{}: {} {}",
+                        kick_label(br, "Tracking", "Rastreamento"), watch.events_sent,
+                        kick_label(br, "events", "eventos")));
                     if let Some(viewers) = detail.viewers {
-                        ui.label(format!("Viewers: {viewers}"));
+                        ui.label(format!("{}: {viewers}",
+                            kick_label(br, "Viewers", "Espectadores")));
                     }
                     if let Some(error) = &watch.media.error {
-                        ui.label(RichText::new(error).size(10.0).color(WARN));
+                        ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
                     }
                     if let Some(checked) = channel.checked_at {
                         ui.label(format!("{} {} s",
