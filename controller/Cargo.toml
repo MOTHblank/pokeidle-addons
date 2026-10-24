@@ -1,6 +1,6 @@
 [package]
 name = "moth-controller"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 description = "Native Windows and Linux controller for dedicated PokéIdle browser profiles"
 license = "MIT"
