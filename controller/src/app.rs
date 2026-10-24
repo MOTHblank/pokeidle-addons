@@ -211,7 +211,8 @@ fn localize_status(message: String) -> String {
 }
 
 fn localize_status_pt(message: String) -> String {
-    let mut value = message;
+    // Kick transport/login errors share the status bar with ordinary UI text.
+    let mut value = translations::kick_error(message);
     for (en, pt) in [
         ("Could not save capture settings: ", "Não foi possível salvar as configurações de captura: "),
         ("native verification failed: ", "falha na verificação nativa: "),
