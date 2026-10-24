@@ -558,6 +558,30 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Throw interval" => "Intervalo entre arremessos",
         "100 ms matches Auto Catch+; unanswered throws retry after 1 s" => "100 ms equivale ao Auto Catch+; tentativas sem resposta são repetidas após 1 s",
         "Manual market prices are NOT verified completed sales. Does not include potion/revive costs, tax, other item income or currency conversions. Never compare this hypothetical balance with live net wallet changes as though equivalent." => "Preços manuais de mercado NÃO são vendas verificadas. Não incluem custos de poções/revives, impostos, outras receitas ou conversões de moeda. Não compare esse saldo hipotético com mudanças reais da carteira como se fossem equivalentes.",
+        "Capture boost ×2" => "Bônus de captura ×2",
+        "Combat gold/h from confirmed receipts is separate from net wallet changes. Other-hunt gold/h uses comparable full-wave combat simulations; unknown loot boosts are excluded." => "Ouro de combate/h obtido de registros confirmados não é igual à variação líquida do saldo. Para outras hunts, o ouro/h usa simulações comparáveis de combate por onda completa; bônus de loot desconhecidos não são incluídos.",
+        "Waiting for updated inventory" => "Aguardando atualização do estoque",
+        "Shop item unavailable" => "Item indisponível na loja",
+        "Shop purchase send failed" => "Falha ao enviar pedido à loja",
+        "Snatch burst" => "Compra rápida do Snatch",
+        "Checking exact listing" => "Verificando anúncio específico",
+        "Competing · verified quote" => "Competindo · preço verificado",
+        "Recovering exact listing" => "Recuperando anúncio específico",
+        "Rule-triggered Snatch" => "Snatch acionado por regra",
+        "Purchased" => "Comprado",
+        "Listing sold, closed or missing" => "Anúncio vendido, fechado ou inexistente",
+        "Listing invalid, changed or not available" => "Anúncio inválido, alterado ou indisponível",
+        "Market request rate-limited; backing off" => "Limite de solicitações ao mercado; aguardando",
+        "Market journal is full" => "Histórico de compras do mercado cheio",
+        "Market dispatch failed; order outcome unknown" => "Falha ao enviar compra ao mercado; resultado desconhecido",
+        "Kick private API denied authentication; requests paused" => "A API privada do Kick recusou a autenticação; solicitações pausadas",
+        "Confirmed" => "Confirmado",
+        "Refused" => "Recusado",
+        "Failed" => "Falhou",
+        "Stopped" => "Parado",
+        "PokéIdle connection stopped unexpectedly. See the controller log." => "Conexão com PokéIdle encerrada inesperadamente. Consulte o log do controlador.",
+        "NeedsLogin" => "Login necessário",
+        "AuthDenied" => "Autenticação recusada",
         _ => en,
     }
 }
@@ -570,11 +594,82 @@ mod tests {
         assert_eq!(super::pt("No selected hunt; history cannot be grouped."), "Nenhuma hunt selecionada para agrupar o histórico.");
         assert_eq!(super::pt("pokeidle:market:rule"), "pokeidle:market:rule");
     }
+    #[test]
+    fn dynamic_market_status_preserves_confirmation() {
+        assert_eq!(super::dynamic("Waiting for purchase confirmation: 2 market purchase(s) awaiting confirmation".to_owned()),
+            "Aguardando confirmação da compra: 2 compras no mercado aguardando confirmação");
+        assert_eq!(super::dynamic("5 attempts · 2 purchases · 1 awaiting confirmation".to_owned()),
+            "5 tentativas · 2 compras · 1 aguardando confirmação");
+    }
+
+    #[test]
+    fn dynamic_outland_confirmation_is_localized_without_global_mutation() {
+        assert_eq!(super::dynamic("Waiting for Outland 4 confirmation".to_owned()),
+            "Aguardando confirmação de Outland 4");
+        assert_eq!(super::dynamic("Capture forecasts · 12 species · 3 with evolution-stage input".to_owned()),
+            "Previsões de captura · 12 espécies · 3 com dados do estágio evolutivo");
+    }
+
+    #[test]
+    fn market_display_translates_protocol_currency_without_mutating_identifiers() {
+        assert_eq!(super::dynamic("Snatch #13 · 2 units at 500 gold".to_owned()),
+            "Snatch #13 · 2 unidades por 500 ouro");
+        assert_eq!(super::dynamic("Confirmed #44 · 1 × 120 orb".to_owned()),
+            "Confirmado nº 44 · 1 × 120 gemas");
+        assert_eq!(super::pt("pokeidle:market:rule"), "pokeidle:market:rule");
+    }
+
+    #[test]
+    fn static_ui_labels_must_have_dictionary_entries() {
+        let inline = include_str!("../app.rs");
+        let additional = include_str!("translations.rs");
+        for source in [
+            inline,
+            include_str!("hunt_panel.rs"),
+            include_str!("hunt_panel/models_panel.rs"),
+            include_str!("market_panel.rs"),
+            include_str!("kick_panel.rs"),
+        ] {
+            let mut remainder = source;
+            while let Some(index) = remainder.find("tr(") {
+                // Ignore suffixes of identifiers such as push_str(...).
+                let identifier_suffix = remainder[..index].chars().last()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                let after = &remainder[index + 3..];
+                let trimmed = after.trim_start();
+                if !identifier_suffix {
+                    if let Some(quoted) = trimmed.strip_prefix('"') {
+                        if let Some((key, _)) = quoted.split_once('"') {
+                            let lookup = format!(r#""{key}" =>"#);
+                            assert!(inline.contains(&lookup) || additional.contains(&lookup),
+                                "missing pt-BR dictionary entry for {key}");
+                        }
+                    }
+                }
+                remainder = after;
+            }
+        }
+    }
 }
 
 /// Translate UI-only interpolated messages after their data has been formatted.
 /// Do not use this for game identifiers or serialized settings.
 pub(super) fn dynamic(mut english: String) -> String {
+    // Translate Outland confirmations as a whole. A global " confirmation"
+    // removal would damage unrelated Market purchase messages.
+    if let Some(tier) = english.strip_prefix("Waiting for Outland ")
+        .and_then(|suffix| suffix.strip_suffix(" confirmation")) {
+        return format!("Aguardando confirmação de Outland {tier}");
+    }
+    // Translate protocol currency tokens only in Market purchase summaries.
+    if english.starts_with("Snatch #") || english.starts_with("Confirmed #")
+        || english.starts_with("Refused #") {
+        if let Some(prefix) = english.strip_suffix(" gold") {
+            english = format!("{prefix} ouro");
+        } else if let Some(prefix) = english.strip_suffix(" orb") {
+            english = format!("{prefix} gemas");
+        }
+    }
     for (from, to) in [
         ("Showing ", "Exibindo "),
         (" of ", " de "),
@@ -591,8 +686,6 @@ pub(super) fn dynamic(mut english: String) -> String {
         (" active", " ativo"),
         ("Requesting Outland ", "Solicitando Outland "),
         (" rare drops", " drops raros"),
-        ("Waiting for Outland ", "Aguardando confirmação de Outland "),
-        (" confirmation", ""),
         ("Location: ", "Local: "),
         ("Lead: ", "Principal: "),
         ("Top: ", "Principal: "),
@@ -644,6 +737,25 @@ pub(super) fn dynamic(mut english: String) -> String {
         ("Mean hours to next drop: ", "Horas médias até o próximo drop: "),
         ("Conditional gold balance (combat + USER-QUOTED market - known ball gold cost): ", "Balanço de ouro condicional (combate + preço de mercado INFORMADO PELO USUÁRIO - custo conhecido de bolas): "),
         ("Could not load market rules; buying disabled: ", "Não foi possível carregar as regras do mercado; compras desativadas: "),
+        (" market purchase(s) awaiting confirmation", " compras no mercado aguardando confirmação"),
+        ("Confirmed #", "Confirmado nº "),
+        ("Refused #", "Recusado nº "),
+        (" units at ", " unidades por "),
+        ("Rule ", "Regra "),
+        (": sent ", ": enviou "),
+        ("x listing #", "x anúncio nº "),
+        ("Held · ", "Reservado · "),
+        ("s to unlock", "s para liberar"),
+        ("Unlocks in ", "Libera em "),
+        ("Market directory: ", "Pasta do mercado: "),
+        ("Market save: ", "Salvamento do mercado: "),
+        ("Market atomic replace: ", "Substituição atômica do mercado: "),
+        ("Market read: ", "Leitura do mercado: "),
+        ("Market JSON: ", "JSON do mercado: "),
+        ("Moth Watch JSON: ", "JSON do Moth Watch: "),
+        ("Invalid or duplicated Snatch listing #", "Anúncio do Snatch inválido ou duplicado nº "),
+        ("Invalid or duplicate rule ", "Regra inválida ou duplicada "),
+        (" needs a price ceiling", " precisa de um preço máximo"),
         ("Waiting for purchase confirmation: ", "Aguardando confirmação da compra: "),
         ("Buying rules (", "Regras de compra ("),
         (" saved offers · buy when available", " ofertas salvas · comprar quando liberadas"),
@@ -668,6 +780,7 @@ pub(super) fn dynamic(mut english: String) -> String {
         (" sent · ", " enviadas · "),
         (" caught", " capturados"),
         ("Last game update: ", "Última atualização do jogo: "),
+        (" with evolution-stage input", " com dados do estágio evolutivo"),
         (" spawn slots", " espaços de spawn"),
         ("Wild: ", "Selvagem: "),
         (" Twitch channels", " canais da Twitch"),
