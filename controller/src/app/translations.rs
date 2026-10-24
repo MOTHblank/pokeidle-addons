@@ -574,7 +574,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Market request rate-limited; backing off" => "Limite de solicitações ao mercado; aguardando",
         "Market journal is full" => "Histórico de compras do mercado cheio",
         "Market dispatch failed; order outcome unknown" => "Falha ao enviar compra ao mercado; resultado desconhecido",
-        "Kick private API denied authentication; requests paused" => "A API privada do Kick recusou a autenticação; solicitações pausadas",
+        "Kick private API denied authentication; requests paused" => "A API privada da Kick bloqueou o acesso (401/403); solicitações pausadas",
         "Confirmed" => "Confirmado",
         "Refused" => "Recusado",
         "Failed" => "Falhou",
@@ -582,12 +582,120 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "PokéIdle connection stopped unexpectedly. See the controller log." => "Conexão com PokéIdle encerrada inesperadamente. Consulte o log do controlador.",
         "NeedsLogin" => "Login necessário",
         "AuthDenied" => "Autenticação recusada",
+        "A Kick account Bearer token is required" => "É necessário informar o token Bearer da conta Kick",
+        "Invalid Kick channel: use channel names or kick.com URLs" => "Canal Kick inválido. Informe o nome do canal ou uma URL kick.com",
+        "Maximum 12 Kick channels per account" => "Máximo de 12 canais Kick por conta",
+        "Add at least one Kick channel" => "Adicione ao menos um canal Kick",
+        "Could not start Kick channel worker" => "Não foi possível iniciar o monitor de canal Kick",
+        "Could not start Kick offline balance polling" => "Não foi possível iniciar a consulta de pontos dos canais offline",
+        "Kick auth rejected by viewer API (401/403); retries stopped" => "A API de visualização da Kick bloqueou o acesso (401/403); tentativas pausadas",
+        "Kick auth denied (401/403); private requests stopped" => "A API privada da Kick bloqueou o acesso (401/403); solicitações pausadas",
+        "Kick authentication gate unavailable" => "Controle de autenticação da Kick indisponível",
+        "Could not initialize Kick public channel lookup" => "Não foi possível iniciar a consulta pública de canais Kick",
+        "Invalid Kick account credential" => "Credencial da conta Kick inválida",
+        "Could not initialize Kick account HTTP client" => "Não foi possível iniciar a conexão HTTP com a Kick",
+        "Could not connect to Kick account API" => "Não foi possível conectar à API da conta Kick",
+        "Kick public channel API returned invalid JSON (possibly a site challenge)" => "A API pública de canais Kick retornou dados inválidos (possível verificação do site)",
+        "Kick public channel lookup blocked (401/403); this does not prove the saved login expired" => "Consulta pública de canais Kick bloqueada (401/403); isso não comprova que o login salvo expirou",
+        "Kick channel/endpoint not found (404)" => "Canal ou endereço da API Kick não encontrado (404)",
+        "Kick API rate-limited this account (429)" => "A Kick limitou temporariamente as solicitações desta conta (429)",
+        "Kick channel metadata blocked (HTTP 401/403; HTTP client or site challenge)" => "Consulta de dados do canal Kick bloqueada (HTTP 401/403; possível verificação do site)",
+        "Kick channel not found (404)" => "Canal Kick não encontrado (404)",
+        "Kick channel metadata rate limited (429)" => "Consultas de dados do canal Kick limitadas temporariamente (429)",
+        "Kick channel ID unavailable" => "ID do canal Kick indisponível",
+        "Kick API request failed" => "Falha na solicitação à API Kick",
+        "Kick API returned invalid JSON (possibly a site challenge)" => "A API Kick retornou dados inválidos (possível verificação do site)",
+        "Kick points rejected account authorization (401)" => "A Kick não autorizou a consulta de pontos (401)",
+        "Kick points refused access, possibly challenge (403)" => "Consulta de pontos Kick bloqueada, possivelmente por verificação do site (403)",
+        "Kick points request rate limited (429)" => "Consulta de pontos Kick limitada temporariamente (429)",
+        "Kick viewer-token rejected account authorization (401)" => "Token de visualização da Kick não autorizado (401)",
+        "Kick viewer-token refused access, possibly challenge (403)" => "Token de visualização Kick bloqueado, possivelmente por verificação do site (403)",
+        "Kick viewer-token request rate limited (429)" => "Solicitação de token de visualização Kick limitada temporariamente (429)",
+        "Kick viewer token missing" => "Token de visualização Kick ausente",
+        "Invalid Kick WebSocket URL" => "Endereço WebSocket Kick inválido",
+        "Could not resolve Kick WebSocket" => "Não foi possível localizar o servidor WebSocket da Kick",
+        "Could not connect to Kick WebSocket" => "Não foi possível conectar ao WebSocket da Kick",
+        "Could not set Kick WebSocket timeout" => "Não foi possível definir o tempo limite do WebSocket Kick",
+        "Could not set Kick WebSocket write timeout" => "Não foi possível definir o tempo limite de envio do WebSocket Kick",
+        "Invalid Kick WebSocket handshake" => "Negociação WebSocket Kick inválida",
+        "Kick viewer WebSocket TLS handshake failed" => "Falha na conexão segura WebSocket da Kick",
+        "Kick WebSocket could not send message" => "Falha ao enviar mensagem ao WebSocket Kick",
+        "Kick channel is not live" => "O canal Kick não está ao vivo",
+        "Kick viewer WebSocket returned an error" => "O WebSocket de visualização Kick retornou um erro",
+        "Kick WebSocket pong failed" => "Falha na resposta de verificação do WebSocket Kick",
+        "Kick viewer session closed" => "Sessão de visualização Kick encerrada",
+        "Kick viewer WebSocket disconnected" => "WebSocket de visualização Kick desconectado",
+        "Kick HLS transport stalled" => "Recebimento de mídia Kick interrompido",
+        "Could not start Kick media worker" => "Não foi possível iniciar o recebimento de mídia Kick",
+        "Invalid Kick HLS URL" => "Endereço de mídia HLS da Kick inválido",
+        "Kick HLS URL host is not trusted" => "Servidor de mídia HLS da Kick não reconhecido",
+        "Invalid Kick playlist reference" => "Referência da lista de mídia Kick inválida",
+        "Kick HLS playlist download failed" => "Falha ao baixar lista de mídia Kick",
+        "Kick HLS playlist rejected the request" => "A lista de mídia Kick recusou a solicitação",
+        "Kick HLS playlist could not be read" => "Não foi possível ler a lista de mídia Kick",
+        "Kick HLS playlist is too large" => "Lista de mídia Kick muito grande",
+        "Kick HLS playlist is not valid text" => "Lista de mídia Kick em formato de texto inválido",
+        "Kick HLS source is not an M3U8 playlist" => "Fonte de mídia Kick não é uma lista M3U8",
+        "Kick media playlist has no segments" => "Lista de mídia Kick sem segmentos",
+        "Kick HLS segment request failed" => "Falha ao solicitar segmento de mídia Kick",
+        "Kick HLS segment rejected the request" => "Solicitação de segmento de mídia Kick recusada",
+        "Kick HLS segment transfer failed" => "Falha na transferência do segmento de mídia Kick",
+        "Kick login requires libsqlite3.so.0 (install libsqlite3-0)" => "O login Kick precisa da biblioteca libsqlite3.so.0 (instale libsqlite3-0)",
+        "Installed SQLite is missing required symbols" => "A biblioteca SQLite instalada não possui funções necessárias",
+        "Invalid Kick Firefox profile path" => "Pasta de perfil do Firefox para Kick inválida",
+        "Could not open the Kick Firefox cookie database" => "Não foi possível abrir os cookies do Firefox usados pela Kick",
+        "Kick Firefox cookies database has an unsupported schema" => "Banco de cookies do Firefox para Kick em formato não compatível",
+        "Could not read Kick Firefox session cookie" => "Não foi possível ler o cookie de sessão Kick do Firefox",
+        "Kick login state unavailable" => "Estado do login Kick indisponível",
+        "Kick login already in progress" => "O login Kick já está em andamento",
+        "Kick login cancelled" => "Login Kick cancelado",
+        "This PokéIdle Firefox profile is still open. Finish the native game handoff and try Kick login again." => "Este perfil do Firefox já está aberto. Feche essa janela ou conclua a conexão nativa do PokéIdle antes de entrar na Kick.",
+        "Could not observe the Kick Firefox login window" => "Não foi possível acompanhar a janela de login Kick do Firefox",
+        "Kick login not detected. Sign in using Firefox; Moth will import automatically." => "Login Kick não detectado. Entre na Kick pela janela do Firefox para que o Moth importe a sessão.",
+        "Invalid Kick Bearer token" => "Token Bearer Kick inválido",
+        "Stored Kick token is oversized" => "Token Kick salvo acima do tamanho permitido",
+        "Stored Kick token is invalid" => "Token Kick salvo inválido",
+        "Could not read protected Kick login" => "Não foi possível ler o login Kick protegido",
+        "Could not prepare Kick credential directory" => "Não foi possível preparar a pasta protegida das credenciais Kick",
+        "Could not save protected Kick login" => "Não foi possível salvar o login Kick protegido",
+        "Could not remove Kick login" => "Não foi possível apagar o login Kick salvo",
+        "Kick HTTP queue unavailable" => "Fila de solicitações HTTP da Kick indisponível",
+        "Kick request blocked: unexpected URL" => "Solicitação Kick bloqueada: endereço inesperado",
+        "curl unavailable" => "Programa curl indisponível",
+        "Could not start system curl for Kick API" => "Não foi possível iniciar o curl do sistema para a API Kick",
+        "Invalid Kick HTTP header value" => "Cabeçalho HTTP Kick inválido",
+        "Unexpected Kick API header" => "Cabeçalho de API Kick inesperado",
+        "Unable to configure Kick HTTP request" => "Não foi possível configurar a solicitação HTTP Kick",
+        "Kick HTTP subprocess stdin unavailable" => "Entrada de dados do processo HTTP Kick indisponível",
+        "Kick HTTP request did not finish" => "Solicitação HTTP Kick não foi concluída",
+        "Kick HTTP reply exceeded safety limit" => "Resposta HTTP Kick excedeu o limite de segurança",
+        "Kick API returned non-UTF8 response" => "Resposta da API Kick não está em UTF-8",
+        "Kick HTTP transport did not report status" => "O transporte HTTP da Kick não informou o estado",
+        "Kick HTTP transport status invalid" => "Estado do transporte HTTP Kick inválido",
+        "Kick API returned non-JSON content (possible site challenge)" => "A API Kick retornou dados não JSON (possível verificação do site)",
+        "no live KICK channels to open" => "Nenhum canal Kick ao vivo para abrir",
+        "no valid live KICK channels to open" => "Nenhum canal Kick ao vivo válido para abrir",
+        "This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first." => "Este perfil do Firefox ainda não existe. Entre primeiro no PokéIdle usando esta conta.",
+        "The PokéIdle Firefox profile is still running. Wait for its native handoff to finish before logging into Kick." => "Este perfil do Firefox ainda está aberto. Feche a janela do PokéIdle ou conclua a conexão nativa antes do login Kick.",
         _ => en,
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn kick_known_errors_are_localized_without_changing_codes() {
+        assert_eq!(super::kick_error("Kick viewer-token refused access, possibly challenge (403)".to_owned()),
+            "Token de visualização Kick bloqueado, possivelmente por verificação do site (403)");
+        assert_eq!(super::kick_error("Kick points request failed (HTTP 502)".to_owned()),
+            "Falha na consulta de pontos Kick (HTTP 502)");
+        assert_eq!(super::kick_error("Kick login cancelled".to_owned()), "Login Kick cancelado");
+        assert_eq!(super::kick_error("Could not start Kick login: The PokéIdle Firefox profile is still running. Wait for its native handoff to finish before logging into Kick.".to_owned()),
+            "Não foi possível iniciar o login Kick: Este perfil do Firefox ainda está aberto. Feche a janela do PokéIdle ou conclua a conexão nativa antes do login Kick.");
+        assert_eq!(super::kick_error("pokeidle:kick:token".to_owned()), "pokeidle:kick:token");
+    }
+
     #[test]
     fn localization_keeps_protocol_unknowns_untouched() {
         assert_eq!(super::pt("Buying"), "Comprando");
@@ -650,6 +758,31 @@ mod tests {
             }
         }
     }
+}
+
+
+/// Localize known Kick transport/login warnings without changing protocol state.
+/// Values that do not match a known message remain untouched.
+pub(super) fn kick_error(english: String) -> String {
+    let mut value = pt(&english).to_owned();
+    if value == english {
+        for (from, to) in [
+            ("Could not start Kick login: ", "Não foi possível iniciar o login Kick: "),
+            ("Kick account API failed (HTTP ", "Falha na API da conta Kick (HTTP "),
+            ("Kick metadata returned HTTP ", "Consulta de dados do canal Kick retornou HTTP "),
+            ("Kick points request failed (HTTP ", "Falha na consulta de pontos Kick (HTTP "),
+            ("Kick viewer-token request failed (HTTP ", "Falha no token de visualização Kick (HTTP "),
+            ("Kick HTTP transport failed (curl exit ", "Falha no transporte HTTP Kick (saída do curl "),
+            ("could not open live KICK channel ", "não foi possível abrir o canal Kick ao vivo "),
+        ] {
+            if value.starts_with(from) {
+                let remainder = &value[from.len()..];
+                value = format!("{to}{}", pt(remainder));
+                break;
+            }
+        }
+    }
+    value
 }
 
 /// Translate UI-only interpolated messages after their data has been formatted.
