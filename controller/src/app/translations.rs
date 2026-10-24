@@ -574,7 +574,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Market request rate-limited; backing off" => "Limite de solicitações ao mercado; aguardando",
         "Market journal is full" => "Histórico de compras do mercado cheio",
         "Market dispatch failed; order outcome unknown" => "Falha ao enviar compra ao mercado; resultado desconhecido",
-        "Kick private API denied authentication; requests paused" => "A API privada do Kick recusou a autenticação; solicitações pausadas",
+        "Kick private API denied authentication; requests paused" => "A API privada da Kick bloqueou o acesso (401/403); solicitações pausadas",
         "Confirmed" => "Confirmado",
         "Refused" => "Recusado",
         "Failed" => "Falhou",
@@ -675,6 +675,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Kick API returned non-JSON content (possible site challenge)" => "A API Kick retornou dados não JSON (possível verificação do site)",
         "no live KICK channels to open" => "Nenhum canal Kick ao vivo para abrir",
         "no valid live KICK channels to open" => "Nenhum canal Kick ao vivo válido para abrir",
+        "This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first." => "Este perfil do Firefox ainda não existe. Entre primeiro no PokéIdle usando esta conta.",
+        "The PokéIdle Firefox profile is still running. Wait for its native handoff to finish before logging into Kick." => "Este perfil do Firefox ainda está aberto. Feche a janela do PokéIdle ou conclua a conexão nativa antes do login Kick.",
         _ => en,
     }
 }
@@ -689,6 +691,8 @@ mod tests {
         assert_eq!(super::kick_error("Kick points request failed (HTTP 502)".to_owned()),
             "Falha na consulta de pontos Kick (HTTP 502)");
         assert_eq!(super::kick_error("Kick login cancelled".to_owned()), "Login Kick cancelado");
+        assert_eq!(super::kick_error("Could not start Kick login: The PokéIdle Firefox profile is still running. Wait for its native handoff to finish before logging into Kick.".to_owned()),
+            "Não foi possível iniciar o login Kick: Este perfil do Firefox ainda está aberto. Feche a janela do PokéIdle ou conclua a conexão nativa antes do login Kick.");
         assert_eq!(super::kick_error("pokeidle:kick:token".to_owned()), "pokeidle:kick:token");
     }
 
@@ -772,7 +776,8 @@ pub(super) fn kick_error(english: String) -> String {
             ("could not open live KICK channel ", "não foi possível abrir o canal Kick ao vivo "),
         ] {
             if value.starts_with(from) {
-                value = value.replacen(from, to, 1);
+                let remainder = &value[from.len()..];
+                value = format!("{to}{}", pt(remainder));
                 break;
             }
         }
