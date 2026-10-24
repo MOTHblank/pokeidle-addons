@@ -541,9 +541,15 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     if auth_denied {
         ui.add_space(5.0);
-        ui.label(RichText::new(kick_label(br,
-            "A private Kick request was blocked (401/403). This may be temporary, not necessarily an expired login. The monitor is paused; the saved login was kept.",
-            "Uma solicitação privada da Kick foi bloqueada (401/403). Isso pode ser temporário, não necessariamente um login expirado. O monitor foi pausado; o login salvo foi preservado."))
+        ui.label(RichText::new(if app.kick_saved_login[index] {
+            kick_label(br,
+                "A private Kick request was blocked (401/403). This may be temporary, not necessarily an expired login. The monitor is paused; the saved login was kept.",
+                "Uma solicitação privada da Kick foi bloqueada (401/403). Isso pode ser temporário, não necessariamente um login expirado. O monitor foi pausado; o login salvo foi preservado.")
+        } else {
+            kick_label(br,
+                "A private Kick request was blocked (401/403). This may be temporary. Monitoring is paused; enter the token again to reconnect.",
+                "Uma solicitação privada da Kick foi bloqueada (401/403). Isso pode ser temporário. O monitoramento foi pausado; informe o token novamente para reconectar.")
+        })
             .size(11.0).color(WARN));
         if app.kick_saved_login[index] {
             if ui.small_button(kick_label(br, "Retry Kick connection", "Tentar conexão Kick novamente")).clicked() {
@@ -591,7 +597,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
             if let crate::native_kick_login::LoginStatus::Error(error) = &login_status {
-                ui.label(RichText::new(kick_error_ui(error)).size(10.0).color(WARN));
+                ui.label(RichText::new(kick_error_ui(error)).size(10.0)
+                    .color(if error == "Kick login cancelled" { MUTED } else { WARN }));
             }
             ui.collapsing(kick_label(br, "Advanced: enter token manually", "Avançado: informar token manualmente"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[index])
@@ -617,6 +624,14 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.forget_kick_account(index);
             }
         });
+        ui.add_space(8.0);
+    } else if running {
+        // A manually entered token may be intentionally unsaved. Give the
+        // user a way to replace it without restarting the controller.
+        if ui.small_button(kick_label(br, "Stop Kick monitoring", "Parar monitoramento Kick")).clicked() {
+            app.kick_monitors[index].take();
+            app.kick_display_cache[index]=KickDisplayCache::default();
+        }
         ui.add_space(8.0);
     }
 
