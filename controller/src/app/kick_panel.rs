@@ -6,6 +6,10 @@ use crate::native_auth;
 fn kick_label(pt: bool, en: &'static str, br: &'static str) -> &'static str {
     if pt { br } else { en }
 }
+fn kick_error_ui(error: &str) -> String {
+    if pt_br() { translations::kick_error(error.to_owned()) }
+    else { error.to_owned() }
+}
 fn stored_channel_list(app: &ControllerApp, index: usize) -> Vec<String> {
     crate::native_kick::normalize_channels(&app.kick_channels_input[index])
         .unwrap_or_default()
@@ -374,7 +378,7 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
             if let Some(error) = &channel.error {
                 // Keep errors visible once, without duplicating them inside
                 // expanded diagnostics or the account summary.
-                ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
+                ui.label(RichText::new(kick_error_ui(error)).size(10.0).color(WARN));
             }
             if let Some(detail) = &channel.details {
                 ui.collapsing(kick_label(br, "Technical details", "Detalhes técnicos"), |ui| {
@@ -405,7 +409,7 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
                             kick_label(br, "Viewers", "Espectadores")));
                     }
                     if let Some(error) = &watch.media.error {
-                        ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
+                        ui.label(RichText::new(kick_error_ui(error)).size(10.0).color(WARN));
                     }
                     if let Some(checked) = channel.checked_at {
                         ui.label(format!("{} {} s",
@@ -510,11 +514,11 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(&app.accounts[index].name)
                 .size(15.0).strong().color(TEXT));
             let (status, color) = if auth_denied {
-                (kick_label(br, "● Login rejected", "● Login recusado"), WARN)
+                (kick_label(br, "● Private API blocked", "● API privada bloqueada"), WARN)
             } else if running {
-                (kick_label(br, "● Automatic monitoring", "● Monitoramento automático"), GOOD)
+                (kick_label(br, "● Monitor running", "● Monitor em execução"), GOOD)
             } else if app.kick_saved_login[index] {
-                (kick_label(br, "○ Starting", "○ Iniciando"), MUTED)
+                (kick_label(br, "○ Waiting to start", "○ Aguardando início"), MUTED)
             } else {
                 (kick_label(br, "○ Sign in required", "○ Login necessário"), MUTED)
             };
@@ -524,24 +528,38 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.columns(3, |cols| {
             kick_metric(&mut cols[0], kick_label(br, "Live", "Ao vivo"),
                 format!("{online}/{}", desired.len()), if online > 0 { GOOD } else { TEXT });
-            kick_metric(&mut cols[1], kick_label(br, "Watching", "Assistindo"),
+            kick_metric(&mut cols[1], kick_label(br, "Media receiving", "Recebendo mídia"),
                 receiving.to_string(), if receiving > 0 { GOOD } else { MUTED });
             kick_metric(&mut cols[2], kick_label(br, "Points earned", "Pontos ganhos"),
                 format!("+{earned}"), if earned > 0 { GOOD } else { TEXT });
         });
+        ui.label(RichText::new(kick_label(br,
+            "Media receiving counts recent transfers, not confirmed views. Earned points count only observed balance increases.",
+            "Recebendo mídia conta transferências recentes, não visualizações confirmadas. Pontos ganhos contam apenas aumentos observados do saldo."))
+            .size(9.0).color(DIM));
     });
 
     if auth_denied {
         ui.add_space(5.0);
         ui.label(RichText::new(kick_label(br,
-            "Kick rejected the saved login. Remove it below and sign in again.",
-            "A Kick recusou o login salvo. Remova-o abaixo e entre novamente."))
+            "A private Kick request was blocked (401/403). This may be temporary, not necessarily an expired login. The monitor is paused; the saved login was kept.",
+            "Uma solicitação privada da Kick foi bloqueada (401/403). Isso pode ser temporário, não necessariamente um login expirado. O monitor foi pausado; o login salvo foi preservado."))
             .size(11.0).color(WARN));
+        if app.kick_saved_login[index] {
+            if ui.small_button(kick_label(br, "Retry Kick connection", "Tentar conexão Kick novamente")).clicked() {
+                app.kick_monitors[index].take();
+                app.start_kick_account(index);
+            }
+        } else if ui.small_button(kick_label(br,
+            "Stop and enter token again", "Parar e informar token novamente")).clicked() {
+            app.kick_monitors[index].take();
+            app.kick_display_cache[index]=KickDisplayCache::default();
+        }
     } else if let Some(error) = monitor.as_ref().and_then(|snapshot|
         snapshot.error.as_ref())
     {
         ui.add_space(5.0);
-        ui.label(RichText::new(error).size(10.0).color(WARN));
+        ui.label(RichText::new(kick_error_ui(error)).size(10.0).color(WARN));
     }
 
     ui.add_space(10.0);
@@ -552,15 +570,15 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 "Connect your Kick account", "Conecte sua conta Kick"))
                 .size(13.0).strong().color(TEXT));
             ui.label(RichText::new(kick_label(br,
-                "Sign in once. Streams will then be managed automatically.",
-                "Entre uma vez. As transmissões serão gerenciadas automaticamente."))
+                "Enter Kick in the regular Firefox window. When detected, Moth imports the session and closes the temporary window.",
+                "Entre na Kick pela janela comum do Firefox. Ao detectar a sessão, o Moth importa o login e fecha a janela temporária."))
                 .size(11.0).color(MUTED));
             ui.horizontal_wrapped(|ui| {
                 let busy = matches!(login_status,
                     crate::native_kick_login::LoginStatus::Running);
                 if busy {
                     ui.label(RichText::new(kick_label(br,
-                        "Importing login…", "Importando login…"))
+                        "Complete sign-in in Firefox…", "Conclua o login no Firefox…"))
                         .size(11.0).color(WARN));
                     if ui.small_button(kick_label(br, "Cancel", "Cancelar")).clicked() {
                         crate::native_kick_login::cancel(profile);
@@ -573,9 +591,9 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
             if let crate::native_kick_login::LoginStatus::Error(error) = &login_status {
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(kick_error_ui(error)).size(10.0).color(WARN));
             }
-            ui.collapsing(kick_label(br, "Use token instead", "Usar token manual"), |ui| {
+            ui.collapsing(kick_label(br, "Advanced: enter token manually", "Avançado: informar token manualmente"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[index])
                     .password(true)
                     .hint_text(kick_label(br, "Kick Bearer token", "Token Bearer Kick"))
@@ -612,12 +630,20 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     if active_count == 0 {
         ui.label(RichText::new(if !auto_available && configured.is_empty() {
             kick_label(br,
-                "Start PokéIdle to discover official Kick channels.",
-                "Inicie o PokéIdle para descobrir os canais oficiais da Kick.")
+                "Connect PokéIdle to discover official Kick channels.",
+                "Conecte o PokéIdle para descobrir os canais oficiais da Kick.")
+        } else if !running {
+            kick_label(br,
+                "Connect Kick to start channel monitoring.",
+                "Conecte a Kick para iniciar o monitoramento dos canais.")
+        } else if auth_denied {
+            kick_label(br,
+                "Channel checks are paused until Kick access is restored.",
+                "A verificação de canais está pausada até o acesso à Kick voltar.")
         } else {
             kick_label(br,
-                "No live channels right now. Monitoring continues automatically.",
-                "Nenhum canal ao vivo no momento. O monitoramento continua automaticamente.")
+                "No live channels confirmed right now. The monitor will keep checking.",
+                "Nenhum canal ao vivo confirmado no momento. O monitor continuará verificando.")
         }).size(11.0).color(MUTED));
     }
     for channel in channel_list.iter().filter(|channel| channel.live != Some(false)) {
@@ -648,8 +674,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.collapsing(format!("{} ({})",
         kick_label(br, "Additional channels", "Canais adicionais"), configured.len()), |ui| {
         ui.label(RichText::new(kick_label(br,
-            "Official live channels are added automatically. Add optional channels here.",
-            "Os canais oficiais ao vivo entram automaticamente. Adicione canais extras aqui."))
+            "Official channels come from PokéIdle when connected. Add optional Kick channels here.",
+            "Os canais oficiais vêm do PokéIdle quando conectado. Adicione canais extras da Kick aqui."))
             .size(11.0).color(MUTED));
         if !configured.is_empty() {
             ui.horizontal_wrapped(|ui| {
