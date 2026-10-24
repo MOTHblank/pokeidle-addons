@@ -4238,7 +4238,7 @@ fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, 
                 if let Some(error) = app.native_error[index].as_deref() {
                     ui.add_space(5.0);
                     ui.add(egui::Label::new(
-                        RichText::new(format!("{}: {}", tr("Connection error"), compact_text(error, 60)))
+                        RichText::new(format!("{}: {}", tr("Connection error"), compact_text(&tr_dynamic(localize_status(error.to_owned())), 60)))
                             .size(10.0).color(BAD)
                     ).truncate()).on_hover_text(error);
                 }
@@ -4939,7 +4939,7 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .size(10.0).color(DIM));
             });
             if let Some(error)=snapshot.native_automation.error.as_deref(){
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
             }
             ui.label(RichText::new(tr(
                 "Changes only take effect after PokéIdle confirms them."
@@ -5024,7 +5024,7 @@ fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
             if let Some(error) = restock.last_error.as_deref() {
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
             }
             ui.add_space(8.0);
             for rule in &restock.rules {
@@ -5746,7 +5746,7 @@ fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index
                 ui.colored_label(WARN, tr("Live game state is not confirmed; values below may be stale."));
             }
             if let Some(error) = status.error.as_deref() {
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
             }
             ui.add_space(9.0);
             ui.columns(3, |cols| {
@@ -7009,14 +7009,14 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                     state.joined, state.desired))).size(10.0).color(DIM));
             }
             if let Some(error) = &state.error {
-                ui.label(RichText::new(error).size(10.0).color(WARN));
+                ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
             }
         }
         if let Some(error) = app.native_error[index].as_deref() {
-            ui.label(RichText::new(error).size(10.0).color(WARN));
+            ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
         }
         if let Some(error) = setup.check_error.as_deref() {
-            ui.label(RichText::new(error).size(10.0).color(WARN));
+            ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
         }
 
         ui.add_space(7.0);
