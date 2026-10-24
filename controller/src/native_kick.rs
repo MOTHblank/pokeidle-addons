@@ -412,6 +412,7 @@ pub fn pokeidle_official_roster(state: &serde_json::Value) -> Option<Vec<Officia
 }
 
 /// Only official creators currently broadcasting should start Kick HLS streams.
+#[cfg(test)]
 pub fn pokeidle_live_officials(state: &serde_json::Value) -> Option<Vec<String>> {
     Some(pokeidle_official_roster(state)?.into_iter()
         .filter(|channel| channel.live).map(|channel| channel.slug).collect())
