@@ -105,7 +105,6 @@ pub struct Gameplay {
     ball_inventory_seen:bool,
     catalog:BTreeMap<u64,String>,
     priorities:Vec<String>,
-    reserves:BTreeMap<String,u64>,
     interval:Duration,
     restock_ball_id:u64, restock_enabled:bool,
     last_death_untracked:bool,
@@ -119,7 +118,6 @@ impl Gameplay {
             status:GameplayStatus { auto_catch:config.enabled, ..Default::default() },
             corpses:VecDeque::new(),balls:BTreeMap::new(),ball_inventory_seen:false,
             catalog:BTreeMap::new(),priorities:config.priorities,
-            reserves:config.reserves,
             interval:Duration::from_millis(config.interval_ms.max(MIN_THROW_INTERVAL_MS)),
             restock_ball_id:config.ball_id,restock_enabled:config.restock_enabled,
             last_death_untracked:false,last_throw:None,server_auto:serde_json::Map::new()
@@ -128,7 +126,6 @@ impl Gameplay {
     pub fn configure(&mut self, config:&CatchSettings) {
         self.status.auto_catch=config.enabled;
         self.priorities=config.priorities.clone();
-        self.reserves=config.reserves.clone();
         self.interval=Duration::from_millis(config.interval_ms.clamp(MIN_THROW_INTERVAL_MS,3000));
         self.restock_ball_id=config.ball_id;
         self.restock_enabled=config.restock_enabled;
@@ -152,11 +149,6 @@ impl Gameplay {
         self.corpses.retain(|c|
             now.saturating_duration_since(c.at)<CORPSE_LIFETIME);
         self.status.queue=self.corpses.len();
-    }
-    fn pending_for_ball(&self,id:u64)->u64 {
-        self.corpses.iter().filter(|corpse|
-            corpse.pending && corpse.unreflected &&
-            corpse.last_ball==Some(id)).count() as u64
     }
     fn pending_throws(&self)->usize {
         self.corpses.iter().filter(|corpse|corpse.pending).count()
@@ -185,18 +177,6 @@ impl Gameplay {
         self.ball_inventory_seen=true;
         self.refresh_readiness();
     }
-    fn available(&self,id:u64)->u64 {
-        let stock=self.balls.get(&id).copied().unwrap_or(0);
-        // The configured restock ball is replenishable. Don't subtract
-        // speculative local sends from its usable stock: an outdated
-        // reservation should never block low-stock Auto Catch. Still require
-        // a positive actual server stock and respect explicit ball reserves.
-        if self.restock_enabled && self.restock_ball_id==id {
-            stock
-        } else {
-            stock.saturating_sub(self.pending_for_ball(id))
-        }
-    }
     fn ball_matches(name:&str,priority:&str)->bool {
         name.contains(priority) || (priority=="poke" && name.contains("poké"))
     }
@@ -209,18 +189,6 @@ impl Gameplay {
             "ultra"=>Some(4),"beast"=>Some(5),
             _=>None
         }
-    }
-    fn ball_id_for_priority(&self,priority:&str,require_available:bool)->Option<u64> {
-        let known=Self::known_ball_id(priority)?;
-        let reserve=self.reserves.get(priority).copied().unwrap_or(0);
-        let allowed=|id:u64|self.catalog.get(&id)
-            .is_none_or(|name|!name.contains("master")) &&
-            (!require_available || self.available(id)>reserve);
-        self.catalog.iter()
-            .find(|(id,name)|Self::ball_matches(name,priority) && allowed(**id))
-            .map(|(id,_)|*id)
-            .or_else(||self.balls.contains_key(&known).then_some(known)
-                .filter(|id|allowed(*id)))
     }
     fn refresh_readiness(&mut self) {
         self.status.pending_results=self.pending_throws() as u64;

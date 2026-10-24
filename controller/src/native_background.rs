@@ -329,11 +329,6 @@ impl NativeSession {
             pokemon_xp_h,kills_h,calibrated)else{return false};
         self.forecast_tx.try_send(sample).is_ok()
     }
-    /// Lightweight per-account UI read: avoid cloning the entire snapshot each frame.
-    pub fn capture_status(&self)->GameplayStatus {
-        self.snapshot.lock()
-            .map(|state|state.native_capture_status.clone()).unwrap_or_default()
-    }
     pub fn capture_settings(&self)->CatchSettings {
         self.capture_config.lock().map(|g|g.clone()).unwrap_or_default()
     }
@@ -345,10 +340,6 @@ impl NativeSession {
         self.auto_catch.store(settings.enabled,Ordering::Relaxed);
         self.restock_enabled.store(settings.restock_enabled,Ordering::Relaxed);
         Ok(())
-    }
-    pub fn set_auto_catch(&self, enabled: bool) {
-        self.auto_catch.store(enabled, Ordering::Relaxed);
-        if let Ok(mut cfg)=self.capture_config.lock() {cfg.enabled=enabled;}
     }
     pub fn twitch_snapshot(&self) -> TwitchSnapshot {
         self.twitch.snapshot()
@@ -364,16 +355,6 @@ impl NativeSession {
             state.last_received.is_none_or(|at|at.elapsed()>Duration::from_secs(90)) ||
             state.kick_official_roster.is_none() {return None}
         Some((self.created_at,state.kick_roster_revision))
-    }
-    /// Cheap roster read for the Kick workspace. The native game snapshot
-    /// may contain much larger automation and market data.
-    pub fn official_kick_live(&self) -> Option<Vec<String>> {
-        let state = self.snapshot.lock().ok()?;
-        if state.phase != "Online" || state.last_received
-            .is_none_or(|at| at.elapsed() > Duration::from_secs(90)) {
-            return None;
-        }
-        state.kick_official_live.clone()
     }
     pub fn official_kick_roster(&self) -> Option<Vec<crate::native_kick::OfficialKickChannel>> {
         let state = self.snapshot.lock().ok()?;

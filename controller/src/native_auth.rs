@@ -147,30 +147,6 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
 }
 
 
-fn set_native_preference(profile: GameProfile, path: &[&str], enabled: bool)
-    -> Result<(), String> {
-    let _guard = PREFERENCE_WRITE.lock()
-        .map_err(|_| "Native settings writer unavailable".to_owned())?;
-    let Some(mut saved) = load(profile)? else {
-        return Err("Native credential cache is unavailable".into());
-    };
-    if !saved.get("autocatch").is_some_and(Value::is_object) {
-        saved["autocatch"] = serde_json::json!({});
-    }
-    let mut target = &mut saved["autocatch"];
-    for key in path.iter().take(path.len().saturating_sub(1)) {
-        if !target.get(*key).is_some_and(Value::is_object) {
-            target[*key] = serde_json::json!({});
-        }
-        target = &mut target[*key];
-    }
-    let Some(key) = path.last() else {
-        return Err("Invalid native settings field".into());
-    };
-    target[*key] = Value::Bool(enabled);
-    save(profile, &saved)
-}
-
 /// Persist the complete validated capture configuration atomically, preserving
 /// the encrypted authenticated session and unrelated bootstrap fields.
 pub fn set_capture_settings(profile: GameProfile,
@@ -183,11 +159,6 @@ pub fn set_capture_settings(profile: GameProfile,
     };
     saved["autocatch"]=config.as_value();
     save(profile,&saved)
-}
-
-/// Native Auto Catch remains functional and configurable without the addon.
-pub fn set_catch_enabled(profile: GameProfile, enabled: bool) -> Result<(), String> {
-    set_native_preference(profile, &["enabled"], enabled)
 }
 
 #[cfg(windows)]

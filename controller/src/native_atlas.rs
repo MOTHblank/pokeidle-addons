@@ -15,17 +15,6 @@ pub struct ReferenceSpecies {
     pub types: Vec<String>,
     pub base: Vec<f64>,
     pub moves: Vec<ReferenceMove>,
-    pub drops: Vec<ReferenceDrop>,
-}
-#[derive(Clone, Debug)]
-pub struct ReferenceDrop {
-    pub item_id: Option<u64>,
-    /// Retained for compatibility with historical NPC loot fixture data.
-    pub item_name: Option<String>,
-    pub chance_pct: f64,
-    pub minimum: f64,
-    pub maximum: f64,
-    pub guide_price: f64,
 }
 #[derive(Clone, Debug)]
 pub struct ReferenceMove {
@@ -130,7 +119,6 @@ pub struct Forecast {
     pub gold_h: f64,
     /// Historical NPC field retained for compatibility; no NPC drops are modeled.
     pub combat_gold_h: f64,
-    pub npc_loot_gold_h: f64,
     pub trainer_xp_per_kill: f64,
     pub pokemon_xp_per_kill: f64,
     pub seconds_per_kill: f64,
@@ -271,7 +259,7 @@ pub fn merge_creature_catalog(reference:&mut Reference,data:&Value){
                     }
                 }
                 reference.species.insert(id,ReferenceSpecies{
-                    name:name.to_owned(),types,base,moves,drops:Vec::new(),
+                    name:name.to_owned(),types,base,moves,
                 });
             }
         }
@@ -375,7 +363,7 @@ fn merge_upstream_megas(reference:&mut Reference){
             power:600.0,cooldown:30_000.0,min_level:1,
         });
         reference.species.insert(id,ReferenceSpecies{
-            name:columns[2].to_owned(),types,base:stats,moves,drops:Vec::new(),
+            name:columns[2].to_owned(),types,base:stats,moves,
         });
     }
 }
@@ -447,7 +435,6 @@ pub fn estimate_with_aoe(
         pokemon_xp_h:base_xp(hunt.level)*kills_h*bonus(view,false),
         gold_h:combat_gold_h,
         combat_gold_h,
-        npc_loot_gold_h:0.0,
         trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
         pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
         seconds_per_kill:pace.seconds_per_kill,
@@ -579,7 +566,7 @@ mod tests {
             name:"Charizard".into(),
             types:vec!["FIRE".into(),"FLYING".into()],
             base:vec![78.0,84.0,78.0,109.0,85.0,100.0],
-            moves:Vec::new(),drops:Vec::new(),
+            moves:Vec::new(),
         });
         merge_upstream_megas(&mut reference);
         let mega=reference.species.get(&9006).unwrap();
@@ -597,7 +584,7 @@ mod tests {
         let mut reference=Reference::default();
         let base=ReferenceSpecies{
             name:"Base".into(),types:vec!["NORMAL".into()],
-            base:vec![100.0;6],moves:Vec::new(),drops:Vec::new(),
+            base:vec![100.0;6],moves:Vec::new(),
         };
         for id in [26,306,373,445,500,531,952] {
             reference.species.insert(id,base.clone());
@@ -717,8 +704,7 @@ mod tests {
             moves:vec![ReferenceMove{
                 move_type:"NORMAL".into(),special:false,
                 power:60.0,cooldown:1200.0,min_level:1
-            }],
-            drops:vec![]
+            }]
         };
         let mut data=Reference::default();
         data.chart.insert("NORMAL".into(),
@@ -756,7 +742,7 @@ mod tests {
         assert!((bonus(&boosted,true)-1.1).abs()<1e-10);
     }
     #[test]
-    fn forecast_economy_channels_sum_to_gross_gold_and_xp_stays_separate(){
+    fn forecast_gold_comes_only_from_combat_and_xp_stays_separate(){
         let mut view=HuntView::default();
         view.hunt_slug=Some("hunt-a".into());
         view.bonuses.trainer_event_pct=100.0;
@@ -781,15 +767,11 @@ mod tests {
                 moves:vec![ReferenceMove {
                     move_type:"NORMAL".into(),special:false,
                     power:60.0,cooldown:1200.0,min_level:1,
-                }],
-                drops:vec![ReferenceDrop{
-                    item_id:Some(20),item_name:None,chance_pct:10.0,
-                    minimum:1.0,maximum:2.0,guide_price:100.0,
-                }],
+                }]
             });
         }
         let result=estimate(&view,&hunt,&guide).unwrap();
-        assert!((result.gold_h-result.combat_gold_h-result.npc_loot_gold_h).abs()<0.001);
+        assert!((result.gold_h-result.combat_gold_h).abs()<0.001);
         assert!(result.trainer_xp_per_kill>result.pokemon_xp_per_kill);
     }
     #[test]

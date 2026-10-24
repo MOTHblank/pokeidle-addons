@@ -325,16 +325,6 @@ fn xp_bonus_summary(b:&native_hunts::HuntBonuses)->String {
         tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,1.1),
         known_boost(b.vip_active,b.vip_known,1.5))
 }
-fn bonuses_complete(view:&HuntView,ranking:HuntRanking)->bool {
-    if ranking==HuntRanking::Gold {return true;}
-    let b=&view.bonuses;
-    b.vip_known && b.guild_known && b.guild_boost_known && b.twitch_known &&
-        match ranking {
-            HuntRanking::TrainerXp=>b.trainer_event_known,
-            HuntRanking::PokemonXp=>b.pokemon_event_known,
-            HuntRanking::Gold=>true,
-        }
-}
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 enum AtlasAoeCue { NoLead, SingleTarget, Enabled }
 
@@ -678,7 +668,6 @@ impl AtlasHuntLabel {
 struct AtlasDestination {
     hunt:Arc<AtlasHuntLabel>,
     unlocked:bool,
-    share:f64,
     forecast:Option<native_atlas::Forecast>,
     objective:Option<f64>,
     mkt_value:Option<f64>,
@@ -1121,7 +1110,7 @@ fn atlas_species_rows(
                 id:spawn.id,name:name.to_owned(),types,owned,
                 destinations:Vec::new(),best:None,
             }).destinations.push(AtlasDestination{
-                hunt:Arc::clone(label),unlocked,share,forecast,objective,mkt_value,
+                hunt:Arc::clone(label),unlocked,forecast,objective,mkt_value,
             });
         }
     }
@@ -2905,11 +2894,7 @@ mod tests {
         guide.chart.insert("NORMAL".into(),Default::default());
         guide.species.insert(1,native_atlas::ReferenceSpecies{
             name:"Testmon".into(),types:vec!["NORMAL".into()],
-            base:vec![100.0;6],moves:vec![],
-            drops:vec![native_atlas::ReferenceDrop{
-                item_id:None,item_name:Some("Moon Stone".into()),
-                chance_pct:10.0,minimum:1.0,maximum:3.0,guide_price:5.0,
-            }],
+            base:vec![100.0;6],moves:vec![]
         });
         guide
     }
@@ -2959,7 +2944,7 @@ mod tests {
         let mut guide=AtlasReference::default();
         guide.species.insert(25,native_atlas::ReferenceSpecies{
             name:"Pikachu".into(),types:vec!["ELECTRIC".into()],
-            base:vec![10.0;6],moves:vec![],drops:vec![]
+            base:vec![10.0;6],moves:vec![]
         });
         let mut view=HuntView::default();
         assert!(atlas_types_for_active(&view,&guide).is_empty());
@@ -3098,7 +3083,7 @@ mod tests {
         ]{
             guide.species.insert(id,native_atlas::ReferenceSpecies{
                 name:name.into(),types:types.into_iter().map(str::to_owned).collect(),
-                base:vec![100.0;6],moves:vec![],drops:vec![],
+                base:vec![100.0;6],moves:vec![],
             });
         }
         let types_a=&guide.species[&1].types;
@@ -3161,7 +3146,7 @@ mod tests {
         };
         let forecast=native_atlas::Forecast {
             kills_h:100.0,trainer_xp_h:1000.0,pokemon_xp_h:900.0,
-            gold_h:80.0,combat_gold_h:80.0,npc_loot_gold_h:0.0,
+            gold_h:80.0,combat_gold_h:80.0,
             trainer_xp_per_kill:10.0,pokemon_xp_per_kill:9.0,
             seconds_per_kill:36.0,coverage:1.0,calibrated:false,
             deaths_h:0.0,one_hit:false,aoe:false,engaged:1.0,
@@ -3290,23 +3275,6 @@ mod tests {
         assert!(xp_bonus_summary(&b).contains(tr("Unknown")));
     }
 
-    #[test]
-    fn partial_bonus_data_downgrades_xp_forecast_confidence(){
-        let mut view=HuntView::default();
-        view.bonuses.trainer_event_pct=20.0;
-        assert!(!bonuses_complete(&view,HuntRanking::TrainerXp));
-        assert!(bonuses_complete(&view,HuntRanking::Gold));
-        view.server_now=Some(100);
-        view.bonuses.trainer_event_known=true;
-        view.bonuses.guild_known=true;
-        view.bonuses.guild_boost_known=true;
-        view.bonuses.twitch_known=true;
-        view.bonuses.vip_known=true;
-        assert!(bonuses_complete(&view,HuntRanking::TrainerXp));
-        view.server_now=None; // local clock is a supported fallback.
-        assert!(bonuses_complete(&view,HuntRanking::TrainerXp));
-        assert!(!bonuses_complete(&view,HuntRanking::PokemonXp));
-    }
 
     #[test]
     fn explorer_cache_skips_selection_only_redraws_but_not_new_filters() {
@@ -3343,7 +3311,7 @@ mod tests {
     fn simulated_forecast(kills:f64,aoe:bool)->native_atlas::Forecast {
         native_atlas::Forecast{
             kills_h:kills,trainer_xp_h:kills*10.0,pokemon_xp_h:kills*10.0,
-            gold_h:kills*5.0,combat_gold_h:kills*5.0,npc_loot_gold_h:0.0,
+            gold_h:kills*5.0,combat_gold_h:kills*5.0,
             trainer_xp_per_kill:10.0,pokemon_xp_per_kill:10.0,
             seconds_per_kill:5.0,coverage:1.0,calibrated:false,
             deaths_h:0.0,one_hit:false,aoe,engaged:if aoe {4.0}else{1.0},
