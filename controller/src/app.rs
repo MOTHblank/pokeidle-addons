@@ -207,9 +207,48 @@ fn localize_status(message: String) -> String {
     if !pt_br() {
         return message;
     }
+    localize_status_pt(message)
+}
 
+fn localize_status_pt(message: String) -> String {
     let mut value = message;
     for (en, pt) in [
+        ("Could not save capture settings: ", "Não foi possível salvar as configurações de captura: "),
+        ("native verification failed: ", "falha na verificação nativa: "),
+        ("; Firefox game restored or recovery reported", "; jogo restaurado no Firefox ou recuperação informada"),
+        ("Could not find the Firefox window used to sign in", "Não foi possível encontrar a janela do Firefox usada para login"),
+        (": sign-in canceled", ": login cancelado"),
+        (" · You may need to sign in next time: ", " · Talvez seja necessário entrar novamente: "),
+        (": PokéIdle and Twitch connected. Firefox closed", ": PokéIdle e Twitch conectados. Firefox fechado"),
+        (": connected, but Firefox could not close automatically: ", ": conectado, mas o Firefox não pôde fechar automaticamente: "),
+        (": PokéIdle and Twitch connected with your saved login", ": PokéIdle e Twitch conectados com o login salvo"),
+        (": please sign in to continue", ": faça login para continuar"),
+        (": saved login unavailable: ", ": login salvo indisponível: "),
+        ("Connection interrupted because the Firefox session changed", "Conexão interrompida porque a sessão do Firefox mudou"),
+        ("Could not connect to the game: ", "Não foi possível conectar ao jogo: "),
+        (": could not verify login: ", ": não foi possível verificar o login: "),
+        ("; game tab reopened", "; aba do jogo reaberta"),
+        ("; game tab recovery failed: ", "; falha ao recuperar a aba do jogo: "),
+        (": login expired, opening Firefox to sign in again", ": login expirado, abrindo o Firefox para entrar novamente"),
+        ("Open Firefox and sign in to PokéIdle first", "Abra o Firefox e entre no PokéIdle primeiro"),
+        (": signing in to PokéIdle and Twitch", ": entrando no PokéIdle e na Twitch"),
+        ("Could not finish sign-in: ", "Não foi possível concluir o login: "),
+        ("Saved login could not be used: ", "Não foi possível usar o login salvo: "),
+        (": using your existing Firefox login to connect (process ", ": usando o login existente do Firefox para conectar (processo "),
+        (": Firefox started in ", ": Firefox iniciado em "),
+        (" for sign-in", " para login"),
+        (": Sign-in is still finishing. Open Firefox after it completes.", ": O login ainda está sendo concluído. Abra o Firefox depois."),
+        (": Firefox is already open.", ": O Firefox já está aberto."),
+        (": stopping sign-in", ": interrompendo o login"),
+        (": PokéIdle and Twitch stopped.", ": PokéIdle e Twitch parados."),
+        (" Firefox profile completely closed.", " perfil do Firefox completamente fechado."),
+        ("Starting enabled accounts. Firefox will open only if sign-in is needed.", "Iniciando contas habilitadas. O Firefox abrirá somente se for necessário fazer login."),
+        ("All accounts stopped. Firefox login windows were closed.", "Todas as contas paradas. As janelas de login do Firefox foram fechadas."),
+        (": Sign-in is still finishing. Try again after it completes.", ": O login ainda está sendo concluído. Tente novamente depois."),
+        ("Could not start the login check: ", "Não foi possível iniciar a verificação de login: "),
+        ("Login check failed unexpectedly. See the controller log.", "A verificação de login falhou inesperadamente. Consulte o log do controlador."),
+        ("Native cache verification panicked; see sanitized controller log", "Falha inesperada na verificação do login salvo; consulte o log do controlador"),
+        ("Market request rate-limited; backing off", "Limite de solicitações do mercado atingido; aguardando"),
         ("Ready · launch only the profiles you need", "Pronto · inicie apenas os perfis de que precisa"),
         ("Firefox was not found. Install Firefox or set MOTH_FIREFOX to its executable path.", "O Firefox não foi encontrado. Instale o Firefox ou defina MOTH_FIREFOX para o caminho do executável."),
         ("invalid page probe: ", "sondagem de página inválida: "),
@@ -288,6 +327,28 @@ fn localize_status(message: String) -> String {
         value = value.replace(en, pt);
     }
     value
+}
+
+
+#[cfg(test)]
+mod localized_status_tests {
+    use super::localize_status_pt;
+
+    #[test]
+    fn login_statuses_are_fully_translated() {
+        assert_eq!(localize_status_pt("Open Firefox and sign in to PokéIdle first".into()),
+            "Abra o Firefox e entre no PokéIdle primeiro");
+        assert_eq!(localize_status_pt("Conta 1: PokéIdle and Twitch stopped.".into()),
+            "Conta 1: PokéIdle e Twitch parados.");
+    }
+
+    #[test]
+    fn error_prefix_does_not_leave_partial_english() {
+        assert_eq!(localize_status_pt("Could not save capture settings: disk full".into()),
+            "Não foi possível salvar as configurações de captura: disk full");
+        assert_eq!(localize_status_pt("Connection interrupted because the Firefox session changed".into()),
+            "Conexão interrompida porque a sessão do Firefox mudou");
+    }
 }
 
 fn tr_dynamic(value: String) -> String {
@@ -4435,11 +4496,11 @@ fn draw_overview_matchup(
         });
     });
     let (state_label, color)=match combat {
-        OverviewCombatState::Active=>("Hunt active",GOOD),
+        OverviewCombatState::Active=>(tr("Hunt active"),GOOD),
         OverviewCombatState::Hunting=>(tr("Hunting"),GOOD),
         OverviewCombatState::Center=>(tr("At Pokémon Center"),WARN),
         OverviewCombatState::Waiting=>(tr("Waiting for combat"),WARN),
-        OverviewCombatState::Stalled=>("In hunt · no recent activity",WARN),
+        OverviewCombatState::Stalled=>(tr("In hunt · no recent activity"),WARN),
         OverviewCombatState::Offline=>(tr("No live connection"),DIM),
     };
     ui.horizontal_wrapped(|ui| {
@@ -5156,7 +5217,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
                     if restock.last_error.is_some() {WARN} else {DIM}
                 ));
                 if let Some(error)=restock.last_error.as_deref() {
-                    ui.label(RichText::new(error).size(10.0).color(WARN));
+                    ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
                 }
                 if game.native_capture_status.capture_resyncs>0 {
                     ui.label(RichText::new(format!(
@@ -5525,7 +5586,7 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
             ui.add(egui::DragValue::new(&mut cfg.gold_reserve).range(0..=u64::MAX));
         });
         if let Some(error)=restock_status.last_error.as_deref() {
-            ui.label(RichText::new(error).size(10.0).color(WARN));
+            ui.label(RichText::new(tr(error)).size(10.0).color(WARN));
         }
     });
     }
