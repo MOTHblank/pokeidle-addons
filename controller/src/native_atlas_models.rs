@@ -137,12 +137,6 @@ pub const SHINY_EGG_LEVELS:[u32;30]=[
     14350,16000,20000,21200,25000,27050,29450,32000,34650,43100,
     50000,58900,64000,69300,86150,100000,114800,123350,132200,160300
 ];
-pub fn unlocked_tier(tier:u8,trainer_level:Option<u32>)->Option<f64>{
-    if !(1..=8).contains(&tier){return None}
-    let level=trainer_level?;
-    if level<TIER_LEVELS[(tier-1) as usize]{return None}
-    Some(TIER_MULTIPLIERS[(tier-1) as usize])
-}
 pub fn shiny_egg_chance(level:u32,outland:bool)->f64{
     if outland {return 0.0}
     let steps=SHINY_EGG_LEVELS.iter().filter(|threshold|level>=**threshold).count();
@@ -189,23 +183,6 @@ pub fn rare_scenarios_with_gate(
         rare_row(RareKind{id:70017,name:"Shiny Egg Fragment",base:chance,craft:10},
             chance,kills_h,mods).into_iter().collect()
     }
-}
-/// Backward-compatible entry point for archived standalone forecasts.
-pub fn rare_scenarios(
-    outland:bool,hunt_level:u32,tier:u8,trainer_level:Option<u32>,
-    kills_h:f64,mods:&Modifiers
-)->Vec<RareForecast>{
-    let gate=if (1..=8).contains(&tier){
-        let index=(tier-1) as usize;
-        Some((TIER_LEVELS[index],TIER_MULTIPLIERS[index]))
-    }else{None};
-    rare_scenarios_with_gate(outland,hunt_level,gate,trainer_level,kills_h,mods)
-}
-/// Expected vendor proceeds are reference economics; player market proceeds
-/// require EXPLICIT user-supplied quote or verified completed-sale history.
-pub fn market_scenario(units_h:f64,quote:f64)->Option<f64>{
-    if !units_h.is_finite()||units_h<0.0||!quote.is_finite()||quote<=0.0{return None}
-    Some(units_h*quote)
 }
 /// Historical XP/h requires measured active durations. Values from old
 /// history files without a reliable time denominator remain None.
@@ -283,21 +260,16 @@ mod tests {
     }
     #[test] fn outland_tiers_egg_and_event_modifiers(){
         let m=Modifiers::default();
-        assert_eq!(unlocked_tier(8,Some(16000)),None);
-        assert_eq!(unlocked_tier(8,Some(25000)),None);
-        assert_eq!(unlocked_tier(8,Some(36000)),Some(8.0));
         assert_eq!(shiny_egg_chance(4999,false),0.0);
         assert_eq!(shiny_egg_chance(5000,false),375.0/10_000_000.0);
         assert_eq!(shiny_egg_chance(5000,true),0.0);
-        let base=rare_scenarios(true,200,1,Some(200),500.0,&m);
+        let base=rare_scenarios_with_gate(true,200,Some((150,1.0)),Some(200),500.0,&m);
         assert_eq!(base.len(),4);
         let mut boosted=m.clone();boosted.loot=2.0;
-        assert!(rare_scenarios(true,200,1,Some(200),500.0,&boosted)[0].units_h>base[0].units_h);
-        assert!(rare_scenarios(true,200,8,Some(200),500.0,&m).is_empty());
+        assert!(rare_scenarios_with_gate(true,200,Some((150,1.0)),Some(200),500.0,&boosted)[0].units_h>base[0].units_h);
+        assert!(rare_scenarios_with_gate(true,200,Some((36000,8.0)),Some(200),500.0,&m).is_empty());
     }
-    #[test] fn market_and_history_never_invent_data(){
-        assert_eq!(market_scenario(5.0,0.0),None);
-        assert_eq!(market_scenario(5.0,100.0),Some(500.0));
+    #[test] fn history_never_invents_rates(){
         assert_eq!(retrospective_rate(2000,0),None);
         assert_eq!(retrospective_rate(2000,3600),Some(2000.0));
         assert!((at_least_one(0.01,100.0).unwrap()-(1.0-0.99_f64.powf(100.0))).abs()<1e-12);
