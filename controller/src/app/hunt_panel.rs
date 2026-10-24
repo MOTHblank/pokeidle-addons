@@ -2992,11 +2992,11 @@ mod tests {
             best:Some(200.0),
             destinations:vec![
                 AtlasDestination{
-                    hunt:Arc::new(AtlasHuntLabel::from_hunt(&locked)),unlocked:false,share:0.7,
+                    hunt:Arc::new(AtlasHuntLabel::from_hunt(&locked)),unlocked:false,
                     forecast:None,objective:Some(200.0),mkt_value:None
                 },
                 AtlasDestination{
-                    hunt:Arc::new(AtlasHuntLabel::from_hunt(&accessible)),unlocked:true,share:0.3,
+                    hunt:Arc::new(AtlasHuntLabel::from_hunt(&accessible)),unlocked:true,
                     forecast:None,objective:Some(100.0),mkt_value:None
                 }
             ],
