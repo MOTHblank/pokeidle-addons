@@ -283,9 +283,11 @@ jobs:
             echo "::error::Master advanced after this build; refusing to publish a stale release."
             exit 1
           fi
-          # A missing tag can yield a JSON 404 body: extract only a real SHA.
-          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq '.object.sha // empty' 2>/dev/null || true)"
-          if [[ -n "$tag_sha" && "$tag_sha" != "$GITHUB_SHA" ]]; then
+          # A missing tag yields a JSON 404 body from gh api, even with --jq.
+          # Parse the response with jq separately so errors never become a tag SHA.
+          tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>/dev/null || true)"
+          tag_sha="$(printf '%s' "$tag_json" | jq -r '.object.sha // empty' 2>/dev/null || true)"
+          if [[ "$tag_sha" =~ ^[0-9a-f]{40}$ && "$tag_sha" != "$GITHUB_SHA" ]]; then
             echo "Moving unpublished $tag from $tag_sha to $GITHUB_SHA"
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag" \
               -f sha="$GITHUB_SHA" -F force=true >/dev/null
