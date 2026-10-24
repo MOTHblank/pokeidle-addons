@@ -631,13 +631,19 @@ mod tests {
             include_str!("kick_panel.rs"),
         ] {
             let mut remainder = source;
-            while let Some((_, after)) = remainder.split_once("tr(") {
+            while let Some(index) = remainder.find("tr(") {
+                // Ignore suffixes of identifiers such as push_str(...).
+                let identifier_suffix = remainder[..index].chars().last()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                let after = &remainder[index + 3..];
                 let trimmed = after.trim_start();
-                if let Some(quoted) = trimmed.strip_prefix('"') {
-                    if let Some((key, _)) = quoted.split_once('"') {
-                        let lookup = format!(r#""{key}" =>"#);
-                        assert!(inline.contains(&lookup) || additional.contains(&lookup),
-                            "missing pt-BR dictionary entry for {key}");
+                if !identifier_suffix {
+                    if let Some(quoted) = trimmed.strip_prefix('"') {
+                        if let Some((key, _)) = quoted.split_once('"') {
+                            let lookup = format!(r#""{key}" =>"#);
+                            assert!(inline.contains(&lookup) || additional.contains(&lookup),
+                                "missing pt-BR dictionary entry for {key}");
+                        }
                     }
                 }
                 remainder = after;
