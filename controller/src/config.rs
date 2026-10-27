@@ -21,7 +21,7 @@ fn parse_kick_stream_preferences(value: &Value) -> [KickStreamPreferences; 4] {
             let Some(slot) = entry.get("slot").and_then(Value::as_u64)
                 .and_then(|n| usize::try_from(n).ok()).filter(|n| *n < 4) else { continue; };
             if let Some(limit) = entry.get("max_streams").and_then(Value::as_u64)
-                .and_then(|n| usize::try_from(n).ok()).filter(|n| (1..=12).contains(n)) {
+                .and_then(|n| usize::try_from(n).ok()).filter(|n| *n <= 12) {
                 result[slot].max_streams = limit;
             }
             if let Some(favorites) = entry.get("favorites").and_then(Value::as_array) {
@@ -221,8 +221,8 @@ impl Config {
             if !raw.trim().is_empty() {
                 crate::native_kick::normalize_channels(raw)?;
             }
-            if !(1..=12).contains(&pref.max_streams) {
-                return Err("Kick simultaneous-stream limit must be 1–12".into());
+            if pref.max_streams > 12 {
+                return Err("Kick simultaneous-stream limit must be 0–12".into());
             }
             if pref.favorites.len() > 128 {
                 return Err("Too many favorite Kick channels".into());
@@ -605,7 +605,7 @@ mod kick_stream_preferences_tests {
     fn favorites_are_normalized_deduplicated_and_isolated_by_account() {
         let saved = json!({"accounts": [
             {"slot": 0, "max_streams": 3, "favorites": ["Fav_One", "fav_one", "https://kick.com/Two"]},
-            {"slot": 1, "max_streams": 0, "favorites": ["other"]},
+            {"slot": 1, "max_streams": 99, "favorites": ["other"]},
             {"slot": 4, "max_streams": 1, "favorites": ["ignored"]}
         ]});
         let loaded = parse_kick_stream_preferences(&saved);
@@ -614,5 +614,8 @@ mod kick_stream_preferences_tests {
         assert_eq!(loaded[1].max_streams, 12);
         assert_eq!(loaded[1].favorites, vec!["other"]);
         assert_eq!(loaded[2], KickStreamPreferences::default());
+        let disabled = parse_kick_stream_preferences(
+            &json!({"accounts": [{"slot": 0, "max_streams": 0}]}));
+        assert_eq!(disabled[0].max_streams, 0);
     }
 }
