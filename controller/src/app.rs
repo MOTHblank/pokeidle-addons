@@ -2917,10 +2917,25 @@ impl ControllerApp {
     }
 
     fn launch_enabled(&mut self) {
-        for profile in GameProfile::ALL {
-            if self.account_enabled(profile) {
-                self.launch_one(profile);
-            }
+        let enabled: Vec<GameProfile> = GameProfile::ALL.into_iter()
+            .filter(|profile| self.account_enabled(*profile)).collect();
+        let disabled: Vec<&str> = GameProfile::ALL.into_iter()
+            .filter(|profile| !self.account_enabled(*profile))
+            .map(GameProfile::label).collect();
+        logging::info(&format!(
+            "Launch enabled requested for {} accounts; disabled profiles skipped: {}",
+            enabled.len(),
+            if disabled.is_empty() { "none".to_string() } else { disabled.join(", ") }
+        ));
+        if enabled.is_empty() {
+            self.set_status(
+                "No accounts enabled. Enable a profile in Account Manager before launching.",
+                true,
+            );
+            return;
+        }
+        for profile in enabled {
+            self.launch_one(profile);
         }
         // Keep any launch error visible rather than overwriting it with a
         // success-shaped summary when a profile is already in use.
@@ -7030,10 +7045,18 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         ui.horizontal_wrapped(|ui| {
             if running {
                 if ui.small_button(tr("Stop")).clicked() { app.stop_one(profile); }
-            } else if ui.add_enabled(enabled,
-                egui::Button::new(tr("Start account"))).clicked()
-            {
-                app.launch_one(profile);
+            } else if enabled {
+                if ui.small_button(tr("Start account")).clicked() {
+                    app.launch_one(profile);
+                }
+            } else if ui.small_button(if pt_br() { "Habilitar e iniciar" }
+                                      else { "Enable and start" }).clicked() {
+                // Game 3/4 are opt-in by default. An explicit Start action
+                // should not silently do nothing while the slot is disabled.
+                app.accounts[index].enabled = true;
+                if app.save_account_config() {
+                    app.launch_one(profile);
+                }
             }
         });
 
