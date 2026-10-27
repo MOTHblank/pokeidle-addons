@@ -12,6 +12,19 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "No available hunts." => "Nenhuma hunt disponível.",
         "Combat estimate unavailable for current Pokémon." => "Estimativa de combate indisponível para o Pokémon atual.",
         "Travel to the Pokémon Center" => "Ir ao Centro Pokémon",
+        "Wait for a safe combat opening, then travel to the Pokémon Center without giving up." =>
+            "Aguarda uma abertura segura no combate para ir ao Centro Pokémon sem desistir.",
+        "Giving up KOs your Pokémon and may cause XP loss. This action cannot be undone." =>
+            "Desistir nocauteia seu Pokémon e pode causar perda de XP. Esta ação não pode ser desfeita.",
+        "Confirm Give Up and go to Pokémon Center" =>
+            "Confirmar desistência e ir ao Centro Pokémon",
+        "Manual emergency exit only. KOs your Pokémon and may cause XP loss." =>
+            "Saída de emergência manual. Nocauteia seu Pokémon e pode causar perda de XP.",
+        "Waiting for a safe opening to reach the Pokémon Center…" =>
+            "Aguardando uma abertura segura para chegar ao Centro Pokémon…",
+        "Pokémon Center pending" => "Ida ao Centro Pokémon pendente",
+        "Combat keeps blocking travel. This opponent may be too strong to leave without giving up. Keep waiting for an opening, or choose Pokémon Center (Give Up) manually. Give Up KOs your Pokémon and may cost XP." =>
+            "O combate continua impedindo a viagem. Este adversário pode ser forte demais para sair sem desistir. Aguarde uma abertura ou escolha Centro Pokémon (Desistir) manualmente. Desistir nocauteia seu Pokémon e pode causar perda de XP.",
         "No confirmed hunt to return to" => "Nenhuma hunt confirmada para retornar",
         "COMBAT PROFILE" => "PERFIL DE COMBATE",
         "● Measured spawn geometry" => "● Geometria de spawns medida",

@@ -207,6 +207,8 @@ pub struct HuntView {
     /// cleared between kills or tied to the current wild target.
     pub hunt_art_species: Option<u64>,
     pub pending_hunt_slug: Option<String>,
+    pub pending_center: bool,
+    pub navigation_warning: Option<String>,
     pub in_center: bool,
     pub active_pokemon: Option<PokemonInfo>,
     pub pokemon_count: usize,
@@ -423,9 +425,18 @@ impl HuntIntel {
             return Err("Hunt not present in authoritative account catalog".into());
         }
         self.view.pending_hunt_slug = Some(slug.to_owned());
+        self.view.pending_center = false;
+        self.view.navigation_warning = None;
         self.pending_at = None;
         self.view.last_error = None;
         Ok(())
+    }
+    pub fn queue_center(&mut self) {
+        self.view.pending_hunt_slug = None;
+        self.view.pending_center = true;
+        self.view.navigation_warning = None;
+        self.pending_at = None;
+        self.view.last_error = None;
     }
     pub fn request_hunt(&mut self, slug: &str, now: Instant) -> Result<(), String> {
         self.queue_hunt(slug)?;
@@ -434,6 +445,8 @@ impl HuntIntel {
     }
     pub fn cancel_hunt_intent(&mut self) {
         self.view.pending_hunt_slug = None;
+        self.view.pending_center = false;
+        self.view.navigation_warning = None;
         self.pending_at = None;
     }
     /// Only call after an explicit server sale receipt for this Pokémon.
@@ -460,6 +473,8 @@ impl HuntIntel {
         self.view.outland_catalog=None;
         self.view.outland_tier_error=None;
         self.view.pending_hunt_slug = None;
+        self.view.pending_center = false;
+        self.view.navigation_warning = None;
         self.pending_at = None;
         self.samples.clear();
         self.battle_samples.clear();
@@ -823,7 +838,10 @@ impl HuntIntel {
         }
         if let Some(center) = state.get("noCentro").and_then(Value::as_bool) {
             self.view.in_center = center;
-            if center { self.view.wild = None; }
+            if center {
+                self.view.wild = None;
+                self.view.pending_center = false;
+            }
         }
         if let Some(pokemons) = state.get("pokemons").and_then(Value::as_array) {
             self.view.roster_ready = true;
@@ -1056,6 +1074,7 @@ impl HuntIntel {
                             },
                             Some("centro") => {
                                 self.view.in_center = true;
+                                self.view.pending_center = false;
                                 self.view.wild = None;
                             },
                             Some("morte") if e.get("quem").and_then(Value::as_str) == Some("selvagem") => {

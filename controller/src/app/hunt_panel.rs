@@ -468,19 +468,34 @@ fn draw_atlas_navigation_actions(
     ui:&mut egui::Ui,view:&HuntView,native:&NativeSession,
     live:bool,error:&mut Option<String>,
 ){
-    ui.horizontal(|ui|{
-        if ui.add_enabled(live && !view.in_center,
+    ui.horizontal_wrapped(|ui|{
+        if ui.add_enabled(live && !view.in_center && !view.pending_center,
             egui::Button::new(tr("Pokémon Center"))
-        ).on_hover_text(tr("Travel to the Pokémon Center"))
+        ).on_hover_text(tr("Wait for a safe combat opening, then travel to the Pokémon Center without giving up."))
             .clicked(){
             match native.send_command(GameCommand::Center){
                 Ok(())=>*error=None,
                 Err(message)=>*error=Some(message),
             }
         }
+        ui.add_enabled_ui(live && !view.in_center,|ui|{
+            ui.menu_button(tr("Pokémon Center (Give Up)"),|ui|{
+                ui.label(RichText::new(tr(
+                    "Giving up KOs your Pokémon and may cause XP loss. This action cannot be undone."
+                )).color(WARN));
+                if ui.button(tr("Confirm Give Up and go to Pokémon Center")).clicked(){
+                    match native.send_command(GameCommand::GiveUp){
+                        Ok(())=>*error=None,
+                        Err(message)=>*error=Some(message),
+                    }
+                    ui.close();
+                }
+            }).response.on_hover_text(tr(
+                "Manual emergency exit only. KOs your Pokémon and may cause XP loss."
+            ));
+        });
         let return_slug=atlas_return_hunt_slug(view);
-        if ui.add_enabled(live && return_slug.is_some() &&
-            view.pending_hunt_slug.is_none(),
+        if ui.add_enabled(live && return_slug.is_some(),
             egui::Button::new(tr("Return to hunt"))
         ).on_hover_text(return_slug.unwrap_or(tr("No confirmed hunt to return to")))
             .clicked(){
@@ -2239,6 +2254,13 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     if let Some(error)=view.last_error.as_deref(){
         ui.label(RichText::new(tr_dynamic(format!("Hunt switch: {error}"))).color(WARN));
     }
+    if let Some(warning)=view.navigation_warning.as_deref(){
+        ui.label(RichText::new(tr(warning)).color(WARN));
+    }
+    if view.pending_center {
+        ui.label(RichText::new(tr("Waiting for a safe opening to reach the Pokémon Center…"))
+            .color(WARN).size(11.0));
+    }
     if let Some(error)=app.hunt_action_error[index].clone(){
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(tr_dynamic(format!("Command: {error}"))).color(BAD));
@@ -2390,6 +2412,9 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 }
                                 if let Some(slug)=hunts.pending_hunt_slug.as_deref(){
                                     ui.colored_label(WARN,tr_dynamic(format!("Switch pending: {slug}")));
+                                }
+                                if hunts.pending_center {
+                                    ui.colored_label(WARN,tr("Pokémon Center pending"));
                                 }
                                 if hunts.in_center{
                                     ui.colored_label(WARN,tr("At Pokémon Center"));

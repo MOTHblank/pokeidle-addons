@@ -682,9 +682,23 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             continue;
                         }
                         if matches!(command, GameCommand::Center) {
-                            // A deliberate Center click overrides pending hunt travel.
+                            // Normal Center uses the same timed gate as a hunt
+                            // change, without ever forcing a surrender.
+                            if hunt_intel.view.in_center {
+                                navigator.cancel();
+                                hunt_intel.cancel_hunt_intent();
+                            } else {
+                                hunt_intel.queue_center();
+                                navigator.center(Instant::now());
+                            }
+                            continue;
+                        }
+                        if matches!(command, GameCommand::GiveUp) {
+                            // Explicit, player-confirmed action only. Never
+                            // resume a queued destination after surrender.
                             navigator.cancel();
                             hunt_intel.cancel_hunt_intent();
+                            if hunt_intel.view.in_center { continue; }
                         }
                         let payload = command.wire().to_string();
                         if let GameCommand::OutlandTier(tier)=&command{
@@ -739,6 +753,12 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
+                    // Give Up is NEVER issued by navigation; prolonged combat
+                    // only produces a visible warning while safe retries continue.
+                    hunt_intel.view.pending_center = navigator.center_pending();
+                    hunt_intel.view.navigation_warning =
+                        navigator.blocked(&hunt_intel.view, Instant::now())
+                        .then(|| crate::native_hunt_navigation::BLOCKED_NOTICE.to_owned());
                     if pending_sale.as_ref().is_some_and(|(_,at)|
                         at.elapsed()>Duration::from_secs(20)) {
                         pending_sale=None;
@@ -934,6 +954,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                 }
                                 hunt_intel.ingest_value(&frame, received_at);
                                 navigator.observe(&frame, &hunt_intel.view, received_at);
+                                hunt_intel.view.pending_center = navigator.center_pending();
                                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                                 if let Some(auto)=frame.get("estado")
                                     .and_then(|state|state.get("automation")) {
