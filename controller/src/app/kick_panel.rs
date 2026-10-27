@@ -422,7 +422,9 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow,
                         .size(10.0).color(WARN));
                 }
                 open = ui.small_button("↗")
-                    .on_hover_text(kick_label(br, "Open channel", "Abrir canal"))
+                    .on_hover_text(kick_label(br,
+                        "Open channel in your default browser",
+                        "Abrir canal no navegador padrão"))
                     .clicked();
             });
             if let Some(error) = &channel.error {
@@ -697,8 +699,16 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         }
     });
     ui.label(RichText::new(kick_label(br,
-        "Star preferred streamers. Favorites fill slots in the order you star them; other live official channels fill the rest. Set 0 to stop streams.",
-        "Marque seus streamers favoritos. Eles ocupam vagas na ordem em que foram marcados; outros canais oficiais ao vivo ocupam o restante. Use 0 para parar as streams."))
+        "Recommended minimum: 2 simultaneous Kick streams. Set 0 to pause all streams.",
+        "Mínimo recomendado: 2 streams da Kick simultâneas. Use 0 para pausar todas as streams."))
+        .size(10.0).color(MUTED));
+    ui.label(RichText::new(kick_label(br,
+        "Star preferred streamers. Favorites fill slots in the order you star them; other live official channels fill the rest.",
+        "Marque seus streamers favoritos. Eles ocupam vagas na ordem em que foram marcados; outros canais oficiais ao vivo ocupam o restante."))
+        .size(10.0).color(MUTED));
+    ui.label(RichText::new(kick_label(br,
+        "The ↗ Open channel button tries to open Kick in your system's default browser. Kick often rejects connections from browsers used by the app.",
+        "O botão ↗ Abrir canal tenta abrir a Kick no navegador padrão do sistema. A Kick frequentemente rejeita conexões pelos navegadores usados pelo aplicativo."))
         .size(10.0).color(MUTED));
     ui.add_space(6.0);
 
