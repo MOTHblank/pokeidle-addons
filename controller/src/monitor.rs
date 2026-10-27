@@ -617,12 +617,17 @@ impl MonitorIssueReporter {
 // does NOT mean that the current session has ended: abandoning its socket
 // can permanently exhaust Firefox's only session slot (Mozilla bug 1739363).
 // Only a confirmed transport close warrants creating a new session.
+// OS-generated I/O errors can be localized (e.g. Windows in Portuguese), so
+// match stable socket error codes as well as English protocol descriptions.
 fn session_connection_is_closed(error: &str) -> bool {
     let message = error.to_ascii_lowercase();
     [
         "connection closed", "connection reset", "connection aborted",
         "broken pipe", "already closed", "unexpected eof",
         "websocket protocol error",
+        "os error 10053", // WSAECONNABORTED
+        "os error 10054", // WSAECONNRESET
+        "os error 10058", // WSAESHUTDOWN
     ].iter().any(|marker| message.contains(marker))
 }
 
@@ -730,8 +735,28 @@ fn monitor_loop(
             let result = session.as_mut().ok_or_else(||
                 "Firefox BiDi session is not connected".to_owned()
             ).and_then(read_native_bootstrap);
+            // The login capture can encounter a dead transport before the
+            // next scheduled page probe. Do not keep retrying commands through
+            // a broken socket just because the error text was localized.
+            let disconnected = result.as_ref().err()
+                .filter(|error| session_connection_is_closed(error))
+                .cloned();
             // Do not log bootstrap content: it may contain authentication secrets.
             let _ = reply.send(result);
+            if let Some(error) = disconnected {
+                issues.report(format!(
+                    "BiDi connection lost during login capture on port {port}: {error}"
+                ));
+                if let Ok(mut current) = health.lock() {
+                    current.state = "Reconnecting".to_string();
+                    current.last_error = Some(error);
+                    current.game_ready = false;
+                    current.logged_in = false;
+                }
+                // This TCP connection is already closed: a graceful session.end
+                // cannot be acknowledged and produces only a misleading warning.
+                session = None;
+            }
         }
         let game_reply = game_close_request.lock().ok().and_then(|mut pending| pending.take());
         if let Some(reply) = game_reply {
@@ -930,7 +955,9 @@ fn monitor_loop(
                         // it after a transient read timeout, a navigation, or
                         // an absent game tab strands that session in Firefox.
                         if closed {
-                            end_session(&mut session);
+                            // The transport already failed; do not attempt
+                            // session.end through a disconnected socket.
+                            session = None;
                         } else {
                             // Navigation can invalidate a cached tab ID.
                             // Rediscover within this same Firefox BiDi session
@@ -2390,6 +2417,9 @@ mod command_tests {
             "Connection closed normally",
             "IO error: Connection reset by peer",
             "IO error: Broken pipe",
+            "IO error: Uma conexão estabelecida foi anulada pelo software no computador host. (os error 10053)",
+            "IO error: Uma conexão existente foi forçada a fechar pelo host remoto. (os error 10054)",
+            "IO error: Socket operation on non-socket (os error 10058)",
         ] {
             assert!(super::session_connection_is_closed(error), "{error}");
         }
