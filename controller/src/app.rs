@@ -6991,9 +6991,35 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         ui.horizontal(|ui| {
             ui.label(RichText::new(profile.label()).size(15.0).strong().color(TEXT));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let mut active = enabled;
-                if ui.checkbox(&mut active, tr("Enabled")).changed() {
-                    app.accounts[index].enabled = active;
+                // A regular checkbox blends into the dark account cards.
+                // Make the account's enabled state obvious and clickable.
+                let (label, fill, border, hint) = if enabled {
+                    (
+                        if pt_br() { "Habilitada" } else { "Enabled" },
+                        Color32::from_rgb(24, 108, 65),
+                        GOOD,
+                        if pt_br() { "Clique para desabilitar esta conta" }
+                        else { "Click to disable this account" },
+                    )
+                } else {
+                    (
+                        if pt_br() { "Habilitar" } else { "Enable" },
+                        Color32::from_rgb(144, 43, 52),
+                        BAD,
+                        if pt_br() { "Clique para habilitar esta conta" }
+                        else { "Click to enable this account" },
+                    )
+                };
+                if ui.add_sized(
+                    [118.0, 30.0],
+                    egui::Button::new(
+                        RichText::new(label).strong().size(12.0).color(Color32::WHITE)
+                    )
+                    .fill(fill)
+                    .stroke(Stroke::new(1.5, border))
+                    .corner_radius(7.0),
+                ).on_hover_text(hint).clicked() {
+                    app.accounts[index].enabled = !enabled;
                     changed = true;
                 }
             });
