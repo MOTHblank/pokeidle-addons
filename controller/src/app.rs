@@ -1,5 +1,5 @@
 use crate::accounts;
-use crate::config::{AccountConfig, Config, GameProfile, UiOptions};
+use crate::config::{AccountConfig, Config, GameProfile, KickStreamPreferences, UiOptions};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::native_kick::KickMonitor;
@@ -1813,6 +1813,7 @@ pub struct ControllerApp {
     kick_monitors: [Option<KickMonitor>; 4],
     kick_api_token_input: [String; 4],
     kick_channels_input: [String; 4],
+    kick_stream_preferences: [KickStreamPreferences; 4],
     // Live official channels are discovered from the native PokéIdle socket,
     // not copied into the user's saved manual preferences.
     kick_discovered_live: [Vec<String>; 4],
@@ -1954,6 +1955,11 @@ impl ControllerApp {
                 logging::warn(&error);
                 std::array::from_fn(|_| String::new())
             }),
+            kick_stream_preferences: Config::load_kick_stream_preferences()
+                .unwrap_or_else(|error| {
+                    logging::warn(&error);
+                    std::array::from_fn(|_| KickStreamPreferences::default())
+                }),
             kick_discovered_live: std::array::from_fn(|_| Vec::new()),
             kick_discovered_roster: std::array::from_fn(|_| None),
             kick_native_stamp: [None; 4],
