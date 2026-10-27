@@ -9,6 +9,7 @@ use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_gameplay::GameplayStatus;
 use crate::native_hunts::{HuntIntel, HuntView};
+use crate::native_hunt_navigation::HuntNavigator;
 use crate::native_history::{HistoryRecorder, HistorySnapshot, HistoryForecast};
 use crate::config::GameProfile;
 use crate::native_restock::{Restock, RestockStatus};
@@ -602,6 +603,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     restock.merge_item_metadata(catalog);
                 }
                 hunt_intel.ingest_value(&frame, received_at);
+                let mut navigator = HuntNavigator::default();
+                navigator.observe(&frame, &hunt_intel.view, received_at);
                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
@@ -664,21 +667,26 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                 continue;
                             }
                         }
-                        let payload = command.wire().to_string();
                         if let GameCommand::Hunt(slug) = &command {
-                            // A redundant hunt.select can restart server-side hunt tracking.
-                            // Do not reselect an active hunt just to refresh the UI.
-                            // Leaving the center is different: that transition is intentional.
-                            if !hunt_intel.view.in_center
-                                && hunt_intel.view.hunt_slug.as_deref() == Some(slug.as_str())
-                            {
-                                continue;
-                            }
-                            if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
+                            // Store the intention. The navigator sends on the first
+                            // server-confirmed open gate and retries during that opening.
+                            if !hunt_intel.view.in_center &&
+                                hunt_intel.view.hunt_slug.as_deref() == Some(slug.as_str()) {
+                                navigator.cancel();
+                                hunt_intel.cancel_hunt_intent();
+                            } else if let Err(error) = hunt_intel.queue_hunt(slug) {
                                 crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
-                                continue;
+                            } else {
+                                navigator.select(slug.clone(), Instant::now());
                             }
+                            continue;
                         }
+                        if matches!(command, GameCommand::Center) {
+                            // A deliberate Center click overrides pending hunt travel.
+                            navigator.cancel();
+                            hunt_intel.cancel_hunt_intent();
+                        }
+                        let payload = command.wire().to_string();
                         if let GameCommand::OutlandTier(tier)=&command{
                             // Revalidate against the latest server-derived level,
                             // not an earlier UI snapshot or guessed game tier.
@@ -712,6 +720,25 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         }
                     }
                     if send_failed { break; }
+                    // 60 ms worker wake, rather than a one-shot select followed
+                    // by a 20-second timeout, catches narrow 3-second openings.
+                    if let Some(command) = navigator.next_action(&hunt_intel.view, Instant::now()) {
+                        let mut allowed = true;
+                        if let GameCommand::Hunt(slug) = &command {
+                            if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
+                                crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
+                                navigator.cancel();
+                                hunt_intel.cancel_hunt_intent();
+                                allowed = false;
+                            }
+                        }
+                        if allowed && socket.send(Message::Text(command.wire().to_string().into())).is_err() {
+                            if matches!(command, GameCommand::Hunt(_)) {
+                                hunt_intel.command_failed("Hunt selection transport failed");
+                            }
+                            break;
+                        }
+                    }
                     if pending_sale.as_ref().is_some_and(|(_,at)|
                         at.elapsed()>Duration::from_secs(20)) {
                         pending_sale=None;
@@ -906,6 +933,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     }
                                 }
                                 hunt_intel.ingest_value(&frame, received_at);
+                                navigator.observe(&frame, &hunt_intel.view, received_at);
                                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                                 if let Some(auto)=frame.get("estado")
                                     .and_then(|state|state.get("automation")) {

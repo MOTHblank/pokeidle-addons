@@ -601,8 +601,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Drops acquired" => "Drops obtidos",
         "Configure Auto Catch" => "Configurar captura automática",
         "Enable Auto Catch" => "Ativar captura automática",
-        "Preferred balls (in order; Master Balls excluded)" =>
-            "Bolas preferidas (em ordem; Master Balls excluídas)",
+        "Preferred balls (primary and fallback)" =>
+            "Bolas preferidas (principal e reserva)",
         "Primary" => "Principal",
         "Fallback" => "Reserva",
         "None" => "Nenhuma",
@@ -5667,7 +5667,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         ui.label(RichText::new(tr("Native interval: 0.6 s, with a bounded pending-throw window"))
             .size(10.0).color(DIM));
     });
-    ui.label(RichText::new(tr("Preferred balls (in order; Master Balls excluded)"))
+    ui.label(RichText::new(tr("Preferred balls (primary and fallback)"))
         .size(11.0).color(TEXT));
     let keys=["beast","ultra","super","great","poke"];
     let mut chosen=[

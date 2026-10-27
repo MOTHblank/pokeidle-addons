@@ -18,6 +18,7 @@ mod native_capture_config;
 mod native_items;
 mod native_visuals;
 mod native_hunts;
+mod native_hunt_navigation;
 mod native_history;
 mod native_automation;
 mod native_market;
