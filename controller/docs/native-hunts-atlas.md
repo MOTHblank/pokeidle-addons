@@ -35,10 +35,10 @@ The reference is lazy-loaded once per controller process, rather than polled; no
 ## Native.23 capture, Outland, economy and comparison models
 
 The **Capture · Outland · Economy** tab now provides per-account Ultra/Beast
-capture modeling from bounded public creature catalogs (sell-value-derived
-rarity) and authenticated ball efficiency and price quotes where present.
-Without the creature rarity catalog, a capture probability remains
-**unavailable**. Wiki fallback efficiencies are explicitly labeled.
+capture modeling from public creature evolutionary-stage metadata
+(20/40/100) and authenticated ball efficiency/price quotes where present.
+Ordinary-hunt catch probability does **not** depend on NPC value, region or
+hunt level; if the stage is unavailable, the rate remains **unavailable**. Wiki fallback efficiencies are explicitly labeled.
 Predicted captures and shiny catches use weighted spawn composition and the
 experimental lead kill rate. Default all-corpses-targeted assumptions are
 **upper bounds**; user-configured attempt fractions are optional.
