@@ -67,8 +67,9 @@ pub fn wiki_capture_chance(rarity:f64,efficiency:f64,hp_fraction:f64)->Option<f6
     Some((0.0075*efficiency/factor*(1.4-hp_fraction)).clamp(0.003,0.10))
 }
 /// v1.314.2: ordinary hunts use evolutionary-stage factors, not NPC value.
-/// Legendary / Mythical special encounters and missing stage data retain the
-/// old economic formula. Values are the canonical upstream shared constants.
+/// The legacy price-based path is available only for explicitly separate
+/// scenarios passing a rarity. Native ordinary-hunt callers pass no rarity,
+/// so missing stage data produce an unknown chance, not the retired odds.
 pub fn capture_chance_for_stage(stage:Option<u32>,rarity:Option<f64>,
     efficiency:f64,hp_fraction:f64)->Option<f64>{
     if !efficiency.is_finite()||efficiency<=0.0||
