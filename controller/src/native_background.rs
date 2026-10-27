@@ -671,7 +671,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             // Store the intention. The navigator sends on the first
                             // server-confirmed open gate and retries during that opening.
                             if !hunt_intel.view.in_center &&
-                                hunt_intel.view.hunt_slug.as_deref() == Some(slug) {
+                                hunt_intel.view.hunt_slug.as_deref() == Some(slug.as_str()) {
                                 navigator.cancel();
                                 hunt_intel.cancel_hunt_intent();
                             } else if let Err(error) = hunt_intel.queue_hunt(slug) {
