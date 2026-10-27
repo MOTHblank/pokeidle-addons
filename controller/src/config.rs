@@ -2,6 +2,43 @@ use std::env;
 use std::path::PathBuf;
 use serde_json::{json, Value};
 
+/// Saved per-account Kick stream choices. Defaults retain the prior 12-stream behavior.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KickStreamPreferences {
+    pub max_streams: usize,
+    pub favorites: Vec<String>,
+}
+impl Default for KickStreamPreferences {
+    fn default() -> Self {
+        Self { max_streams: 12, favorites: Vec::new() }
+    }
+}
+
+fn parse_kick_stream_preferences(value: &Value) -> [KickStreamPreferences; 4] {
+    let mut result = std::array::from_fn(|_| KickStreamPreferences::default());
+    if let Some(entries) = value.get("accounts").and_then(Value::as_array) {
+        for entry in entries {
+            let Some(slot) = entry.get("slot").and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok()).filter(|n| *n < 4) else { continue; };
+            if let Some(limit) = entry.get("max_streams").and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok()).filter(|n| (1..=12).contains(n)) {
+                result[slot].max_streams = limit;
+            }
+            if let Some(favorites) = entry.get("favorites").and_then(Value::as_array) {
+                for item in favorites.iter().take(128) {
+                    let Some(raw) = item.as_str() else { continue; };
+                    if let Ok(names) = crate::native_kick::normalize_channels(raw) {
+                        if names.len() == 1 && !result[slot].favorites.contains(&names[0]) {
+                            result[slot].favorites.push(names[0].clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameProfile {
     Game1,
@@ -163,11 +200,38 @@ impl Config {
         Ok(channels)
     }
 
-    pub fn save_kick_channels(channels: &[String; 4]) -> Result<(), String> {
-        for raw in channels {
+    pub fn load_kick_stream_preferences() -> Result<[KickStreamPreferences; 4], String> {
+        let path = Self::kick_channels_path()?;
+        if !path.exists() {
+            return Ok(std::array::from_fn(|_| KickStreamPreferences::default()));
+        }
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|_| "Could not read Kick stream preferences".to_owned())?;
+        let value: Value = serde_json::from_str(&raw)
+            .map_err(|_| "Invalid Kick stream preferences".to_owned())?;
+        Ok(parse_kick_stream_preferences(&value))
+    }
+
+    /// Persist manual channels, concurrent-stream limits and favorites together,
+    /// so changing any one setting never erases the other settings.
+    pub fn save_kick_channels(channels: &[String; 4],
+                              preferences: &[KickStreamPreferences; 4]) -> Result<(), String> {
+        for (raw, pref) in channels.iter().zip(preferences) {
             if raw.len() > 2048 { return Err("Kick channel list is too large".into()); }
             if !raw.trim().is_empty() {
                 crate::native_kick::normalize_channels(raw)?;
+            }
+            if !(1..=12).contains(&pref.max_streams) {
+                return Err("Kick simultaneous-stream limit must be 1–12".into());
+            }
+            if pref.favorites.len() > 128 {
+                return Err("Too many favorite Kick channels".into());
+            }
+            for name in &pref.favorites {
+                let found = crate::native_kick::normalize_channels(name)?;
+                if found.len() != 1 || found[0] != *name {
+                    return Err("Invalid favorite Kick channel".into());
+                }
             }
         }
         let path = Self::kick_channels_path()?;
@@ -176,10 +240,12 @@ impl Config {
                 .map_err(|_| "Could not prepare Kick channel settings".to_owned())?;
         }
         let value = json!({
-            "version": 1,
-            "accounts": channels.iter().enumerate().map(|(slot, channels)| json!({
-                "slot": slot, "channels": channels
-            })).collect::<Vec<_>>()
+            "version": 2,
+            "accounts": channels.iter().zip(preferences).enumerate()
+                .map(|(slot, (channels, pref))| json!({
+                    "slot": slot, "channels": channels,
+                    "max_streams": pref.max_streams, "favorites": pref.favorites
+                })).collect::<Vec<_>>()
         });
         let raw = serde_json::to_string_pretty(&value)
             .map_err(|_| "Could not serialize Kick channels".to_owned())?;
@@ -524,3 +590,29 @@ fn firefox_from_path(executables: &[&str]) -> Vec<PathBuf> {
 }
 
 
+
+#[cfg(test)]
+mod kick_stream_preferences_tests {
+    use super::*;
+    #[test]
+    fn old_settings_default_to_twelve_streams_and_no_favorites() {
+        let old = json!({"version": 1, "accounts": [{"slot": 0, "channels": "a, b"}]});
+        let loaded = parse_kick_stream_preferences(&old);
+        assert_eq!(loaded[0], KickStreamPreferences::default());
+        assert_eq!(loaded[3], KickStreamPreferences::default());
+    }
+    #[test]
+    fn favorites_are_normalized_deduplicated_and_isolated_by_account() {
+        let saved = json!({"accounts": [
+            {"slot": 0, "max_streams": 3, "favorites": ["Fav_One", "fav_one", "https://kick.com/Two"]},
+            {"slot": 1, "max_streams": 0, "favorites": ["other"]},
+            {"slot": 4, "max_streams": 1, "favorites": ["ignored"]}
+        ]});
+        let loaded = parse_kick_stream_preferences(&saved);
+        assert_eq!(loaded[0].max_streams, 3);
+        assert_eq!(loaded[0].favorites, vec!["fav_one", "two"]);
+        assert_eq!(loaded[1].max_streams, 12);
+        assert_eq!(loaded[1].favorites, vec!["other"]);
+        assert_eq!(loaded[2], KickStreamPreferences::default());
+    }
+}
