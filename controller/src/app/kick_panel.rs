@@ -15,19 +15,31 @@ fn stored_channel_list(app: &ControllerApp, index: usize) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The official live roster takes priority; saved manual channels fill
-/// remaining slots. Never permanently persist volatile game-server results.
-pub(super) fn desired_kick_channels(app: &ControllerApp, index: usize) -> Vec<String> {
-    let mut names = if app.kick_discovery_available[index] {
-        app.kick_discovered_live[index].clone()
-    } else { Vec::new() };
-    for manual in stored_channel_list(app, index) {
-        if !names.iter().any(|name| name == &manual) {
-            names.push(manual);
-        }
+/// Favorite order wins the limited viewer slots, followed by other official
+/// live channels, then manual channels. Offline official creators never occupy
+/// slots; the complete roster remains available in the Kick workspace.
+fn select_kick_streams(official_live: &[String], manual: &[String],
+                       prefs: &KickStreamPreferences) -> Vec<String> {
+    let mut names = Vec::<String>::new();
+    for slug in official_live.iter().chain(manual) {
+        if !names.contains(slug) { names.push(slug.clone()); }
     }
-    names.truncate(12);
+    // Stable ordering preserves the original official-first order among
+    // non-favorites. Favorites follow the order they were starred.
+    names.sort_by_key(|slug| {
+        let position = prefs.favorites.iter().position(|favorite| favorite == slug);
+        (position.is_none(), position.unwrap_or(usize::MAX))
+    });
+    names.truncate(prefs.max_streams.clamp(1, 12));
     names
+}
+
+pub(super) fn desired_kick_channels(app: &ControllerApp, index: usize) -> Vec<String> {
+    let official = if app.kick_discovery_available[index] {
+        app.kick_discovered_live[index].as_slice()
+    } else { &[] };
+    select_kick_streams(official, &stored_channel_list(app, index),
+        &app.kick_stream_preferences[index])
 }
 
 impl ControllerApp {
@@ -86,7 +98,7 @@ impl ControllerApp {
                 self.start_kick_account(index);
             }
             let desired=roster_changed.then(||desired_kick_channels(self,index));
-            let sync_offline=native_changed || monitor_missing;
+            let sync_offline=native_changed || roster_changed || monitor_missing;
             let remaining=if sync_offline && self.kick_monitors[index].is_some() {
                 self.kick_discovered_roster[index].as_ref()
                     .map(|roster|roster.iter().map(|c|c.slug.clone()).collect::<Vec<_>>())
@@ -107,9 +119,10 @@ impl ControllerApp {
     }
 
     fn persist_kick_channels(&mut self, index: usize) {
-        match Config::save_kick_channels(&self.kick_channels_input) {
+        match Config::save_kick_channels(&self.kick_channels_input,
+            &self.kick_stream_preferences) {
             Ok(()) => self.set_status(
-                kick_label(pt_br(), "Kick channels saved", "Canais Kick salvos"), false),
+                kick_label(pt_br(), "Kick preferences saved", "Preferências Kick salvas"), false),
             Err(error) => self.set_status(error, true),
         }
         // Channel preferences remain editable during automatic monitoring.
@@ -129,6 +142,19 @@ impl ControllerApp {
                 self.set_status(error, true);
             }
         }
+    }
+    fn toggle_kick_favorite(&mut self, index: usize, slug: &str) {
+        let favorites = &mut self.kick_stream_preferences[index].favorites;
+        if let Some(position) = favorites.iter().position(|name| name == slug) {
+            favorites.remove(position);
+        } else if favorites.len() < 128 {
+            favorites.push(slug.to_owned());
+        } else {
+            self.set_status(kick_label(pt_br(), "Too many favorite channels",
+                "Muitos canais favoritos"), true);
+            return;
+        }
+        self.persist_kick_channels(index);
     }
     fn add_kick_channel(&mut self, index: usize) {
         let proposed = match crate::native_kick::normalize_channels(&self.kick_channel_new[index]) {
@@ -159,6 +185,12 @@ impl ControllerApp {
         let mut found = stored_channel_list(self, index);
         found.retain(|slug| slug != channel);
         self.kick_channels_input[index] = found.join(", ");
+        // Keep a favorite if this channel is also an official creator.
+        let official = self.kick_discovered_roster[index].as_ref()
+            .is_some_and(|roster| roster.iter().any(|creator| creator.slug == channel));
+        if !official {
+            self.kick_stream_preferences[index].favorites.retain(|slug| slug != channel);
+        }
         self.persist_kick_channels(index);
     }
     fn start_kick_account(&mut self, index: usize) {
@@ -207,7 +239,8 @@ impl ControllerApp {
                 }
             }
         }
-        if let Err(reason) = Config::save_kick_channels(&self.kick_channels_input) {
+        if let Err(reason) = Config::save_kick_channels(&self.kick_channels_input,
+            &self.kick_stream_preferences) {
             error = true;
             message.push_str(" · ");
             message.push_str(&reason);
@@ -251,6 +284,7 @@ struct KickChannelRow {
 }
 fn channel_rows(
     selected: &[String],
+    manual: &[String],
     official: &[crate::native_kick::OfficialKickChannel],
     active: Option<&crate::native_kick::KickSnapshot>,
     offline_points: &std::collections::BTreeMap<String, crate::native_kick::OfflinePoints>,
@@ -263,7 +297,7 @@ fn channel_rows(
             details: None, error: None,
         });
     }
-    for slug in selected {
+    for slug in selected.iter().chain(manual) {
         merged.entry(slug.clone()).or_insert_with(|| KickChannelRow {
             slug: slug.clone(), live: None, points: None, checked_at: None,
             gained: None, official: false, details: None, error: None,
@@ -341,7 +375,8 @@ impl KickDisplayCache {
             view.saved_login!=saved_login)
     }
 }
-fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
+fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow,
+                     favorite: bool, selected: bool) -> (bool, bool) {
     let br = pt_br();
     let (state, state_color) = match channel.live {
         Some(true) => (kick_label(br, "● LIVE", "● AO VIVO"), GOOD),
@@ -353,13 +388,26 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
     let stale = channel.checked_at
         .is_some_and(|checked| checked.elapsed() > Duration::from_secs(300));
     let mut open = false;
+    let mut toggle_favorite = false;
     egui::Frame::new().fill(PANEL_ALT)
         .stroke(Stroke::new(1.0, BORDER))
         .corner_radius(7.0).inner_margin(egui::Margin::symmetric(10, 7))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
+                toggle_favorite = ui.small_button(if favorite { "★" } else { "☆" })
+                    .on_hover_text(kick_label(br,
+                        "Toggle preferred streamer (favorites fill slots first)",
+                        "Alternar streamer favorito (favoritos ocupam as vagas primeiro)"))
+                    .clicked();
                 ui.label(RichText::new(&channel.slug).size(12.0).strong().color(TEXT));
                 ui.label(RichText::new(state).size(10.0).color(state_color));
+                if selected {
+                    ui.label(RichText::new(kick_label(br, "Selected", "Selecionado"))
+                        .size(10.0).color(GOOD));
+                } else if channel.live != Some(false) {
+                    ui.label(RichText::new(kick_label(br, "Outside stream limit", "Fora do limite"))
+                        .size(10.0).color(MUTED));
+                }
                 ui.label(RichText::new(format!("{}: {points}",
                     kick_label(br, "Points", "Pontos")))
                     .size(11.0).color(if channel.points.is_some() { TEXT } else { MUTED }));
@@ -419,7 +467,7 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow) -> bool {
                 });
             }
         });
-    open
+    (open, toggle_favorite)
 }
 
 pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
@@ -467,7 +515,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }).collect());
         let offline_balances=app.kick_monitors[index].as_ref()
             .map(|session|session.offline_point_balances()).unwrap_or_default();
-        let channels=channel_rows(&desired,&official_roster,
+        let channels=channel_rows(&desired,&configured,&official_roster,
             monitor.as_ref(),&offline_balances);
         let online=if auto_available {
             desired.iter().filter(|slug|discovered.contains(slug)).count()
@@ -637,6 +685,19 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
     ui.label(RichText::new(kick_label(br, "Channels", "Canais"))
         .size(15.0).strong().color(TEXT));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(kick_label(br,
+            "Maximum simultaneous streams", "Máximo de streams simultâneas"))
+            .size(11.0).color(TEXT));
+        let limit = &mut app.kick_stream_preferences[index].max_streams;
+        if ui.add(egui::Slider::new(limit, 1..=12).show_value(true)).changed() {
+            app.persist_kick_channels(index);
+        }
+    });
+    ui.label(RichText::new(kick_label(br,
+        "Star preferred streamers. Favorites fill the available slots first, then other live official channels and additional channels.",
+        "Marque seus streamers favoritos com a estrela. Eles ocupam as vagas primeiro, seguidos pelos demais canais oficiais ao vivo e canais adicionais."))
+        .size(10.0).color(MUTED));
     ui.add_space(6.0);
 
     let active_count = channel_list.iter().filter(|channel|
@@ -662,7 +723,11 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         }).size(11.0).color(MUTED));
     }
     for channel in channel_list.iter().filter(|channel| channel.live != Some(false)) {
-        if kick_channel_line(ui, channel) {
+        let (open, favorite_clicked) = kick_channel_line(ui, channel,
+            app.kick_stream_preferences[index].favorites.contains(&channel.slug),
+            desired.contains(&channel.slug));
+        if favorite_clicked { app.toggle_kick_favorite(index, &channel.slug); }
+        if open {
             if let Err(error) = open_kick_channels_in_regular_browser(
                 &[channel.slug.clone()]) {
                 app.set_status(error, true);
@@ -674,7 +739,11 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.collapsing(format!("{} ({offline_count})",
             kick_label(br, "Offline channels", "Canais offline")), |ui| {
             for channel in channel_list.iter().filter(|channel| channel.live == Some(false)) {
-                if kick_channel_line(ui, channel) {
+                let (open, favorite_clicked) = kick_channel_line(ui, channel,
+                    app.kick_stream_preferences[index].favorites.contains(&channel.slug),
+                    desired.contains(&channel.slug));
+                if favorite_clicked { app.toggle_kick_favorite(index, &channel.slug); }
+                if open {
                     if let Err(error) = open_kick_channels_in_regular_browser(
                         &[channel.slug.clone()]) {
                         app.set_status(error, true);
@@ -715,11 +784,12 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
         });
         if discovered.len() + configured.iter()
-            .filter(|name| !discovered.contains(name)).count() > 12 {
+            .filter(|name| !discovered.contains(name)).count()
+            > app.kick_stream_preferences[index].max_streams {
             ui.label(RichText::new(kick_label(br,
-                "Only 12 channels can be watched at once; official live channels take priority.",
-                "No máximo 12 canais são assistidos por vez; os oficiais ao vivo têm prioridade."))
-                .size(10.0).color(WARN));
+                "More channels available than slots. Favorites take priority.",
+                "Há mais canais que vagas. Favoritos têm prioridade."))
+                .size(10.0).color(MUTED));
         }
     });
     });
@@ -760,7 +830,7 @@ mod channel_row_tests {
             OfficialKickChannel { slug: "live_two".into(), live: true },
         ];
         let chosen = vec!["live_two".into(), "manual_three".into()];
-        let rows = channel_rows(&chosen, &official, None, &Default::default());
+        let rows = channel_rows(&chosen, &[], &official, None, &Default::default());
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].slug, "live_two");
         assert_eq!(rows[0].live, Some(true));
@@ -784,9 +854,52 @@ mod channel_row_tests {
         balances.insert("two".into(), OfflinePoints {
             balance: Some(800), ..OfflinePoints::default()
         });
-        let rows = channel_rows(&[], &official, None, &balances);
+        let rows = channel_rows(&[], &[], &official, None, &balances);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].points, Some(125));
         assert_eq!(rows[1].points, Some(800));
+    }
+}
+
+#[cfg(test)]
+mod kick_stream_selection_tests {
+    use super::*;
+
+    #[test]
+    fn preferred_creators_fill_three_slots_before_others() {
+        let live = vec!["alpha".into(), "beta".into(), "gamma".into()];
+        let manual = vec!["extra".into(), "beta".into()];
+        let prefs = KickStreamPreferences {
+            max_streams: 3, favorites: vec!["extra".into(), "gamma".into()],
+        };
+        assert_eq!(select_kick_streams(&live, &manual, &prefs),
+            vec!["extra", "gamma", "alpha"]);
+    }
+    #[test]
+    fn offline_official_favorite_does_not_reserve_a_slot() {
+        let prefs = KickStreamPreferences {
+            max_streams: 1, favorites: vec!["offline".into()],
+        };
+        assert_eq!(select_kick_streams(&["live".into()], &[], &prefs),
+            vec!["live"]);
+    }
+    #[test]
+    fn favorite_order_is_stable_and_manual_channels_are_deduplicated() {
+        let prefs = KickStreamPreferences {
+            max_streams: 2, favorites: vec!["third".into(), "first".into()],
+        };
+        assert_eq!(select_kick_streams(
+            &["first".into(), "second".into(), "third".into()],
+            &["first".into(), "fourth".into()], &prefs),
+            vec!["third", "first"]);
+        let defaults = KickStreamPreferences::default();
+        assert_eq!(select_kick_streams(&["first".into()], &["first".into(), "other".into()],
+            &defaults), vec!["first", "other"]);
+    }
+    #[test]
+    fn limit_never_exceeds_twelve_even_for_invalid_in_memory_settings() {
+        let prefs = KickStreamPreferences { max_streams: 999, favorites: vec![] };
+        let live = (0..30).map(|n| format!("channel{n}")).collect::<Vec<_>>();
+        assert_eq!(select_kick_streams(&live, &[], &prefs).len(), 12);
     }
 }
