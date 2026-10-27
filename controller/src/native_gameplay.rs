@@ -11,6 +11,8 @@ pub enum GameCommand {
     /// Game-server Outland drop tier (independent of hunt location).
     OutlandTier(u8),
     Center,
+    GiveUp,
+    Heal,
     AutoSet(serde_json::Map<String, Value>),
     SetAutomation { field: String, value: Value },
     // Kept for the guarded Pokémon-sale command path and future UI controls.
@@ -25,6 +27,8 @@ impl GameCommand {
             Self::Hunt(slug) => json!({"t":"hunt.select","slug":slug}),
             Self::OutlandTier(tier) => json!({"t":"outland.tier","tier":tier}),
             Self::Center => json!({"t":"centro.ir"}),
+            Self::GiveUp => json!({"t":"centro.desistir"}),
+            Self::Heal => json!({"t":"centro.curar"}),
             Self::AutoSet(fields) => {
                 let mut fields=fields.clone();
                 fields.insert("t".into(),Value::String("auto.set".into()));
@@ -43,7 +47,7 @@ impl GameCommand {
             Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             Self::OutlandTier(tier) => (1..=8).contains(tier),
-            Self::Center => true,
+            Self::Center | Self::GiveUp | Self::Heal => true,
             Self::AutoSet(fields) => fields.len()<128 && !fields.contains_key("t"),
             Self::SetAutomation {field,value} =>
                 crate::native_automation::AutomationWriter::valid(field,value),

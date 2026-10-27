@@ -85,7 +85,7 @@ impl CatchSettings {
         }
         if self.priorities.len()>2 || self.priorities.iter().any(|p|!BALLS.contains(&p.as_str())) ||
             (self.priorities.len()==2 && self.priorities[0]==self.priorities[1]) {
-            return Err("Choose at most two different supported balls; Master Balls are not automated".into());
+            return Err("Choose at most two different supported balls".into());
         }
         if self.enabled && self.priorities.is_empty() {
             return Err("Select at least one Auto Catch ball before enabling".into());
