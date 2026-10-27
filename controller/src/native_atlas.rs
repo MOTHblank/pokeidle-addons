@@ -268,8 +268,8 @@ pub fn merge_creature_catalog(reference:&mut Reference,data:&Value){
 
 /// Apply the upstream teto-captura evolution-chain ladder after merging.
 /// 3 links: 20/40/100; 2 links: 40/100; singleton/Outland: 100.
-/// We require a public catalog identity; missing data keeps the older
-/// rarity model rather than asserting an invented evolutionary stage.
+/// We require a public catalog identity; unknown stages remain unavailable
+/// in ordinary-hunt capture previews rather than using retired price odds.
 pub fn finalize_capture_stages(reference:&mut Reference){
     let mut before:BTreeMap<u64,u32>=reference.capture_catalog_ids.iter()
         .map(|id|(*id,0)).collect();
