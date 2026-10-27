@@ -49,7 +49,7 @@ for an unknown recommendation. Trainer and Pokémon XP streams remain separate.
 | Disconnected/stale/loading/error | Implemented | Connection phase, last-packet age, read-only stale view, retries |
 | Resize and long tables | Implemented | Single main scroll, compact responsive rows, 35-result pages |
 | Forecast calculation cost | Improved | Off-frame 20-second per-account cache; invalidated on catalog/Pokémon/reference/connection change; live measurements bypass models |
-| Species-specific capture odds | Conditional model | Ultra/Beast from public creature rarity and authenticated efficiency when present; not server-verified catch outcomes |
+| Species-specific capture odds | Conditional model | Ultra/Beast from public creature evolutionary stages (20/40/100) and authenticated ball efficiency when present; unknown stages stay unknown |
 | Shiny capture / egg outcomes | Conditional model | Configurable lure/event/shiny/catch assumptions; generic Outland shiny capture remains unknown |
 | Rare loot/outland forecasts | Conditional model | 1–8 levels, multipliers, rare items and horizons; Bicycle server hook still unverified |
 | Market profit and farming economics | Partial | Guide loot, modeled combat, authenticated ball quotes, manual market scenarios; no completed-sale price feed |
@@ -103,10 +103,10 @@ full userscript parity.
 ## Native.23 capture, Outland, economy and comparison models
 
 The **Capture · Outland · Economy** tab now provides per-account Ultra/Beast
-capture modeling from bounded public creature catalogs (sell-value-derived
-rarity) and authenticated ball efficiency and price quotes where present.
-Without the creature rarity catalog, a capture probability remains
-**unavailable**. Wiki fallback efficiencies are explicitly labeled.
+capture modeling from public creature evolutionary-stage metadata
+(20/40/100) and authenticated ball efficiency/price quotes where present.
+Ordinary-hunt catch probability does **not** depend on NPC value, region or
+hunt level; if the stage is unavailable, the rate remains **unavailable**. Wiki fallback efficiencies are explicitly labeled.
 Predicted captures and shiny catches use weighted spawn composition and the
 experimental lead kill rate. Default all-corpses-targeted assumptions are
 **upper bounds**; user-configured attempt fractions are optional.
