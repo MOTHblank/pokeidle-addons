@@ -1061,6 +1061,7 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "O Firefox fecha depois do login. PokéIdle e Twitch continuam funcionando no aplicativo.",
         "Game actions" => "Ações do jogo",
         "Pokémon Center" => "Centro Pokémon",
+        "Pokémon Center (Give Up)" => "Centro Pokémon (Desistir)",
         "Return to hunt" => "Voltar à caça",
         "Enable" => "Ativar",
         "Disable" => "Desativar",
