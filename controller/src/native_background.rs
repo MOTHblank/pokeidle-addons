@@ -673,6 +673,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             if !hunt_intel.view.in_center &&
                                 hunt_intel.view.hunt_slug.as_deref() == Some(slug) {
                                 navigator.cancel();
+                                hunt_intel.cancel_hunt_intent();
+                            } else if let Err(error) = hunt_intel.queue_hunt(slug) {
+                                crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
                             } else {
                                 navigator.select(slug.clone(), Instant::now());
                             }
@@ -681,6 +684,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         if matches!(command, GameCommand::Center) {
                             // A deliberate Center click overrides pending hunt travel.
                             navigator.cancel();
+                            hunt_intel.cancel_hunt_intent();
                         }
                         let payload = command.wire().to_string();
                         if let GameCommand::OutlandTier(tier)=&command{
@@ -724,6 +728,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
                                 crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
                                 navigator.cancel();
+                                hunt_intel.cancel_hunt_intent();
                                 allowed = false;
                             }
                         }

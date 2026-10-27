@@ -416,13 +416,25 @@ impl HuntIntel {
             );
         }
     }
-    pub fn request_hunt(&mut self, slug: &str, now: Instant) -> Result<(), String> {
+    /// Queue intent immediately so the UI shows Switching while awaiting
+    /// the server's combat gate, without starting the send-confirmation timer.
+    pub fn queue_hunt(&mut self, slug: &str) -> Result<(), String> {
         if !self.view.catalog_ready || !self.view.hunts.iter().any(|h| h.slug == slug) {
             return Err("Hunt not present in authoritative account catalog".into());
         }
         self.view.pending_hunt_slug = Some(slug.to_owned());
+        self.pending_at = None;
+        self.view.last_error = None;
+        Ok(())
+    }
+    pub fn request_hunt(&mut self, slug: &str, now: Instant) -> Result<(), String> {
+        self.queue_hunt(slug)?;
         self.pending_at = Some(now);
         Ok(())
+    }
+    pub fn cancel_hunt_intent(&mut self) {
+        self.view.pending_hunt_slug = None;
+        self.pending_at = None;
     }
     /// Only call after an explicit server sale receipt for this Pokémon.
     /// The server's next full roster is still the final source of truth.

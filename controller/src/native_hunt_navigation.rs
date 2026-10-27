@@ -134,11 +134,11 @@ impl HuntNavigator {
     }
     pub fn next_action(&mut self, view: &HuntView, now: Instant) -> Option<GameCommand> {
         let target = self.target.as_ref()?;
-        if !view.catalog_ready || !view.hunts.iter().any(|hunt|hunt.slug == *target) {
+        if !view.catalog_ready || !view.hunts.iter().any(|hunt|hunt.slug == target.as_str()) {
             self.cancel();
             return None;
         }
-        if !view.in_center && view.hunt_slug.as_deref() == Some(target) {
+        if !view.in_center && view.hunt_slug.as_deref() == Some(target.as_str()) {
             self.cancel();
             return None;
         }
