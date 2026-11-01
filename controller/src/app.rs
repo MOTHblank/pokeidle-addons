@@ -1,4 +1,5 @@
 use crate::accounts;
+use crate::icon;
 use crate::config::{AccountConfig, Config, GameProfile, KickStreamPreferences, UiOptions};
 use crate::firefox;
 use crate::kick::KickStream;
@@ -1631,46 +1632,7 @@ fn restore_from_tray(ctx: &egui::Context, hidden: &AtomicBool) {
 #[cfg(windows)]
 fn make_tray_icon() -> Result<tray_icon::Icon, String> {
     const SIZE: u32 = 32;
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-
-    for y in 0..SIZE as i32 {
-        for x in 0..SIZE as i32 {
-            let dx = x - 16;
-            let dy = y - 16;
-            let in_badge = dx * dx + dy * dy <= 225;
-
-            let upper_left = ((x as f32 - 10.0) / 6.0).powi(2)
-                + ((y as f32 - 12.0) / 5.0).powi(2)
-                <= 1.0;
-            let upper_right = ((x as f32 - 22.0) / 6.0).powi(2)
-                + ((y as f32 - 12.0) / 5.0).powi(2)
-                <= 1.0;
-            let lower_left = ((x as f32 - 11.0) / 5.0).powi(2)
-                + ((y as f32 - 20.0) / 4.0).powi(2)
-                <= 1.0;
-            let lower_right = ((x as f32 - 21.0) / 5.0).powi(2)
-                + ((y as f32 - 20.0) / 4.0).powi(2)
-                <= 1.0;
-            let body = (15..=17).contains(&x) && (8..=24).contains(&y);
-
-            let color = if body {
-                [245, 242, 255, 255]
-            } else if upper_left || upper_right {
-                [123, 97, 255, 255]
-            } else if lower_left || lower_right {
-                [76, 160, 255, 255]
-            } else if in_badge {
-                [18, 21, 33, 255]
-            } else {
-                [0, 0, 0, 0]
-            };
-
-            let offset = ((y as u32 * SIZE + x as u32) * 4) as usize;
-            rgba[offset..offset + 4].copy_from_slice(&color);
-        }
-    }
-
-    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE)
+    tray_icon::Icon::from_rgba(icon::rgba(SIZE), SIZE, SIZE)
         .map_err(|error| format!("could not create tray icon image: {error}"))
 }
 
@@ -7333,6 +7295,12 @@ pub fn run() -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Moth · PokéIdle")
+            .with_app_id("moth-controller")
+            .with_icon(egui::IconData {
+                rgba: icon::rgba(icon::DEFAULT_ICON_SIZE),
+                width: icon::DEFAULT_ICON_SIZE,
+                height: icon::DEFAULT_ICON_SIZE,
+            })
             .with_inner_size([1120.0, 720.0])
             .with_min_inner_size([800.0, 560.0]),
         ..Default::default()
