@@ -2,6 +2,8 @@
 
 mod accounts;
 mod app;
+#[path = "../icon.rs"]
+mod icon;
 mod config;
 mod kick;
 mod native_kick;
