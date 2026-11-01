@@ -10,6 +10,8 @@ on:
     paths:
       - 'controller/Cargo.toml'
       - 'controller/Cargo.lock'
+      - 'controller/build.rs'
+      - 'controller/icon.rs'
       - 'controller/src/**'
       - '.github/release-notes/v*.md'
       # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
