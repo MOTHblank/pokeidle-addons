@@ -659,6 +659,15 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .color(if error == "Kick login cancelled" { MUTED } else { WARN }));
             }
             ui.collapsing(kick_label(br, "Advanced: enter token manually", "Avançado: informar token manualmente"), |ui| {
+                ui.label(RichText::new(kick_label(br,
+                    "While signed in at kick.com: press F12 → Network → reload the page → open a kick.com API request → Request Headers → Authorization: Bearer … → copy only the value after Bearer.",
+                    "Com a conta conectada em kick.com: pressione F12 → Rede → recarregue a página → abra uma requisição da API kick.com → Cabeçalhos da requisição → Authorization: Bearer … → copie apenas o valor depois de Bearer."))
+                    .size(10.0).color(MUTED));
+                ui.label(RichText::new(kick_label(br,
+                    "Keep this token private: it grants access to your Kick session.",
+                    "Mantenha este token privado: ele dá acesso à sua sessão da Kick."))
+                    .size(10.0).color(WARN));
+                ui.add_space(4.0);
                 ui.add(egui::TextEdit::singleline(&mut app.kick_api_token_input[index])
                     .password(true)
                     .hint_text(kick_label(br, "Kick Bearer token", "Token Bearer Kick"))
