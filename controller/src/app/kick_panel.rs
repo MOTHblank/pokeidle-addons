@@ -249,6 +249,12 @@ impl ControllerApp {
     }
     fn forget_kick_account(&mut self, index: usize) {
         let Some(profile) = GameProfile::from_index(index) else { return; };
+        // Clear the Firefox copy first. Leaving its session_token behind makes
+        // the next sign-in silently import the same expired credential again.
+        if let Err(error) = crate::native_kick_login::clear_browser_session(profile) {
+            self.set_status(error, true);
+            return;
+        }
         match native_auth::clear_kick_token(profile) {
             Ok(()) => {
                 // Explicit sign-out stops existing authenticated connections.
