@@ -17,6 +17,7 @@ const SQLITE_OK: c_int = 0;
 const SQLITE_ROW: c_int = 100;
 const SQLITE_DONE: c_int = 101;
 const SQLITE_OPEN_READONLY: c_int = 1;
+const SQLITE_OPEN_READWRITE: c_int = 2;
 
 // Windows can link against the built-in WinSQLite3 API. On Linux, resolve
 // the distro's versioned SQLite runtime at first use. This avoids requiring a
@@ -222,6 +223,47 @@ fn read_kick_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
             _ => return Err("Could not read Kick Firefox session cookie".into()),
         }
     }
+}
+
+
+fn clear_kick_cookie(profile_dir: &Path) -> Result<(), String> {
+    let path = profile_dir.join("cookies.sqlite");
+    if !path.is_file() { return Ok(()); }
+    let path = CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|_| "Invalid Kick Firefox profile path".to_owned())?;
+    let api = sqlite_api()?;
+    let mut raw = ptr::null_mut();
+    let rc = unsafe {
+        (api.open)(path.as_ptr(), &mut raw, SQLITE_OPEN_READWRITE, ptr::null())
+    };
+    if rc != SQLITE_OK {
+        if !raw.is_null() { unsafe { (api.close)(raw); } }
+        return Err("Could not open the Kick Firefox cookie database for sign-out".into());
+    }
+    let db = Database { raw, api };
+    let sql = c"DELETE FROM moz_cookies WHERE name = 'session_token'         AND host IN ('kick.com', '.kick.com', 'www.kick.com', '.www.kick.com')";
+    let mut stmt = ptr::null_mut();
+    if unsafe { (api.prepare)(db.raw, sql.as_ptr(), -1, &mut stmt, ptr::null_mut()) } != SQLITE_OK {
+        return Err("Kick Firefox cookies database has an unsupported schema".into());
+    }
+    let stmt = Statement { raw: stmt, api };
+    match unsafe { (api.step)(stmt.raw) } {
+        SQLITE_DONE => Ok(()),
+        _ => Err("Could not clear the Kick Firefox session cookie".into()),
+    }
+}
+
+/// "Forget login" must invalidate both copies of the credential. Otherwise
+/// the next Firefox sign-in immediately re-imports the same stale session
+/// cookie that was just removed from Moth's protected vault.
+pub fn clear_browser_session(profile: GameProfile) -> Result<(), String> {
+    let config = kick_config(profile)?;
+    if firefox::find_profile_process(&config)?.is_some() {
+        return Err(
+            "Close Firefox for this account before forgetting the Kick login.".into()
+        );
+    }
+    clear_kick_cookie(&config.profile_dir)
 }
 
 #[derive(Clone, Debug)]
