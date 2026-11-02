@@ -410,8 +410,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Saving Auto Catch settings" => "Salvando configurações de captura",
         "Capture diagnostics" => "Diagnóstico da captura",
         "Auto Catch · ball statistics" => "Captura automática · estatísticas por bola",
-        "Native capture receipt overdue; waiting without disconnecting" =>
-            "Resposta da captura atrasada; mantendo conexão com o jogo",
+        "Native capture receipt overdue; continuing throws without disconnecting" =>
+            "Resposta da captura atrasada; continuando os lançamentos sem desconectar",
         "Waiting for delayed capture results" => "Aguardando resultados de capturas atrasadas",
         "Waiting for authenticated game state" => "Aguardando estado autenticado do jogo",
         "Pokémon captured" => "Pokémon capturado",
