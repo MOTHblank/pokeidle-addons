@@ -523,6 +523,96 @@ mod tests {
         assert_eq!(g.status.retries,9);
     }
     #[test]
+    fn receipts_reconcile_each_sent_throw_without_stalling_spam() {
+        let now=Instant::now();
+        let mut g=Gameplay::new(Some(&json!({
+            "enabled":true,"ballPriority":["ultra"],"intervalMs":100
+        })));
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":10}}}"#,now);
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,now);
+        assert!(g.next_capture(now).is_some());
+        assert!(g.next_capture(now+Duration::from_millis(100)).is_some());
+        assert_eq!(g.status.pending_results,2);
+        assert_eq!(g.status.unreflected_throws,2);
+        // An idless result is attributable when one corpse has sent throws.
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":false}]}"#,
+            now+Duration::from_millis(120));
+        assert_eq!(g.status.failures,1);
+        assert_eq!(g.status.pending_results,1);
+        assert_eq!(g.status.unreflected_throws,1);
+        assert_eq!(g.balls.get(&4),Some(&9));
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":true}]}"#,
+            now+Duration::from_millis(200));
+        assert_eq!(g.status.catches,1);
+        assert_eq!(g.status.pending_results,0);
+        assert_eq!(g.status.unreflected_throws,0);
+        assert_eq!(g.balls.get(&4),Some(&8));
+    }
+    #[test]
+    fn inventory_delta_reconciles_one_actual_throw_not_one_corpse() {
+        let now=Instant::now();
+        let mut g=Gameplay::new(Some(&json!({
+            "enabled":true,"ballPriority":["ultra"],"intervalMs":100
+        })));
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":10}}}"#,now);
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,now);
+        g.next_capture(now).unwrap();
+        g.next_capture(now+Duration::from_millis(100)).unwrap();
+        g.ingest(r#"{"t":"estado","estado":{"balls":{"4":9}}}"#,now+Duration::from_millis(120));
+        assert_eq!(g.status.pending_results,2);
+        assert_eq!(g.status.unreflected_throws,1);
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":9,"ballId":4,"sucesso":false}]}"#,
+            now+Duration::from_millis(140));
+        assert_eq!(g.balls.get(&4),Some(&9));
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","slot":9,"ballId":4,"sucesso":false}]}"#,
+            now+Duration::from_millis(160));
+        assert_eq!(g.balls.get(&4),Some(&8));
+        assert_eq!(g.status.failures,2);
+        assert_eq!(g.status.pending_results,0);
+    }
+    #[test]
+    fn old_pending_receipts_timeout_even_if_new_throws_continue() {
+        let now=Instant::now();
+        let mut g=Gameplay::new(Some(&json!({
+            "enabled":true,"ballPriority":["ultra"],"intervalMs":100
+        })));
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false}}"#,now);
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,now);
+        g.next_capture(now).unwrap();
+        g.next_capture(now+Duration::from_secs(7)).unwrap();
+        assert!(!g.has_unreported_capture_timeout(now+Duration::from_secs(7)));
+        assert!(g.has_unreported_capture_timeout(now+Duration::from_secs(8)));
+        assert_eq!(g.report_capture_timeouts(now+Duration::from_secs(8)),1);
+        assert_eq!(g.report_capture_timeouts(now+Duration::from_secs(8)),0);
+        assert_eq!(g.status.pending_results,2);
+        assert_eq!(g.status.capture_resyncs,1);
+    }
+    #[test]
+    fn stock_and_reserves_select_fallback_without_waiting_for_receipts() {
+        let now=Instant::now();
+        let mut g=Gameplay::new(Some(&json!({
+            "enabled":true,"ballPriority":["ultra","great"],"intervalMs":100,
+            "reserve":{"ultra":3,"great":1}
+        })));
+        // Before authoritative inventory, use first preference optimistically.
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false}}"#,now);
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,now);
+        assert_eq!(g.next_capture(now).unwrap().wire()["ballId"],4);
+        g.ingest(r#"{"t":"estado","estado":{"balls":{"4":3,"2":5}}}"#,
+            now+Duration::from_millis(1));
+        assert_eq!(g.next_capture(now+Duration::from_millis(100)).unwrap().wire()["ballId"],2);
+        // Pending throws do not block or reset our selected ball priority.
+        assert_eq!(g.status.pending_results,2);
+        g.ingest(r#"{"t":"estado","estado":{"balls":{"4":3,"2":1}}}"#,
+            now+Duration::from_millis(110));
+        assert!(!g.status.capture_ready);
+        assert!(g.next_capture(now+Duration::from_millis(200)).is_none());
+        g.ingest(r#"{"t":"estado","estado":{"balls":{"4":9,"2":1}}}"#,
+            now+Duration::from_millis(210));
+        assert!(g.status.capture_ready);
+        assert_eq!(g.next_capture(now+Duration::from_millis(300)).unwrap().wire()["ballId"],4);
+    }
+    #[test]
     fn distributes_throws_across_corpses() {
         let now=Instant::now();
         let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"],"intervalMs":100})));
