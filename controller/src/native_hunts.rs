@@ -467,6 +467,9 @@ impl HuntIntel {
         self.view.last_error = Some(error.to_owned());
     }
     pub fn on_disconnect(&mut self) {
+        // Automation writes must use a fresh authoritative snapshot after
+        // reconnect; never reuse cached settings from a previous socket.
+        self.view.automation=None;
         self.view.pending_outland_tier=None;
         self.pending_outland_at=None;
         self.view.outland_tier=None;
@@ -1656,6 +1659,14 @@ mod tests {
         assert_eq!(intel.view.automation.as_ref().unwrap()["autoRevive"],true);
         assert_eq!(intel.view.wild.as_ref().unwrap().slot,5);
         assert_eq!(intel.snapshot().pokemon_roster.len(),1);
+        intel.on_disconnect();
+        assert!(intel.view.automation.is_none(),
+            "Reconnect must not carry old automation settings into auto.set");
+        intel.ingest(r#"{"t":"welcome","estado":{"automation":{
+            "autoPotion":false,"potionIds":[201]
+        }}}"#,now+Duration::from_secs(2));
+        assert_eq!(intel.view.automation.as_ref().unwrap()["autoPotion"],false);
+        assert_eq!(intel.view.automation.as_ref().unwrap()["potionIds"],json!([201]));
     }
     #[test]
     fn gold_payout_matches_upstream_loot_conversion_and_high_level_cap() {
