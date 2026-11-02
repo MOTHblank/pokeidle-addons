@@ -777,12 +777,17 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             last_config=cfg.clone();
                         }
                     }
-                    // Server-backed built-in Auto-Potion preference follows the
-                    // potion selected for active Moth restock. Leave the game's
-                    // enable switch and HP threshold entirely under player control.
+                    // Match the game's built-in Potion and Revive preferences
+                    // to the corresponding selected restock items, when enabled.
+                    // Neither the game automation toggles nor HP threshold change.
                     automation_writer.sync_restock_potion(
                         (last_config.restock_enabled && last_config.potion_id>0)
                             .then_some(last_config.potion_id),
+                        hunt_intel.view.automation.as_ref(),
+                    );
+                    automation_writer.sync_restock_revive(
+                        (last_config.restock_enabled && last_config.revive_id>0)
+                            .then_some(last_config.revive_id),
                         hunt_intel.view.automation.as_ref(),
                     );
                     if let Some(fields) = automation_writer.next(
