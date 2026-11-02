@@ -57,43 +57,52 @@ impl AutomationWriter {
         self.status.queued = self.queue.len();
         Ok(())
     }
-    /// When potion restock is active, mirror its selected potion into the
-    /// game's own healing priority. Never change autoPotion, hpLimiar, revive
-    /// preferences, or any other server-owned automation field.
+    /// Mirror the selected restock items into the game's own healing-item
+    /// priorities. Each preference is independent; never alter autoPotion,
+    /// autoRevive, hpLimiar, or any other server-owned automation setting.
     ///
-    /// An inactive/unselected restock rule relinquishes control without
-    /// disabling healing or erasing the player's existing potion choices.
+    /// If restock is disabled or the corresponding selector is Off, relinquish
+    /// control of that field without clearing the game's existing choice.
     pub fn sync_restock_potion(&mut self, potion_id: Option<u64>, current: Option<&Value>) {
-        let target=potion_id.filter(|id|*id>0 && *id<=1_000_000)
+        self.sync_restock_item("potionIds",potion_id,current);
+    }
+    pub fn sync_restock_revive(&mut self, revive_id: Option<u64>, current: Option<&Value>) {
+        self.sync_restock_item("reviveIds",revive_id,current);
+    }
+    fn sync_restock_item(&mut self, field:&'static str, item_id:Option<u64>,
+        current:Option<&Value>) {
+        debug_assert!(field=="potionIds" || field=="reviveIds");
+        let target=item_id.filter(|id|*id>0 && *id<=1_000_000)
             .map(|id|Value::Array(vec![Value::from(id)]));
         let Some(target)=target else {
-            // Drop only unsent restock synchronizations, not manual edits.
+            // Only discard unsent restock writes for this selector.
+            // A manual change and the other healing selector are untouched.
             self.queue.retain(|mutation|
-                mutation.field!="potionIds" || !mutation.from_restock);
+                mutation.field!=field || !mutation.from_restock);
             self.status.queued=self.queue.len();
             return;
         };
         let Some(server)=current.and_then(Value::as_object) else{return};
-        if server.get("potionIds")==Some(&target) {
-            // The game already agrees; do not queue redundant writes.
-            self.queue.retain(|mutation|mutation.field!="potionIds");
+        if server.get(field)==Some(&target) {
+            // Already confirmed on the game; do not send redundant writes.
+            self.queue.retain(|mutation|mutation.field!=field);
             self.status.queued=self.queue.len();
             return;
         }
         if self.in_flight.as_ref().is_some_and(|sent|
-            sent.mutation.field=="potionIds" && sent.mutation.value==target) {
+            sent.mutation.field==field && sent.mutation.value==target) {
             return;
         }
         if self.queue.iter().any(|queued|
-            queued.field=="potionIds" && queued.value==target) {
+            queued.field==field && queued.value==target) {
             return;
         }
-        // Coalesce only unsent values of this field. Preserve unrelated
-        // mutations, including the game's autoPotion switch.
-        if self.queue.len() >= MAX_QUEUE { return; }
-        self.queue.retain(|mutation|mutation.field!="potionIds");
+        // Coalesce only this field's unsent changes; keep other mutations,
+        // including edits to the game's own enable switches.
+        self.queue.retain(|mutation|mutation.field!=field);
+        if self.queue.len()>=MAX_QUEUE { return; }
         self.queue.push_back(Mutation {
-            field:"potionIds".into(),value:target,from_restock:true
+            field:field.into(),value:target,from_restock:true
         });
         self.status.queued=self.queue.len();
     }
@@ -252,6 +261,87 @@ mod tests {
         writer.on_disconnect();
         assert_eq!(writer.status.queued,0);
         assert_eq!(writer.status.pending_field,None);
+    }
+    #[test]
+    fn revive_restock_tracks_selected_revive_without_changing_automation_switches() {
+        let mut writer=AutomationWriter::new();
+        let now=Instant::now();
+        let server=json!({"autoPotion":false,"autoRevive":false,"hpLimiar":0.8,
+            "potionIds":[204],"reviveIds":[205,206],"unknownSetting":"safe"});
+        writer.sync_restock_revive(Some(206),Some(&server));
+        writer.sync_restock_revive(Some(206),Some(&server));
+        assert_eq!(writer.status.queued,1);
+        let sent=writer.next(Some(&server),now).unwrap();
+        assert_eq!(sent["reviveIds"],json!([206]));
+        assert_eq!(sent["potionIds"],json!([204]));
+        assert_eq!(sent["autoPotion"],json!(false));
+        assert_eq!(sent["autoRevive"],json!(false));
+        assert_eq!(sent["hpLimiar"],json!(0.8));
+        assert_eq!(sent["unknownSetting"],json!("safe"));
+        writer.observe(&json!({"reviveIds":[205]}));
+        assert_eq!(writer.status.pending_field.as_deref(),Some("reviveIds"));
+        writer.observe(&json!({"reviveIds":[206]}));
+        assert_eq!(writer.status.confirmed,1);
+        writer.sync_restock_revive(Some(206),Some(&json!({"reviveIds":[206]})));
+        assert_eq!(writer.status.queued,0);
+    }
+    #[test]
+    fn potion_and_revive_restock_sync_independently_in_order() {
+        let mut writer=AutomationWriter::new();
+        let now=Instant::now();
+        let original=json!({"autoPotion":true,"autoRevive":true,
+            "potionIds":[200],"reviveIds":[205],"hpLimiar":0.3});
+        writer.sync_restock_potion(Some(202),Some(&original));
+        writer.sync_restock_revive(Some(206),Some(&original));
+        assert_eq!(writer.status.queued,2);
+        let first=writer.next(Some(&original),now).unwrap();
+        assert_eq!(first["potionIds"],json!([202]));
+        assert_eq!(first["reviveIds"],json!([205]));
+        assert_eq!(first["autoRevive"],json!(true));
+        assert!(writer.next(Some(&original),now).is_none());
+        writer.observe(&json!({"potionIds":[202]}));
+        let updated=json!({"autoPotion":true,"autoRevive":true,
+            "potionIds":[202],"reviveIds":[205],"hpLimiar":0.3});
+        let second=writer.next(Some(&updated),now).unwrap();
+        assert_eq!(second["potionIds"],json!([202]));
+        assert_eq!(second["reviveIds"],json!([206]));
+        writer.observe(&json!({"reviveIds":[206]}));
+        assert_eq!(writer.status.queued,0);
+        assert_eq!(writer.status.confirmed,2);
+    }
+    #[test]
+    fn disabling_either_restock_selection_preserves_other_pending_sync() {
+        let mut writer=AutomationWriter::new();
+        let now=Instant::now();
+        let server=json!({"potionIds":[200],"reviveIds":[205],
+            "autoPotion":true,"autoRevive":true});
+        writer.sync_restock_potion(Some(204),Some(&server));
+        writer.sync_restock_revive(Some(206),Some(&server));
+        writer.sync_restock_revive(None,Some(&server));
+        assert_eq!(writer.status.queued,1);
+        assert_eq!(writer.next(Some(&server),now).unwrap()["potionIds"],json!([204]));
+        writer.observe(&json!({"potionIds":[204]}));
+        assert!(writer.next(Some(&server),now).is_none());
+        writer.sync_restock_revive(Some(206),Some(&server));
+        writer.sync_restock_potion(None,Some(&server));
+        assert_eq!(writer.status.queued,1);
+        let revive=writer.next(Some(&server),now).unwrap();
+        assert_eq!(revive["reviveIds"],json!([206]));
+        assert_eq!(revive["autoRevive"],json!(true));
+    }
+    #[test]
+    fn new_revive_preference_coalesces_without_affecting_potion_preference() {
+        let mut writer=AutomationWriter::new();
+        let server=json!({"potionIds":[200],"reviveIds":[205]});
+        writer.sync_restock_revive(Some(206),Some(&server));
+        writer.sync_restock_potion(Some(203),Some(&server));
+        writer.sync_restock_revive(Some(205),Some(&server));
+        assert_eq!(writer.status.queued,1);
+        let sent=writer.next(Some(&server),Instant::now()).unwrap();
+        assert_eq!(sent["potionIds"],json!([203]));
+        assert_eq!(sent["reviveIds"],json!([205]));
+        writer.on_disconnect();
+        assert_eq!(writer.status.queued,0);
     }
     #[test]
     fn invalid_values_are_not_transmitted_and_timeout_releases_queue() {
