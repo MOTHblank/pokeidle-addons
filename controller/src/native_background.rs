@@ -767,16 +767,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             s.pokemon_sale_error=Some("Pokémon sale not confirmed within 20 seconds".into());
                         });
                     }
-                    if let Some(fields) = automation_writer.next(
-                        hunt_intel.view.automation.as_ref(),Instant::now()) {
-                        if socket.send(Message::Text(
-                            GameCommand::AutoSet(fields).wire().to_string().into()
-                        )).is_err() {
-                            automation_writer.send_failed();
-                            send_failed=true;
-                        }
-                    }
-                    if send_failed { break; }
                     if session_reset.swap(false,Ordering::Relaxed) {
                         hunt_intel.reset_session(Instant::now());
                     }
@@ -787,6 +777,24 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             last_config=cfg.clone();
                         }
                     }
+                    // Server-backed built-in Auto-Potion preference follows the
+                    // potion selected for active Moth restock. Leave the game's
+                    // enable switch and HP threshold entirely under player control.
+                    automation_writer.sync_restock_potion(
+                        (last_config.restock_enabled && last_config.potion_id>0)
+                            .then_some(last_config.potion_id),
+                        hunt_intel.view.automation.as_ref(),
+                    );
+                    if let Some(fields) = automation_writer.next(
+                        hunt_intel.view.automation.as_ref(),Instant::now()) {
+                        if socket.send(Message::Text(
+                            GameCommand::AutoSet(fields).wire().to_string().into()
+                        )).is_err() {
+                            automation_writer.send_failed();
+                            send_failed=true;
+                        }
+                    }
+                    if send_failed { break; }
                     gameplay.status.auto_catch = auto_catch.load(Ordering::Relaxed);
                     restock.set_enabled(restock_enabled.load(Ordering::Relaxed));
                     while let Ok(result) = metadata_rx.try_recv() {
