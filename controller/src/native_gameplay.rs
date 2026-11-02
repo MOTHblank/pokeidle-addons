@@ -429,9 +429,9 @@ impl Gameplay {
             self.status.capture_resyncs=self.status.capture_resyncs
                 .saturating_add(newly_timed_out as u64);
             self.status.error=Some(
-                "Native capture receipt overdue; waiting without disconnecting".into()
+                "Native capture receipt overdue; continuing throws without disconnecting".into()
             );
-            self.status.last_action="Waiting for delayed capture results".into();
+            self.status.last_action="Auto Catch active".into();
         }
         newly_timed_out
     }
@@ -611,6 +611,40 @@ mod tests {
             now+Duration::from_millis(210));
         assert!(g.status.capture_ready);
         assert_eq!(g.next_capture(now+Duration::from_millis(300)).unwrap().wire()["ballId"],4);
+    }
+    #[test]
+    fn ambiguous_slotless_receipt_does_not_claim_an_auto_catch_result() {
+        let now=Instant::now();
+        let mut g=Gameplay::new(Some(&json!({
+            "enabled":true,"ballPriority":["ultra"],"intervalMs":100
+        })));
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false}}"#,now);
+        g.ingest(r#"{"t":"batalha","ev":[
+            {"k":"morte","quem":"selvagem","slot":1},
+            {"k":"morte","quem":"selvagem","slot":2}
+        ]}"#,now);
+        g.next_capture(now).unwrap();
+        g.next_capture(now+Duration::from_millis(100)).unwrap();
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"bola","ballId":4,"sucesso":false}]}"#,
+            now+Duration::from_millis(110));
+        assert_eq!(g.status.server_failures,1);
+        assert_eq!(g.status.failures,0);
+        assert_eq!(g.status.pending_results,2);
+    }
+    #[test]
+    fn failed_transport_send_discards_only_that_attempt() {
+        let now=Instant::now();
+        let mut g=Gameplay::new(Some(&json!({
+            "enabled":true,"ballPriority":["ultra"],"intervalMs":100
+        })));
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false}}"#,now);
+        g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":9}]}"#,now);
+        let command=g.next_capture(now).unwrap();
+        g.failed(&command,"Socket send failed");
+        assert_eq!(g.status.pending_results,0);
+        assert_eq!(g.status.unreflected_throws,0);
+        assert_eq!(g.status.throws,0);
+        assert_eq!(g.status.used_by_ball.get(&4),Some(&0));
     }
     #[test]
     fn distributes_throws_across_corpses() {
