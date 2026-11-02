@@ -858,7 +858,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
-                    if let Some(command) = restock.next(Instant::now(), gameplay.status.auto_catch) {
+                    if let Some(command) = restock.next(Instant::now()) {
                         // Commands contain only category, product ID and
                         // quantity. Never log authentication or personal data.
                         if let GameCommand::ShopBuy { kind, id, qty } = &command {

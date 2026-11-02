@@ -410,8 +410,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Saving Auto Catch settings" => "Salvando configurações de captura",
         "Capture diagnostics" => "Diagnóstico da captura",
         "Auto Catch · ball statistics" => "Captura automática · estatísticas por bola",
-        "Native capture receipt overdue; waiting without disconnecting" =>
-            "Resposta da captura atrasada; mantendo conexão com o jogo",
+        "Native capture receipt overdue; continuing throws without disconnecting" =>
+            "Resposta da captura atrasada; continuando os lançamentos sem desconectar",
         "Waiting for delayed capture results" => "Aguardando resultados de capturas atrasadas",
         "Waiting for authenticated game state" => "Aguardando estado autenticado do jogo",
         "Pokémon captured" => "Pokémon capturado",
@@ -424,8 +424,12 @@ fn tr<'a>(en: &'a str) -> &'a str {
         "Waiting for server Poké Ball inventory" => "Aguardando inventário de Pokébolas do servidor",
         "Ball-event captures" => "Capturas em eventos de bola",
         "Ball-event failures" => "Falhas em eventos de bola",
-        "Native interval: 0.6 s, with a bounded pending-throw window" =>
-            "Intervalo nativo: 0,6 s, com limite de lançamentos pendentes",
+        "Native throws can run every 0.1 s without waiting for capture receipts" =>
+            "Lançamentos nativos a cada 0,1 s, sem aguardar as respostas de captura",
+        "Uses the first ball with stock above reserve, then the fallback" =>
+            "Usa a primeira Pokébola com estoque acima da reserva e depois a alternativa",
+        "Auto Catch active · capture receipts pending" =>
+            "Captura automática ativa · respostas de captura pendentes",
         "Capture server notice" => "Aviso do servidor sobre captura",
         "Capture resyncs" => "Reconexões para recuperar capturas",
         "Capture timeouts" => "Capturas com resposta atrasada",
@@ -5058,12 +5062,12 @@ fn auto_catch_operational_label(connected:bool,
     capture:&crate::native_gameplay::GameplayStatus)->&'static str {
     if !connected {
         "Auto Catch awaiting game connection"
-    } else if capture.pending_results>0 {
-        "Auto Catch waiting for capture results"
-    } else if capture.capture_ready {
-        "Auto Catch ready for targets"
-    } else {
+    } else if !capture.capture_ready {
         "Auto Catch waiting for conditions"
+    } else if capture.pending_results>0 {
+        "Auto Catch active · capture receipts pending"
+    } else {
+        "Auto Catch ready for targets"
     }
 }
 
@@ -5086,9 +5090,9 @@ mod auto_catch_ui_state_tests {
         capture.pending_results=2;
         assert_eq!(auto_catch_setting_label(true),"Auto Catch on");
         assert_eq!(auto_catch_operational_label(true,&capture),
-            "Auto Catch waiting for capture results");
+            "Auto Catch active · capture receipts pending");
         capture.capture_ready=false;
-        capture.pending_results=0;
+        capture.pending_results=2;
         assert_eq!(auto_catch_operational_label(true,&capture),
             "Auto Catch waiting for conditions");
     }
@@ -5161,8 +5165,7 @@ fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usi
             if capture_enabled {
                 let operational=auto_catch_operational_label(capture_connected,capture);
                 ui.label(RichText::new(format!("{}: {}",tr("Capture operation"),tr(operational)))
-                    .size(11.0).color(if capture_connected && capture.capture_ready &&
-                        capture.pending_results==0 {GOOD} else {WARN}));
+                    .size(11.0).color(if capture_connected && capture.capture_ready {GOOD} else {WARN}));
                 if capture_connected && !capture.capture_ready {
                     if let Some(reason)=capture.blocked_reason.as_deref() {
                         ui.label(RichText::new(tr(reason)).size(10.0).color(MUTED));
@@ -5626,8 +5629,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
-            .range(600..=3000).speed(50.0).suffix(" ms"));
-        ui.label(RichText::new(tr("Native interval: 0.6 s, with a bounded pending-throw window"))
+            .range(100..=3000).speed(25.0).suffix(" ms"));
+        ui.label(RichText::new(tr("Native throws can run every 0.1 s without waiting for capture receipts"))
             .size(10.0).color(DIM));
     });
     ui.label(RichText::new(tr("Preferred balls (primary and fallback)"))
@@ -5650,6 +5653,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         }
     });
     cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
+    ui.label(RichText::new(tr("Uses the first ball with stock above reserve, then the fallback"))
+        .size(10.0).color(DIM));
     ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
     ui.horizontal_wrapped(|ui|{
         for key in keys {
