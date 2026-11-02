@@ -432,6 +432,8 @@ fn tr<'a>(en: &'a str) -> &'a str {
             "Captura automática ativa · respostas de captura pendentes",
         "Game Auto-Potion uses the potion selected here while restock is on. Its on/off switch and HP threshold stay unchanged." =>
             "A Poção Automática do jogo usa a poção escolhida aqui quando a reposição está ligada. O liga/desliga e o limite de HP permanecem inalterados.",
+        "Game Auto-Revive uses the revive selected here while restock is on. Its on/off switch stays unchanged." =>
+            "O Revive Automático do jogo usa o revive escolhido aqui quando a reposição está ligada. O liga/desliga permanece inalterado.",
         "Capture server notice" => "Aviso do servidor sobre captura",
         "Capture resyncs" => "Reconexões para recuperar capturas",
         "Capture timeouts" => "Capturas com resposta atrasada",
@@ -5566,6 +5568,11 @@ fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usiz
         if cfg.restock_enabled && cfg.potion_id>0 {
             ui.label(RichText::new(tr(
                 "Game Auto-Potion uses the potion selected here while restock is on. Its on/off switch and HP threshold stay unchanged."
+            )).size(10.0).color(DIM));
+        }
+        if cfg.restock_enabled && cfg.revive_id>0 {
+            ui.label(RichText::new(tr(
+                "Game Auto-Revive uses the revive selected here while restock is on. Its on/off switch stays unchanged."
             )).size(10.0).color(DIM));
         }
         ui.add_space(10.0);
