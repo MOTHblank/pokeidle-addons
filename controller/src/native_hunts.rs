@@ -467,6 +467,9 @@ impl HuntIntel {
         self.view.last_error = Some(error.to_owned());
     }
     pub fn on_disconnect(&mut self) {
+        // Automation writes must use a fresh authoritative snapshot after
+        // reconnect; never reuse cached settings from a previous socket.
+        self.view.automation=None;
         self.view.pending_outland_tier=None;
         self.pending_outland_at=None;
         self.view.outland_tier=None;
