@@ -448,8 +448,8 @@ impl Restock {
             self.awaiting_inventory_since.is_some_and(|at|
                 now.saturating_duration_since(at)>=ACK_STOCK_TIMEOUT)
     }
-    pub fn next(&mut self, now: Instant, catch_enabled: bool) -> Option<GameCommand> {
-        if !catch_enabled || !self.status.enabled {
+    pub fn next(&mut self, now: Instant) -> Option<GameCommand> {
+        if !self.status.enabled {
             self.status.phase = "Off".into();
             return None;
         }
@@ -573,21 +573,38 @@ mod tests {
         }"#, now);
     }
     #[test]
+    fn restock_is_independent_from_auto_catch_switch() {
+        let mut r=Restock::new(Some(&json!({"enabled":false,"restock":{
+            "enabled":true,"selectedBallId":4,"ballAt":5,"ballTo":20,
+            "selectedPotionId":0,"selectedReviveId":0
+        }})));
+        let now=Instant::now();
+        r.ingest(r#"{"t":"welcome",
+            "catalogoBolas":[{"id":4,"nome":"Ultra Ball","priceGold":10,"compravel":true}],
+            "estado":{"gold":200,"balls":{"4":3}}
+        }"#,now);
+        assert!(r.status.enabled);
+        assert_eq!(r.next(now).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"ball","id":4,"qty":17}));
+        r.set_enabled(false);
+        assert!(r.next(now+Duration::from_secs(1)).is_none());
+    }
+    #[test]
     fn matches_exact_purchase_and_waits_for_stock() {
         let now = Instant::now();
         let mut r = configured();
         welcome(&mut r, now);
-        assert_eq!(r.next(now, true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"ball","id":4,"qty":9}));
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":123,"qtd":9,"gasto":90}]}"#, now);
         assert!(!r.pending.as_ref().unwrap().ack);
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,"qtd":9,"gasto":90}]}"#, now);
         assert_eq!(r.status.confirmed, 1);
         assert!(!r.status.pending);
-        assert!(r.next(now + Duration::from_secs(2), true).is_none());
+        assert!(r.next(now + Duration::from_secs(2)).is_none());
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":12},"gold":100}}"#, now);
         assert_eq!(r.status.confirmed, 1);
-        assert!(r.next(now + Duration::from_secs(1), true).is_none());
+        assert!(r.next(now + Duration::from_secs(1)).is_none());
     }
     #[test]
     fn matching_purchase_and_flat_stock_reconciles_consumed_potion() {
@@ -596,7 +613,7 @@ mod tests {
         welcome(&mut r,now);
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},
             "items":{"200":1}}}"#,now);
-        let cmd=r.next(now,true).unwrap();
+        let cmd=r.next(now).unwrap();
         assert_eq!(cmd.wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","nome":"Golden Potion",
@@ -617,16 +634,16 @@ mod tests {
         let mut r=configured();
         welcome(&mut r,now);
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},"items":{"200":0}}}"#,now);
-        assert!(r.next(now,true).is_some());
+        assert!(r.next(now).is_some());
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "id":200,"kind":"item","qtd":12,"gasto":60}]}"#,now);
         assert_eq!(r.status.confirmed,1);
         assert!(!r.status.pending);
-        assert!(r.next(now+Duration::from_secs(31),true).is_none());
+        assert!(r.next(now+Duration::from_secs(31)).is_none());
         // An overdue inventory patch remains blocked with an explicit status.
         assert_eq!(r.status.phase,"Waiting for inventory");
         r.ingest(r#"{"t":"estado","estado":{"items":{"200":12},"gold":130}}"#,now);
-        assert!(r.next(now+Duration::from_secs(31),true).is_none());
+        assert!(r.next(now+Duration::from_secs(31)).is_none());
         assert_eq!(r.status.phase,"Stock OK");
     }
     #[test]
@@ -638,20 +655,20 @@ mod tests {
         let cat=crate::native_items::parse(r#"{"items":[
             {"id":200,"name":"Small Potion","preco":50}]}"#).unwrap();
         r.merge_item_metadata(&cat);
-        assert_eq!(r.next(now,true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
     }
     #[test]
     fn unrelated_item_state_does_not_release_ball_purchase_receipt_wait() {
         let now=Instant::now();let mut r=configured();
         welcome(&mut r,now);
-        r.next(now,true);
+        r.next(now);
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra","id":4,
             "qtd":9,"gasto":90}]}"#,now);
         r.ingest(r#"{"t":"estado","estado":{"items":{"200":50}}}"#,now);
         assert!(!r.status.pending);
         assert_eq!(r.status.confirmed,1);
-        assert!(r.next(now+Duration::from_secs(3),true).is_none());
+        assert!(r.next(now+Duration::from_secs(3)).is_none());
         assert_eq!(r.status.phase,"Waiting for updated inventory");
     }
 
@@ -659,10 +676,10 @@ mod tests {
     fn no_purchases_without_authoritative_inventory_and_price() {
         let mut r = configured();
         let now = Instant::now();
-        assert!(r.next(now, true).is_none());
+        assert!(r.next(now).is_none());
         r.ingest(r#"{"t":"welcome","catalogoBolas":[{"id":4,"priceGold":10}],
             "estado":{"balls":{"4":0},"gold":1000}}"#, now);
-        assert!(r.next(now, true).is_none());
+        assert!(r.next(now).is_none());
         assert_eq!(r.status.phase, "Waiting for shop");
     }
     #[test]
@@ -670,10 +687,10 @@ mod tests {
         let now = Instant::now();
         let mut r = configured();
         welcome(&mut r, now);
-        assert!(r.next(now, true).is_some());
-        assert!(r.next(now + Duration::from_secs(11), true).is_none());
+        assert!(r.next(now).is_some());
+        assert!(r.next(now + Duration::from_secs(11)).is_none());
         assert_eq!(r.status.phase, "Backoff");
-        assert!(r.next(now + Duration::from_secs(12), true).is_none());
+        assert!(r.next(now + Duration::from_secs(12)).is_none());
     }
     #[test]
     fn item_purchases_are_supported_only_from_verified_catalog() {
@@ -681,7 +698,7 @@ mod tests {
         let mut r = configured();
         welcome(&mut r, now);
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":30},"items":{"200":1}}}"#, now);
-        assert_eq!(r.next(now, true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
     }
     #[test]
@@ -691,17 +708,17 @@ mod tests {
         r.ingest(r#"{"t":"welcome","catalogoBolas":[
             {"id":4,"nome":"Ultra Ball","compravel":true,"preco":10}],
             "estado":{"gold":10000,"balls":{"4":4},"items":{"200":20}}}"#,now);
-        assert!(r.next(now,true).is_some());
+        assert!(r.next(now).is_some());
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "nome":"Ultra Ball","qtd":16,"gasto":160}]}"#,
             now+Duration::from_millis(100));
         assert!(!r.inventory_update_overdue(now+Duration::from_secs(10)));
-        assert!(r.next(now+Duration::from_secs(21),true).is_none());
+        assert!(r.next(now+Duration::from_secs(21)).is_none());
         assert!(r.inventory_update_overdue(now+Duration::from_secs(21)));
         // The purchase is guarded, even if no fresh stock patch is received.
         // Never reconnect or issue a duplicate buy just to clear this state.
         assert!(r.inventory_update_overdue(now+Duration::from_secs(22)));
-        assert!(r.next(now+Duration::from_secs(22),true).is_none());
+        assert!(r.next(now+Duration::from_secs(22)).is_none());
         assert_eq!(r.status.phase,"Waiting for inventory");
     }
     #[test]
@@ -716,7 +733,7 @@ mod tests {
             {"k":"bola","ballId":4,"sucesso":true}]}"#,now);
         let ball=r.rule_statuses().into_iter().find(|x|x.kind=="ball").unwrap();
         assert_eq!(ball.current,Some(4));
-        assert_eq!(r.next(now,true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"ball","id":4,"qty":16}));
         r.ingest(r#"{"t":"estado","estado":{"balls":{"4":20}}}"#,
             now+Duration::from_secs(1));
@@ -756,7 +773,7 @@ mod tests {
         r.ingest(r#"{"t":"welcome",
             "estado":{"gold":10000,"balls":{},"items":{"777":0}}
         }"#, now);
-        assert!(r.next(now, true).is_none());
+        assert!(r.next(now).is_none());
         assert_eq!(r.status.phase, "Waiting for shop");
     }
     #[test]
@@ -770,7 +787,7 @@ mod tests {
             "itensCompraveis":[{"itemId":205,"name":"Revive","preco":600}],
             "estado":{"gold":10000,"balls":{},"items":{"205":1}}
         }"#,now);
-        assert_eq!(r.next(now,true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":205,"qty":4}));
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "id":205,"kind":"item","qtd":4,"gasto":2400}]}"#,now);
@@ -786,7 +803,7 @@ mod tests {
         r.ingest(r#"{"t":"welcome",
             "estado":{"gold":10000,"balls":{},"items":{"70070":0}}
         }"#,now);
-        assert_eq!(r.next(now,true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":70070,"qty":1}));
     }
     #[test]
@@ -795,16 +812,16 @@ mod tests {
         let mut r = configured();
         welcome(&mut r, now);
         r.set_enabled(false);
-        assert!(r.next(now, true).is_none());
+        assert!(r.next(now).is_none());
         r.set_enabled(true);
         r.ingest(r#"{"t":"estado","estado":{"gold":105}}"#, now);
-        assert!(r.next(now, true).is_none());
+        assert!(r.next(now).is_none());
     }
     #[test]
     fn unchanged_enabled_flag_does_not_erase_purchase_state() {
         let now=Instant::now();
         let mut r=configured();welcome(&mut r,now);
-        r.next(now,true);
+        r.next(now);
         assert_eq!(r.status.phase,"Waiting for purchase");
         r.set_enabled(true);
         assert_eq!(r.status.phase,"Waiting for purchase");
@@ -813,14 +830,14 @@ mod tests {
     fn reconfiguration_preserves_inflight_purchase() {
         let now=Instant::now();let mut r=configured();
         welcome(&mut r,now);
-        assert!(r.next(now,true).is_some());
+        assert!(r.next(now).is_some());
         let mut cfg=CatchSettings::from_value(Some(&json!({
             "enabled":true,"restock":{"enabled":true,
                 "selectedBallId":4,"ballAt":5,"ballTo":40}
         })));
         r.configure(&cfg);
         assert!(r.status.pending);
-        assert!(r.next(now+Duration::from_secs(1),true).is_none());
+        assert!(r.next(now+Duration::from_secs(1)).is_none());
         cfg.restock_enabled=false;r.configure(&cfg);
         assert!(r.status.pending);
     }
@@ -834,11 +851,11 @@ mod tests {
         }})));
         r.ingest(r#"{"t":"welcome","estado":{"gold":10000,
             "balls":{},"items":{"777":0}}}"#,now);
-        assert!(r.next(now,true).is_none());
+        assert!(r.next(now).is_none());
         assert_eq!(r.status.phase,"Waiting for shop");
         r.ingest(r#"{"t":"estado","estado":{"itensCompraveis":[
             {"itemId":777,"nome":"Future Potion","preco":5}]}}"#,now);
-        assert_eq!(r.next(now+Duration::from_secs(1),true).unwrap().wire(),
+        assert_eq!(r.next(now+Duration::from_secs(1)).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":777,"qty":12}));
     }
 
@@ -875,7 +892,7 @@ mod tests {
         let potion = r.status.rules.iter().find(|rule|rule.id == 200).unwrap();
         assert_eq!(potion.price_source, "Reference catalog");
         assert_eq!(potion.current, Some(0));
-        assert_eq!(r.next(now, true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":1}));
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "id":200,"kind":"item","qtd":1,"gasto":77}]}"#,
@@ -887,7 +904,7 @@ mod tests {
         let potion = r.status.rules.iter().find(|rule|rule.id == 200).unwrap();
         assert_eq!(potion.price,Some(77));
         assert_eq!(potion.price_source,"Server purchase");
-        assert_eq!(r.next(now+Duration::from_secs(3),true).unwrap().wire(),
+        assert_eq!(r.next(now+Duration::from_secs(3)).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
     }
     #[test]
@@ -898,7 +915,7 @@ mod tests {
             "itensCompraveis":[{"itemId":200,"nome":"Small Potion","preco":60}],
             "estado":{"gold":10000,"balls":{"4":30},"items":{"200":0}}
         }"#,now);
-        assert_eq!(r.next(now,true).unwrap().wire(),
+        assert_eq!(r.next(now).unwrap().wire(),
             json!({"t":"shop.buy","kind":"item","id":200,"qty":12}));
         assert_eq!(r.prices.get(&("item",200)).unwrap().source,"Server");
     }
@@ -907,7 +924,7 @@ mod tests {
         let now=Instant::now();
         let mut r=configured();
         welcome(&mut r,now);
-        r.next(now,true);
+        r.next(now);
         // Correct quantity/price but an explicitly different name.
         r.ingest(r#"{"t":"batalha","ev":[{"k":"compra",
             "nome":"Different Ball","qtd":9,"gasto":90}]}"#,now);
@@ -927,7 +944,7 @@ mod tests {
         r.merge_item_metadata(&meta);
         assert!(!r.prices.contains_key(&("item",200)));
         assert!(!r.needs_item_metadata());
-        assert!(r.next(now,true).is_none());
+        assert!(r.next(now).is_none());
         assert_eq!(r.status.phase,"Shop item unavailable");
         r.publish_status();
         assert_eq!(r.status.rules.iter().find(|v|v.id==200).unwrap().price_source,
@@ -952,9 +969,9 @@ mod tests {
         let now = Instant::now();
         let mut r = configured();
         welcome(&mut r, now);
-        r.next(now, true).unwrap();
+        r.next(now).unwrap();
         r.on_disconnect(now);
-        assert!(r.next(now + Duration::from_secs(31), true).is_none());
+        assert!(r.next(now + Duration::from_secs(31)).is_none());
         assert_eq!(r.status.phase, "Waiting for gold");
     }
 }
