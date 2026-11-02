@@ -1659,6 +1659,14 @@ mod tests {
         assert_eq!(intel.view.automation.as_ref().unwrap()["autoRevive"],true);
         assert_eq!(intel.view.wild.as_ref().unwrap().slot,5);
         assert_eq!(intel.snapshot().pokemon_roster.len(),1);
+        intel.on_disconnect();
+        assert!(intel.view.automation.is_none(),
+            "Reconnect must not carry old automation settings into auto.set");
+        intel.ingest(r#"{"t":"welcome","estado":{"automation":{
+            "autoPotion":false,"potionIds":[201]
+        }}}"#,now+Duration::from_secs(2));
+        assert_eq!(intel.view.automation.as_ref().unwrap()["autoPotion"],false);
+        assert_eq!(intel.view.automation.as_ref().unwrap()["potionIds"],json!([201]));
     }
     #[test]
     fn gold_payout_matches_upstream_loot_conversion_and_high_level_cap() {
