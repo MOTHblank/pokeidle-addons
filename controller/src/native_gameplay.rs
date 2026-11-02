@@ -58,22 +58,23 @@ impl GameCommand {
 // The game exposes 30-second corpse lifetimes. Never use a late result as
 // evidence that an old slot should be revived: a new "morte" starts a new life.
 const CORPSE_LIFETIME:Duration=Duration::from_secs(30);
-// A 600-ms native cadence serves dense AoE hunts. Bound unacknowledged
-// commands, without resetting the game connection when receipts are missing.
-// This is a chosen application cadence, NOT a verified server cooldown.
-// No cap on throws awaiting capture results.
+// A configurable 100–3000 ms cadence serves dense AoE hunts. Never wait for
+// capture receipts before throwing at another available corpse slot.
+// This is an application cadence, NOT a verified server cooldown.
 const CAPTURE_RESULT_TIMEOUT:Duration=Duration::from_secs(8);
 const MIN_THROW_INTERVAL_MS:u64=100;
 #[derive(Clone)]
-struct Corpse {
-    slot:u64, at:Instant, last:Option<Instant>, pending:bool,
-    /// The pending throw is not reflected by estado.balls or a bola receipt.
-    /// This flag belongs to the target lifecycle; never retain old reservations
-    /// after that target is removed.
+struct PendingThrow {
+    ball_id:u64, sent:Instant,
+    // One reservation per actual send, not per corpse. Inventory and receipts
+    // can arrive in either order; neither should double-debit the same throw.
     unreflected:bool,
-    // A missing receipt is a capture-level warning, never a socket failure.
     timeout_reported:bool,
-    attempts:u32, last_ball:Option<u64>,
+}
+#[derive(Clone)]
+struct Corpse {
+    slot:u64, at:Instant, last:Option<Instant>,
+    attempts:u32, pending:VecDeque<PendingThrow>,
 }
 #[derive(Clone,Debug,Default)]
 pub struct GameplayStatus {
@@ -107,6 +108,7 @@ pub struct Gameplay {
     ball_inventory_seen:bool,
     catalog:BTreeMap<u64,String>,
     priorities:Vec<String>,
+    reserves:BTreeMap<String,u64>,
     interval:Duration,
     restock_ball_id:u64, restock_enabled:bool,
     last_death_untracked:bool,
@@ -120,6 +122,7 @@ impl Gameplay {
             status:GameplayStatus { auto_catch:config.enabled, ..Default::default() },
             corpses:VecDeque::new(),balls:BTreeMap::new(),ball_inventory_seen:false,
             catalog:BTreeMap::new(),priorities:config.priorities,
+            reserves:config.reserves,
             interval:Duration::from_millis(config.interval_ms.max(MIN_THROW_INTERVAL_MS)),
             restock_ball_id:config.ball_id,restock_enabled:config.restock_enabled,
             last_death_untracked:false,last_throw:None,server_auto:serde_json::Map::new()
@@ -128,6 +131,7 @@ impl Gameplay {
     pub fn configure(&mut self, config:&CatchSettings) {
         self.status.auto_catch=config.enabled;
         self.priorities=config.priorities.clone();
+        self.reserves=config.reserves.clone();
         self.interval=Duration::from_millis(config.interval_ms.clamp(MIN_THROW_INTERVAL_MS,3000));
         self.restock_ball_id=config.ball_id;
         self.restock_enabled=config.restock_enabled;
@@ -153,7 +157,7 @@ impl Gameplay {
         self.status.queue=self.corpses.len();
     }
     fn pending_throws(&self)->usize {
-        self.corpses.iter().filter(|corpse|corpse.pending).count()
+        self.corpses.iter().map(|corpse|corpse.pending.len()).sum()
     }
     fn refresh_ball_inventory(&mut self,stock:&serde_json::Map<String,Value>) {
         let fresh=stock.iter().filter_map(|(id,amount)|
@@ -168,11 +172,14 @@ impl Gameplay {
             let mut confirmed=previous.saturating_sub(current);
             if confirmed==0 {continue}
             for corpse in &mut self.corpses {
-                if confirmed==0 {break}
-                if corpse.pending && corpse.unreflected && corpse.last_ball==Some(*id) {
-                    corpse.unreflected=false;
-                    confirmed-=1;
+                for pending in &mut corpse.pending {
+                    if confirmed==0 {break}
+                    if pending.unreflected && pending.ball_id==*id {
+                        pending.unreflected=false;
+                        confirmed-=1;
+                    }
                 }
+                if confirmed==0 {break}
             }
         }
         self.balls=fresh;
@@ -192,10 +199,22 @@ impl Gameplay {
             _=>None
         }
     }
+    // Read only the latest server inventory when choosing a ball. Never gate
+    // throwing on a receipt, pending attempt, or replenishment acknowledgement.
+    // Before the first inventory snapshot, try the player's first preference.
+    fn selected_ball(&self)->Option<u64> {
+        self.priorities.iter().find_map(|priority| {
+            let id=Self::known_ball_id(priority)?;
+            let reserve=self.reserves.get(priority).copied().unwrap_or(0);
+            (!self.ball_inventory_seen ||
+                self.balls.get(&id).copied().unwrap_or(0)>reserve).then_some(id)
+        })
+    }
     fn refresh_readiness(&mut self) {
         self.status.pending_results=self.pending_throws() as u64;
         self.status.unreflected_throws=self.corpses.iter()
-            .filter(|corpse|corpse.pending && corpse.unreflected).count() as u64;
+            .flat_map(|corpse|corpse.pending.iter())
+            .filter(|pending|pending.unreflected).count() as u64;
         let mismatch=self.restock_enabled && self.restock_ball_id>0 &&
             !self.priorities.iter().any(|p|
                 Self::known_ball_id(p)==Some(self.restock_ball_id) ||
@@ -210,6 +229,8 @@ impl Gameplay {
             Some("At center or waiting for authenticated hunt state")
         } else if self.priorities.is_empty() {
             Some("No capture ball selected")
+        } else if self.ball_inventory_seen && self.selected_ball().is_none() {
+            Some("No selected Poké Balls above reserve; check restock and ball priorities")
         } else if self.last_death_untracked && self.corpses.is_empty() {
             Some("Wild death events lack capture slots; cannot target throws")
         } else {None};
@@ -254,8 +275,7 @@ impl Gameplay {
                     for slot in slots {
                         if !self.corpses.iter().any(|corpse|corpse.slot==slot) {
                             self.corpses.push_back(Corpse {
-                                slot,at:now,last:None,pending:false,
-                                unreflected:false,timeout_reported:false,attempts:0,last_ball:None
+                                slot,at:now,last:None,attempts:0,pending:VecDeque::new()
                             });
                         }
                     }
@@ -295,8 +315,7 @@ impl Gameplay {
                                 self.last_death_untracked=false;
                                 self.corpses.retain(|v|v.slot!=slot);
                                 self.corpses.push_back(Corpse {
-                                    slot,at:now,last:None,pending:false,
-                                    unreflected:false,timeout_reported:false,attempts:0,last_ball:None
+                                    slot,at:now,last:None,attempts:0,pending:VecDeque::new()
                                 });
                             } else {
                                 self.last_death_untracked=true;
@@ -320,55 +339,49 @@ impl Gameplay {
                                 } else {
                                     self.status.server_failures=self.status.server_failures.saturating_add(1);
                                 }
-                                // Missing slots may be correlated only when
-                                // exactly one outstanding local throw is eligible.
-                                // Never assign an ambiguous receipt to a corpse.
+                                // A slotless receipt is safe to attribute only
+                                // when exactly one corpse has an eligible attempt.
                                 let matched=slot.and_then(|slot|
                                     self.corpses.iter().position(|c|c.slot==slot))
                                     .or_else(||{
                                         if slot.is_some(){return None}
                                         let mut eligible=self.corpses.iter().enumerate()
-                                            .filter(|(_,c)|c.pending && c.attempts>0 &&
-                                                response_ball.is_none_or(|id|c.last_ball==Some(id)))
+                                            .filter(|(_,c)|c.pending.iter().any(|attempt|
+                                                response_ball.is_none_or(|id|attempt.ball_id==id)))
                                             .map(|(idx,_)|idx);
                                         let first=eligible.next()?;
                                         if eligible.next().is_some(){None}else{Some(first)}
                                     });
                                 if let Some(idx)=matched {
-                                    let own=self.corpses[idx].attempts>0;
-                                    let pending=self.corpses[idx].pending;
-                                    let expected_ball=self.corpses[idx].last_ball;
-                                    // A receipt consumes one ball only when
-                                    // the server has not already reflected it
-                                    // in its authoritative inventory snapshot.
-                                    if own && pending && self.corpses[idx].unreflected &&
-                                        (response_ball.is_none() || response_ball==expected_ball) {
-                                        if let Some(id)=response_ball.or(expected_ball) {
-                                            if let Some(stock)=self.balls.get_mut(&id) {
+                                    let attempt_index=self.corpses[idx].pending.iter().position(
+                                        |attempt|response_ball.is_none_or(|id|attempt.ball_id==id));
+                                    let attempt=attempt_index.and_then(|at|
+                                        self.corpses[idx].pending.remove(at));
+                                    if let Some(attempt)=attempt {
+                                        // Reconcile one actual send, regardless
+                                        // of how many times this corpse was targeted.
+                                        if attempt.unreflected {
+                                            if let Some(stock)=self.balls.get_mut(&attempt.ball_id) {
                                                 *stock=stock.saturating_sub(1);
                                             }
                                         }
-                                        self.corpses[idx].unreflected=false;
-                                    }
-                                    if success {
-                                        if own {
+                                        if success {
                                             self.status.catches=self.status.catches.saturating_add(1);
-                                            if let Some(id)=response_ball.or(expected_ball) {
-                                                *self.status.caught_by_ball.entry(id).or_default()+=1;
-                                            }
+                                            *self.status.caught_by_ball.entry(attempt.ball_id).or_default()+=1;
                                             self.status.last_action="Pokémon captured".into();
-                                            self.status.error=None;
-                                        }
-                                        self.corpses.remove(idx);
-                                    } else if own && (response_ball.is_none() ||
-                                        response_ball==expected_ball) {
-                                        if self.corpses[idx].pending {
-                                            self.corpses[idx].pending=false;
-                                            self.corpses[idx].unreflected=false;
+                                        } else {
                                             self.status.failures=self.status.failures.saturating_add(1);
                                             self.status.last_action="Auto Catch active".into();
-                                            self.status.error=None;
                                         }
+                                        self.status.error=None;
+                                    } else if success {
+                                        self.status.unmatched_successes=
+                                            self.status.unmatched_successes.saturating_add(1);
+                                    }
+                                    if success {
+                                        // A captured corpse is gone, including any
+                                        // other speculative throws still in flight.
+                                        self.corpses.remove(idx);
                                     }
                                 } else if success {
                                     self.status.unmatched_successes=
@@ -392,23 +405,24 @@ impl Gameplay {
         self.expire_corpses(now);
         self.refresh_readiness();
     }
-    /// A missing capture receipt does not imply a dead game connection.
-    /// Keep pending throws and their reserved inventory until the actual result,
-    /// authoritative slot removal or corpse expiration, without replaying them.
+    /// Missing receipts are a capture diagnostic, not a connection failure.
+    /// Time each individual send, not the corpse's latest retry timestamp:
+    /// aggressive retries must never mask an earlier missing result.
     pub fn has_unreported_capture_timeout(&self, now:Instant)->bool {
         self.status.auto_catch && self.corpses.iter().any(|corpse|
-            corpse.pending && !corpse.timeout_reported &&
-            corpse.last.is_some_and(|last|
-                now.saturating_duration_since(last)>=CAPTURE_RESULT_TIMEOUT))
+            corpse.pending.iter().any(|attempt|
+                !attempt.timeout_reported &&
+                now.saturating_duration_since(attempt.sent)>=CAPTURE_RESULT_TIMEOUT))
     }
     pub fn report_capture_timeouts(&mut self, now:Instant)->usize {
         let mut newly_timed_out=0usize;
         for corpse in &mut self.corpses {
-            if corpse.pending && !corpse.timeout_reported &&
-                corpse.last.is_some_and(|last|
-                    now.saturating_duration_since(last)>=CAPTURE_RESULT_TIMEOUT) {
-                corpse.timeout_reported=true;
-                newly_timed_out+=1;
+            for attempt in &mut corpse.pending {
+                if !attempt.timeout_reported &&
+                    now.saturating_duration_since(attempt.sent)>=CAPTURE_RESULT_TIMEOUT {
+                    attempt.timeout_reported=true;
+                    newly_timed_out+=1;
+                }
             }
         }
         if newly_timed_out>0 {
@@ -428,7 +442,7 @@ impl Gameplay {
         self.refresh_readiness();
         if !self.status.capture_ready || self.last_throw.is_some_and(|last|
             now.saturating_duration_since(last)<self.interval) {return None;}
-        let id=self.priorities.iter().find_map(|p|Self::known_ball_id(p))?;
+        let id=self.selected_ball()?;
         // Untouched corpses must be targeted before reattempting one thrown at
         // in the same instant. Then rotate by last throw time, without waiting
         // for receipts or inventory confirmation.
@@ -438,8 +452,10 @@ impl Gameplay {
         let corpse=&mut self.corpses[idx];
         if corpse.attempts>0 {self.status.retries=self.status.retries.saturating_add(1);}
         corpse.last=Some(now);
-        corpse.last_ball=Some(id);
         corpse.attempts=corpse.attempts.saturating_add(1);
+        corpse.pending.push_back(PendingThrow {
+            ball_id:id,sent:now,unreflected:true,timeout_reported:false
+        });
         self.last_throw=Some(now);
         self.status.throws=self.status.throws.saturating_add(1);
         *self.status.used_by_ball.entry(id).or_default()+=1;
@@ -452,10 +468,11 @@ impl Gameplay {
         self.status.error=Some(reason.to_owned());
         if let GameCommand::Throw{ball_id,slot}=command {
             if let Some(c)=self.corpses.iter_mut().find(|c|c.slot==*slot) {
-                c.pending=false;
-                c.unreflected=false;
+                // A failed socket send is not an outstanding server attempt.
+                if let Some(idx)=c.pending.iter().rposition(|p|p.ball_id==*ball_id) {
+                    c.pending.remove(idx);
+                }
                 if c.attempts>0 {c.attempts-=1;}
-                // A failed socket send is not a server throw.
             }
             self.status.throws=self.status.throws.saturating_sub(1);
             if let Some(v)=self.status.used_by_ball.get_mut(ball_id) {
