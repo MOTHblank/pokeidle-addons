@@ -15,7 +15,7 @@ pub struct AutomationStatus {
     pub confirmed: u64,
     pub error: Option<String>,
 }
-struct Mutation { field: String, value: Value }
+struct Mutation { field: String, value: Value, from_restock: bool }
 struct InFlight { mutation: Mutation, sent: Instant }
 pub struct AutomationWriter {
     pub status: AutomationStatus,
@@ -53,7 +53,7 @@ impl AutomationWriter {
         // Subsequent adjustments of the same control are last-write-wins
         // until they are sent. Never cancel an already transmitted frame.
         self.queue.retain(|m|m.field != field);
-        self.queue.push_back(Mutation { field, value });
+        self.queue.push_back(Mutation { field, value, from_restock:false });
         self.status.queued = self.queue.len();
         Ok(())
     }
@@ -67,8 +67,9 @@ impl AutomationWriter {
         let target=potion_id.filter(|id|*id>0 && *id<=1_000_000)
             .map(|id|Value::Array(vec![Value::from(id)]));
         let Some(target)=target else {
-            // Drop an unsent synchronization if restock was switched off.
-            self.queue.retain(|mutation|mutation.field!="potionIds");
+            // Drop only unsent restock synchronizations, not manual edits.
+            self.queue.retain(|mutation|
+                mutation.field!="potionIds" || !mutation.from_restock);
             self.status.queued=self.queue.len();
             return;
         };
@@ -87,9 +88,14 @@ impl AutomationWriter {
             queued.field=="potionIds" && queued.value==target) {
             return;
         }
-        // queue() coalesces only unsent values of this field. Preserve
-        // unrelated mutations, including the player's autoPotion toggle.
-        let _=self.queue("potionIds".into(),target);
+        // Coalesce only unsent values of this field. Preserve unrelated
+        // mutations, including the game's autoPotion switch.
+        if self.queue.len() >= MAX_QUEUE { return; }
+        self.queue.retain(|mutation|mutation.field!="potionIds");
+        self.queue.push_back(Mutation {
+            field:"potionIds".into(),value:target,from_restock:true
+        });
+        self.status.queued=self.queue.len();
     }
     pub fn next(&mut self, current: Option<&Value>, now: Instant) -> Option<Map<String,Value>> {
         if self.in_flight.as_ref().is_some_and(|sent|
@@ -215,6 +221,16 @@ mod tests {
         writer.sync_restock_potion(None,Some(&server));
         assert_eq!(writer.status.queued,0);
         assert!(writer.next(Some(&server),now).is_none());
+    }
+    #[test]
+    fn inactive_restock_does_not_drop_manual_potion_id_edits() {
+        let mut writer=AutomationWriter::new();
+        let now=Instant::now();
+        writer.queue("potionIds".into(),json!([201])).unwrap();
+        writer.sync_restock_potion(None,Some(&json!({"potionIds":[200]})));
+        assert_eq!(writer.status.queued,1);
+        let frame=writer.next(Some(&json!({"potionIds":[200]})),now).unwrap();
+        assert_eq!(frame["potionIds"],json!([201]));
     }
     #[test]
     fn sync_waits_for_authoritative_automation_and_serializes_other_edits() {
