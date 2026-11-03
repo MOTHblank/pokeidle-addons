@@ -251,72 +251,72 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     let saving=app.capture_save_busy[index];
     let mut discard_edits=false;
     ui.add_enabled_ui(!saving,|ui|{
-    ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
-    ui.horizontal_wrapped(|ui|{
-        ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
-        ui.add(egui::DragValue::new(&mut cfg.interval_ms)
-            .range(100..=3000).speed(25.0).suffix(" ms"));
-        ui.label(RichText::new(tr("Native throws can run every 0.1 s without waiting for capture receipts"))
+        ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
+        ui.horizontal_wrapped(|ui|{
+            ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
+            ui.add(egui::DragValue::new(&mut cfg.interval_ms)
+                .range(100..=3000).speed(25.0).suffix(" ms"));
+            ui.label(RichText::new(tr("Native throws can run every 0.1 s without waiting for capture receipts"))
+                .size(10.0).color(DIM));
+        });
+        ui.label(RichText::new(tr("Preferred balls (primary and fallback)"))
+            .size(11.0).color(TEXT));
+        let keys=["beast","ultra","super","great","poke"];
+        let mut chosen=[
+            cfg.priorities.first().cloned().unwrap_or_default(),
+            cfg.priorities.get(1).cloned().unwrap_or_default()
+        ];
+        ui.horizontal_wrapped(|ui|{
+            for slot in 0..2 {
+                ui.label(if slot==0{tr("Primary")}else{tr("Fallback")});
+                egui::ComboBox::from_id_salt(("cap-choice",index,slot))
+                    .selected_text(capture_ball_name(&chosen[slot])).show_ui(ui,|ui|{
+                        ui.selectable_value(&mut chosen[slot],String::new(),tr("None"));
+                        for key in keys {
+                            ui.selectable_value(&mut chosen[slot],key.into(),capture_ball_name(key));
+                        }
+                    });
+            }
+        });
+        cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
+        ui.label(RichText::new(tr("Uses the first ball with stock above reserve, then the fallback"))
             .size(10.0).color(DIM));
-    });
-    ui.label(RichText::new(tr("Preferred balls (primary and fallback)"))
-        .size(11.0).color(TEXT));
-    let keys=["beast","ultra","super","great","poke"];
-    let mut chosen=[
-        cfg.priorities.first().cloned().unwrap_or_default(),
-        cfg.priorities.get(1).cloned().unwrap_or_default()
-    ];
-    ui.horizontal_wrapped(|ui|{
-        for slot in 0..2 {
-            ui.label(if slot==0{tr("Primary")}else{tr("Fallback")});
-            egui::ComboBox::from_id_salt(("cap-choice",index,slot))
-                .selected_text(capture_ball_name(&chosen[slot])).show_ui(ui,|ui|{
-                    ui.selectable_value(&mut chosen[slot],String::new(),tr("None"));
-                    for key in keys {
-                        ui.selectable_value(&mut chosen[slot],key.into(),capture_ball_name(key));
-                    }
-                });
-        }
-    });
-    cfg.priorities=chosen.iter().filter(|v|!v.is_empty()).cloned().collect();
-    ui.label(RichText::new(tr("Uses the first ball with stock above reserve, then the fallback"))
-        .size(10.0).color(DIM));
-    ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
-    ui.horizontal_wrapped(|ui|{
-        for key in keys {
-            ui.vertical(|ui|{
-                ui.label(RichText::new(capture_ball_name(key)).size(10.0).color(DIM));
-                ui.add(egui::DragValue::new(cfg.reserves.entry(key.into()).or_default())
-                    .range(0..=1_000_000));
-            });
-        }
-    });
-    ui.separator();
-    ui.label(RichText::new(tr("Restock is configured on each Overview account card"))
-        .size(10.0).color(DIM));
-    ui.horizontal(|ui|{
-        if ui.button(tr("Save settings")).clicked() {
-            let mut to_save=native.capture_settings();
-            copy_capture_fields(&mut to_save,cfg);
-            if let Err(error)=to_save.validate() {
-                app.capture_save_error[index]=Some(error);
-            } else {
-                app.capture_save_error[index]=None;
-                app.capture_save_busy[index]=true;
-                let tx=app.capture_save_tx.clone();
-                std::thread::spawn(move || {
-                    let result=std::panic::catch_unwind(
-                        std::panic::AssertUnwindSafe(||
-                            crate::native_auth::set_capture_settings(profile,&to_save))
-                    ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
-                    let _=tx.send(CaptureSavedEvent{index,config:to_save,origin:CaptureSaveOrigin::Editor,result});
+        ui.label(RichText::new(tr("Ball inventory reserves")).size(11.0).color(DIM));
+        ui.horizontal_wrapped(|ui|{
+            for key in keys {
+                ui.vertical(|ui|{
+                    ui.label(RichText::new(capture_ball_name(key)).size(10.0).color(DIM));
+                    ui.add(egui::DragValue::new(cfg.reserves.entry(key.into()).or_default())
+                        .range(0..=1_000_000));
                 });
             }
-        }
-        if ui.small_button(tr("Discard")).clicked() {
-            discard_edits=true;
-        }
-    });
+        });
+        ui.separator();
+        ui.label(RichText::new(tr("Restock is configured on each Overview account card"))
+            .size(10.0).color(DIM));
+        ui.horizontal(|ui|{
+            if ui.button(tr("Save settings")).clicked() {
+                let mut to_save=native.capture_settings();
+                copy_capture_fields(&mut to_save,cfg);
+                if let Err(error)=to_save.validate() {
+                    app.capture_save_error[index]=Some(error);
+                } else {
+                    app.capture_save_error[index]=None;
+                    app.capture_save_busy[index]=true;
+                    let tx=app.capture_save_tx.clone();
+                    std::thread::spawn(move || {
+                        let result=std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(||
+                                crate::native_auth::set_capture_settings(profile,&to_save))
+                        ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
+                        let _=tx.send(CaptureSavedEvent{index,config:to_save,origin:CaptureSaveOrigin::Editor,result});
+                    });
+                }
+            }
+            if ui.small_button(tr("Discard")).clicked() {
+                discard_edits=true;
+            }
+        });
     });
     if let Some(error)=app.capture_save_error[index].as_deref() {
         ui.colored_label(BAD,error);
