@@ -524,6 +524,18 @@ mod protocol_command_tests {
 mod tests {
     use super::*;
     #[test]
+    fn boss_commands_use_upstream_wire_payloads() {
+        assert_eq!(GameCommand::BossEnter("bronze".into()).wire(),
+            json!({"t":"boss.entrar","key":"bronze"}));
+        assert_eq!(GameCommand::BossAuto { active:true, key:"bronze".into() }.wire(),
+            json!({"t":"boss.auto","ativo":true,"key":"bronze"}));
+        assert_eq!(GameCommand::BossAuto { active:false, key:"bronze".into() }.wire(),
+            json!({"t":"boss.auto","ativo":false,"key":"bronze"}));
+        assert_eq!(GameCommand::BossExit.wire(), json!({"t":"boss.sair"}));
+        assert!(!GameCommand::BossStart { key:"".into(),repeat:true }.is_valid());
+        assert!(GameCommand::BossStart { key:"bronze".into(),repeat:true }.is_valid());
+    }
+    #[test]
     fn repeated_throws_do_not_wait_for_results_or_inventory() {
         let now=Instant::now();
         let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"],"intervalMs":100})));
