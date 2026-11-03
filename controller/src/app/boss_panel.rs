@@ -38,6 +38,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(tr("No playable boss arenas are currently advertised by the server."));
                 return;
             }
+            if !view.state_known {
+                ui.colored_label(super::WARN,tr("Waiting for authoritative server boss state."));
+            }
 
             let selected = &mut app.workspace.boss_selected[index];
             if !view.catalog.iter().any(|entry| entry.key == *selected) {
@@ -63,7 +66,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(format!("{}: {} · {}: {}",
                     tr("Required level"), entry.min_level,
                     tr("Possible entries"), attempts));
-                let ready = live && !view.busy && !view.auto && view.arena.is_none()
+                let ready = live && view.state_known && !view.busy && !view.auto && view.arena.is_none()
                     && hunt.trainer_level.unwrap_or(0) >= entry.min_level
                     && tokens >= entry.tokens_per_entry;
                 ui.horizontal_wrapped(|ui| {
