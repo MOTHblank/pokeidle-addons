@@ -81,7 +81,7 @@ mod capture_handoff_tests {
     }
 
     #[test]
-    fn session_replacement_waits_for_inflight_vault_transaction() {
+    fn session_invalidation_is_nonblocking_and_cancels_stalled_saves() {
         use std::sync::{mpsc,Arc};
         use std::sync::atomic::{AtomicU64,Ordering};
         use std::time::Duration;
@@ -96,26 +96,18 @@ mod capture_handoff_tests {
                 Ok(())
             })
         });
-        inside_rx.recv().unwrap();
-        let (starting_tx,starting_rx)=mpsc::sync_channel(0);
-        let (done_tx,done_rx)=mpsc::sync_channel(1);
-        let stop_generation=Arc::clone(&generation);
-        let stopping=std::thread::spawn(move || {
-            starting_tx.send(()).unwrap();
-            invalidate_capture_generation(&stop_generation);
-            done_tx.send(()).unwrap();
-        });
-        starting_rx.recv().unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "session replacement must not finish while a vault write is blocked");
-        assert_eq!(generation.load(Ordering::Acquire),3);
+        inside_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        invalidate_capture_generation(&generation);
+        assert_eq!(generation.load(Ordering::Acquire),4,
+            "Stop must invalidate immediately, without waiting for a vault write");
+        let another=AtomicU64::new(9);
+        assert!(capture_write_transaction(GameProfile::Game2,&another,9,
+            ||Ok::<(),String>(())).is_ok(),
+            "Game2 must not wait on a stalled Game1 preference save");
         release_tx.send(()).unwrap();
-        writer.join().unwrap().unwrap();
-        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        stopping.join().unwrap();
-        assert_eq!(generation.load(Ordering::Acquire),4);
+        assert!(writer.join().unwrap().is_err());
         assert!(capture_write_transaction::<()>(GameProfile::Game1,&generation,3,||
-            panic!("an old session must never enter the vault writer")).is_err());
+            panic!("superseded session must not enter a vault write")).is_err());
     }
     #[test]
     fn first_login_imports_the_browser_settings() {
