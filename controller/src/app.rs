@@ -811,11 +811,13 @@ impl AutomationDraft {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HuntRanking { TrainerXp, PokemonXp, Gold }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptureSaveOrigin { Editor, Toggle, Restock }
+
 struct CaptureSavedEvent {
     index:usize,
     config:CatchSettings,
-    // A switch-only save must not discard unsaved editor changes.
-    toggle_only:bool,
+    origin:CaptureSaveOrigin,
     result:Result<(),String>
 }
 pub struct ControllerApp {
