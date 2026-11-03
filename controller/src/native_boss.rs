@@ -558,15 +558,20 @@ impl BossManager {
     /// A disconnected socket never replays a boss-enter/start command. Keep
     /// only an already-started trip's return target until the new welcome
     /// establishes the server's current arena, auto state and location.
-    pub fn on_disconnect(&mut self) {
+    pub fn on_disconnect(&mut self, navigator: &HuntNavigator, hunt: &HuntView) {
         if let Some(trip) = self.trip.as_mut() {
-            if trip.stage == Stage::GoingCenter {
+            if trip.stage == Stage::GoingCenter &&
+                !navigator.center_command_sent() && !hunt.in_center {
+                // No Center command left this socket; it is safe to discard
+                // the pending boss trip without a return obligation.
                 self.trip = None;
                 self.view.original_hunt = None;
                 self.view.warning = Some(
                     "Boss trip cancelled before entry because the connection dropped".into());
                 self.view.phase = "Boss trip interrupted".into();
             } else {
+                // A Center command already in flight may complete during the
+                // outage. Keep the return target but never replay boss entry.
                 trip.recovering = true;
                 self.view.warning = Some(
                     "Connection interrupted; verifying boss state before restoring saved hunt".into());
@@ -754,7 +759,7 @@ mod tests {
             Some(GameCommand::BossAuto {active:true,..})));
         manager.ingest(&json!({"t":"estado","estado":{"boss":{
             "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
-        manager.on_disconnect();
+        manager.on_disconnect(&nav, &view);
         assert!(manager.active());
         assert!(manager.next_action(&view, &mut nav, now).is_none());
 
@@ -784,7 +789,7 @@ mod tests {
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
         assert!(matches!(manager.next_action(&view, &mut nav, now),
             Some(GameCommand::BossAuto {active:true,..})));
-        manager.on_disconnect();
+        manager.on_disconnect(&nav, &view);
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
             "key":"bronze","nome":"Bronze Boss",
             "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
@@ -815,7 +820,7 @@ mod tests {
             "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
         assert!(matches!(manager.stop(&mut navigator, &view, now),
             Some(GameCommand::BossAuto {active:false,..})));
-        manager.on_disconnect();
+        manager.on_disconnect(&navigator, &view);
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
             "key":"bronze","nome":"Bronze Boss",
             "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
@@ -840,10 +845,35 @@ mod tests {
         let now = Instant::now();
         let mut view = hunt();
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
-        manager.on_disconnect();
+        manager.on_disconnect(&nav, &view);
         view.in_center = true;
         manager.recover_on_welcome(&view);
         assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn disconnect_after_center_dispatch_still_restores_saved_hunt() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(nav.next_action(&view, now), Some(GameCommand::Center)));
+        manager.on_disconnect(&nav, &view);
+        assert!(manager.active());
+        view.in_center = true;
+        manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
+            "key":"bronze","nome":"Bronze Boss",
+            "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
+        }],"estado":{"boss":{"auto":false,"arena":null}}}));
+        let mut fresh = HuntNavigator::default();
+        manager.recover_on_welcome(&view);
+        assert!(manager.next_action(&view, &mut fresh, now).is_none());
+        assert!(matches!(fresh.next_action(&view, now),
+            Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+        view.in_center = false;
+        manager.next_action(&view, &mut fresh, now);
         assert!(!manager.active());
     }
 
