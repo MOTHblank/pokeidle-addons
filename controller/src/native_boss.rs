@@ -163,11 +163,9 @@ fn load_log(path: &PathBuf) -> Result<(Vec<BossLoot>, Option<String>), String> {
                 fs::rename(path, &backup).map_err(|move_error| format!(
                     "Boss loot JSON is invalid ({error}); could not preserve it separately: {move_error}"
                 ))?;
-                let warning = format!(
-                    "Damaged boss loot history was preserved at {}. New victories use a fresh journal.",
-                    backup.display()
-                );
-                crate::logging::warn(&warning);
+                let warning =
+                    "Damaged boss loot history was preserved in a backup file. New victories use a fresh journal.".to_owned();
+                crate::logging::warn(&format!("{warning} {}", backup.display()));
                 return Ok((Vec::new(), Some(warning)));
             }
             Err(format!(
@@ -454,8 +452,9 @@ impl BossManager {
                     self.trip = None;
                     self.view.original_hunt = None;
                 }
-            } else if trip.dispatched_at.is_some_and(|at|
-                now.saturating_duration_since(at) >= Duration::from_secs(20)) {
+            } else if !self.view.auto && self.view.arena.is_none() &&
+                trip.dispatched_at.is_some_and(|at|
+                    now.saturating_duration_since(at) >= Duration::from_secs(20)) {
                 // A rejected or lost Center request must not lock the UI.
                 // Never issue a boss command while cancelling this trip.
                 if hunt.hunt_slug.as_deref() != trip.original.as_deref() {
@@ -1003,7 +1002,7 @@ mod tests {
             .map(|entry| entry.unwrap().path())
             .find(|candidate| candidate != &path)
             .expect("damaged journal backup");
-        assert_eq!(fs::read(&quarantined).unwrap(), damaged);
+        assert_eq!(fs::read(&quarantined).unwrap().as_slice(), &damaged[..]);
         let fresh = BossLoot {
             at: 1, key: "bronze".into(), boss: "Bronze Boss".into(), drops: vec![],
         };
