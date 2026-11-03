@@ -48,22 +48,31 @@ impl ControllerApp {
     // its acknowledgement, even if the picker has since been closed.
     fn flush_queued_restock_saves(&mut self) {
         for index in 0..self.games.len() {
-            if !self.restock_dirty[index] || self.capture_save_busy[index] { continue; }
+            if !self.restock_dirty[index] || self.capture_save_busy[index] ||
+                !self.restock_retries[index].ready(Instant::now()) { continue; }
             let Some(native)=self.games[index].native.as_ref() else {continue};
             let current=native.capture_settings();
             let Some(staged)=self.restock_drafts[index].as_ref() else {
                 self.restock_dirty[index]=false;
+                self.restock_retries[index]=RestockSaveRetry::default();
                 continue;
             };
             let next=automation_restock::prepare_restock_save(&current,staged);
-            self.restock_dirty[index]=false;
             match next {
                 Ok(None) => {
                     if let Some(draft)=self.restock_drafts[index].as_mut() {
                         automation_restock::copy_restock_fields(draft,&current);
                     }
+                    self.restock_dirty[index]=false;
+                    self.restock_retries[index]=RestockSaveRetry::default();
+                    self.capture_save_error[index]=None;
                 }
-                Err(error) => self.capture_save_error[index]=Some(error),
+                Err(error) => {
+                    // Preserve the unsaved draft and surface a validation error
+                    // without repeatedly spawning a doomed persistence worker.
+                    self.capture_save_error[index]=Some(error);
+                    self.restock_retries[index].blocked=true;
+                }
                 Ok(Some(next)) => {
                     self.capture_save_error[index]=None;
                     self.capture_save_busy[index]=true;
@@ -74,6 +83,8 @@ impl ControllerApp {
                     let generation_state=Arc::clone(&self.capture_generations[index]);
                     let generation=generation_state.load(Ordering::Acquire);
                     let updater=native.capture_settings_updater();
+                    // Keep restock_dirty set until a successful, current
+                    // acknowledgement of this exact selection arrives.
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
@@ -100,12 +111,8 @@ impl ControllerApp {
                 self.capture_generations[event.index].load(Ordering::Acquire),
                 self.capture_save_ids[event.index],
             ) {
-                // A pending restock selection can be rebased on the new
-                // session's confirmed preferences by the regular save queue.
-                if event.origin==CaptureSaveOrigin::Restock &&
-                    self.restock_drafts[event.index].is_some() {
-                    self.restock_dirty[event.index]=true;
-                }
+                // Never resurrect a previous session's Restock draft. The
+                // session boundary has already discarded its pending state.
                 continue;
             }
             self.capture_save_busy[event.index]=false;
@@ -119,15 +126,36 @@ impl ControllerApp {
                     if self.restock_drafts[event.index].as_ref()
                         .is_some_and(|draft| restock_fields_equal(draft, &event.config))
                     {
-                        // The save has caught up with what the user sees.
-                        // A different staged selection stays queued instead.
+                        // Only the acknowledged selection is considered saved.
                         self.restock_drafts[event.index]=Some(event.config);
                         self.restock_dirty[event.index]=false;
+                        self.restock_retries[event.index]=RestockSaveRetry::default();
+                    } else if event.origin==CaptureSaveOrigin::Restock &&
+                        self.restock_drafts[event.index].is_some() {
+                        // A newer local selection must still be persisted.
+                        self.restock_dirty[event.index]=true;
+                        self.restock_retries[event.index]=RestockSaveRetry::default();
                     }
                     self.capture_save_error[event.index]=None;
                     self.set_status(tr("Auto Catch settings saved"),false);
                 }
                 Err(error) => {
+                    if event.origin==CaptureSaveOrigin::Restock &&
+                        self.restock_drafts[event.index].is_some() {
+                        self.restock_dirty[event.index]=true;
+                        if self.restock_drafts[event.index].as_ref()
+                            .is_some_and(|draft|restock_fields_equal(draft,&event.config)) {
+                            // Retry transient vault failures with a bounded
+                            // backoff, but not validation/auth/session errors.
+                            if let Some(delay)=self.restock_retries[event.index]
+                                .failed(&error,Instant::now()) {
+                                self.lifecycle_ctx.request_repaint_after(delay);
+                            }
+                        } else {
+                            // A newer edit superseded the failed submission.
+                            self.restock_retries[event.index]=RestockSaveRetry::default();
+                        }
+                    }
                     self.capture_save_error[event.index]=Some(error.clone());
                     self.set_status(format!("Could not save capture settings: {error}"),true);
                 }
@@ -553,6 +581,25 @@ impl ControllerApp {
 mod capture_save_reconciliation_tests {
     use super::*;
 
+    #[test]
+    fn failed_restock_retries_are_bounded_and_validation_never_spins() {
+        let now=Instant::now();
+        let mut retry=RestockSaveRetry::default();
+        for attempt in 1..5 {
+            assert_eq!(retry.failed("Desktop keyring request failed",now),
+                Some(Duration::from_secs(1u64<<(attempt-1))));
+            assert!(!retry.ready(now));
+            assert!(!retry.blocked);
+        }
+        assert_eq!(retry.failed("Desktop keyring request failed",now),None);
+        assert!(retry.blocked);
+        assert!(!retry.ready(now+Duration::from_secs(60)));
+        // A new edit creates a fresh retry budget.
+        retry=RestockSaveRetry::default();
+        assert!(retry.ready(now));
+        assert_eq!(retry.failed("Invalid restock threshold",now),None);
+        assert!(retry.blocked);
+    }
     #[test]
     fn old_session_or_request_acknowledgement_cannot_clear_current_save() {
         let event=CaptureSavedEvent {

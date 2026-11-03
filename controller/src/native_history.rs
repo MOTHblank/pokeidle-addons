@@ -54,6 +54,10 @@ impl WriteSignal {
     }
     // Check infrequently from the socket worker; failed writes are retried
     // even if no new battle events arrive. Never stack requests during I/O.
+    fn in_flight(&self)->Option<u64> {
+        self.state.lock().ok().and_then(|state|
+            (state.requested>state.completed).then_some(state.requested))
+    }
     fn retry_due(&self)->bool {
         self.state.lock().is_ok_and(|state|
             state.last_error.is_some() && state.completed==state.requested &&
@@ -503,6 +507,9 @@ pub struct HistoryRecorder {
     last_pruned_day:u64,
     dirty:bool,
     last_flush:Instant,
+    // Report actual socket-worker waits for this mutex, not the time the
+    // background writer spent cloning. Throttle warnings per session.
+    last_lock_warning:Option<Instant>,
     writer:Option<Arc<WriteSignal>>,
     _lease:HistoryLease,
 }
@@ -545,12 +552,25 @@ impl HistoryRecorder {
             }
         });
         Self {shared,last_hunt:None,last_kill:None,last_pruned_day:today,
-            dirty:false,last_flush:Instant::now(),writer,_lease:lease}
+            dirty:false,last_flush:Instant::now(),
+            last_lock_warning:None,writer,_lease:lease}
+    }
+    fn report_lock_wait(&mut self,waited:Duration) {
+        if waited>=Duration::from_millis(5) &&
+            self.last_lock_warning.is_none_or(|at|
+                at.elapsed()>=Duration::from_secs(60)) {
+            self.last_lock_warning=Some(Instant::now());
+            crate::logging::warn(&format!(
+                "Native history socket worker waited {} ms for snapshot lock",
+                waited.as_millis()));
+        }
     }
     pub fn record_forecast(&mut self,model:HistoryForecast){
         let day=model.day;
         if day!=unix_day(){return}
+        let started=Instant::now();
         let Ok(mut snapshot)=self.shared.lock() else{return};
+        let waited=started.elapsed();
         if let Some(previous)=snapshot.forecasts.iter_mut()
             .find(|row|row.hour==model.hour && row.hunt==model.hunt){
             *previous=model;
@@ -570,6 +590,8 @@ impl HistoryRecorder {
             snapshot.forecasts.drain(0..extra);
         }
         self.dirty=true;
+        drop(snapshot);
+        self.report_lock_wait(waited);
     }
     #[cfg(test)]
     pub fn ingest(&mut self,raw:&str,hunt:Option<&str>) {
@@ -592,7 +614,9 @@ impl HistoryRecorder {
         if kind!=Some("batalha"){return}
         let Some(events)=frame.get("ev").and_then(Value::as_array) else{return};
         let day=unix_day();
+        let started=Instant::now();
         let Ok(mut guard)=self.shared.lock() else{return};
+        let waited=started.elapsed();
         // Work through a normal &mut reference so distinct fields (daily
         // counters and lifetime totals) can be updated together safely.
         let snapshot:&mut HistorySnapshot=&mut *guard;
@@ -659,12 +683,26 @@ impl HistoryRecorder {
             snapshot.retain_recent(day);
             self.last_pruned_day=day;
         }
+        drop(guard);
+        self.report_lock_wait(waited);
     }
     pub fn maybe_flush(&mut self,force:bool) {
         if !force && self.last_flush.elapsed()<SAVE_INTERVAL {return}
-        if !force && !self.dirty &&
-            !self.writer.as_ref().is_some_and(|writer|writer.retry_due()) {
-            // Keep retry checks at five-second cadence even while idle.
+        let retry=self.writer.as_ref().is_some_and(|writer|writer.retry_due());
+        if !self.dirty && !retry {
+            // A forced disconnect/shutdown must never write an unchanged full
+            // document. It only waits for a previously requested save.
+            if force {
+                if let Some(writer)=self.writer.as_ref() {
+                    if let Some(sequence)=writer.in_flight() {
+                        if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
+                            if let Ok(mut snapshot)=self.shared.lock() {
+                                snapshot.save_error=Some(error);
+                            }
+                        }
+                    }
+                }
+            }
             self.last_flush=Instant::now();
             return;
         }
@@ -672,8 +710,6 @@ impl HistoryRecorder {
             match writer.request() {
                 Ok(sequence)=>{
                     self.dirty=false;
-                    // Only disconnect and shutdown wait for durability. Normal
-                    // saves merely wake the parked writer and return.
                     if force {
                         if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
                             if let Ok(mut snapshot)=self.shared.lock() {
@@ -708,7 +744,7 @@ mod tests {
         let mut history=HistoryRecorder{
             shared:Arc::new(Mutex::new(HistorySnapshot::default())),
             last_hunt:None,last_kill:None,last_pruned_day:unix_day(),dirty:false,
-            last_flush:Instant::now(),writer:None,
+            last_flush:Instant::now(),last_lock_warning:None,writer:None,
             _lease:Arc::new(HistoryGate::default()).acquire()
         };
         history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
@@ -820,6 +856,34 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
     #[test]
+    fn forced_clean_flush_does_not_queue_duplicate_history_snapshots() {
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path=std::env::temp_dir().join(
+            format!("moth-history-forced-flush-{}-{id}.json",std::process::id()));
+        let shared=Arc::new(Mutex::new(HistorySnapshot{
+            owner:"Test".into(),..Default::default()
+        }));
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .unwrap();
+        let mut recorder=HistoryRecorder {
+            shared,last_hunt:None,last_kill:None,last_pruned_day:unix_day(),
+            dirty:false,last_flush:Instant::now()-SAVE_INTERVAL,
+            last_lock_warning:None,writer:Some(Arc::clone(&writer)),
+            _lease:Arc::new(HistoryGate::default()).acquire(),
+        };
+        recorder.maybe_flush(true);
+        assert_eq!(writer.state.lock().unwrap().requested,0,
+            "an untouched recorder should not create a history file");
+        recorder.dirty=true;
+        recorder.maybe_flush(true);
+        recorder.maybe_flush(true);
+        assert_eq!(writer.state.lock().unwrap().requested,1,
+            "disconnect and Drop must not repeat an acknowledged save");
+        drop(recorder);
+        assert_eq!(writer.state.lock().unwrap().requested,1);
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn failed_history_write_retries_without_new_battle_receipts() {
         let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let blocked=std::env::temp_dir().join(
@@ -835,7 +899,7 @@ mod tests {
         let mut recorder=HistoryRecorder {
             shared,last_hunt:None,last_kill:None,last_pruned_day:unix_day(),
             dirty:true,last_flush:Instant::now()-SAVE_INTERVAL,
-            writer:Some(Arc::clone(&writer)),
+            last_lock_warning:None,writer:Some(Arc::clone(&writer)),
             _lease:Arc::new(HistoryGate::default()).acquire()
         };
         recorder.maybe_flush(false);

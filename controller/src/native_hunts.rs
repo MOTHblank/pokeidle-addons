@@ -201,6 +201,9 @@ pub struct HuntView {
     pub field_init_timestamp: Option<u64>,
     /// Real full-wave spawn-distance quantiles, learned only from native field events.
     pub geo_distances: Arc<BTreeMap<String,Vec<f64>>>,
+    /// Per-destination geometry versions: updating one hunt does not
+    /// invalidate simulations for every other destination.
+    pub geo_revisions: Arc<BTreeMap<String,u64>>,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     /// Stable representative sprite for the confirmed hunt. This is not
@@ -556,8 +559,12 @@ impl HuntIntel {
         if histories.len()>6 {histories.remove(0);}
         let all=histories.iter().flat_map(|v|v.iter().copied()).collect();
         let mut next=(*self.view.geo_distances).clone();
-        next.insert(slug,all);
+        next.insert(slug.clone(),all);
         self.view.geo_distances=Arc::new(next);
+        let mut revisions=(*self.view.geo_revisions).clone();
+        let revision=revisions.entry(slug).or_default();
+        *revision=revision.wrapping_add(1);
+        self.view.geo_revisions=Arc::new(revisions);
     }
     fn field_geo_init(&mut self, frame:&Value) {
         self.geo_wave=None;
@@ -1343,6 +1350,7 @@ mod tests {
         intel.ingest_value(&json!({"t":"campo","mobs":mobs}),now);
         intel.finish_geo_wave(now+Duration::from_secs(5));
         assert_eq!(intel.view.geo_distances["field-a"].len(),8);
+        assert_eq!(intel.view.geo_revisions["field-a"],1);
         assert_eq!(intel.view.session.kills,0);
         assert_eq!(intel.view.measurements.kills,0);
     }

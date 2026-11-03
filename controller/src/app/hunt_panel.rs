@@ -117,14 +117,16 @@ pub(super) struct EstimateCache {
     active_species_id: Option<u64>,
     active_max_hp: Option<u64>,
     bonus_signature: [u64;12],
-    geo_ptr: usize,
+    geo_revisions:Option<Arc<std::collections::BTreeMap<String,u64>>>,
+    geometry_dirty:std::collections::BTreeSet<String>,
+    full_required:bool,
     live: bool,
     refreshed: Option<Instant>,
     failed_at:Option<Instant>,
     last_archived:Option<(String,Instant)>,
-    // A result receiver stays owned until its calculation exits, even when
-    // newer inputs invalidate it. This prevents overlapping simulation loops.
-    pending: Option<(u64,std::sync::mpsc::Receiver<
+    // Retain the receiver until the old calculation exits. Each worker
+    // reports whether its result is a full forecast or a geometry-only patch.
+    pending: Option<(u64,bool,std::sync::mpsc::Receiver<
         std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>)>,
     generation:u64,
     cancellation:Arc<std::sync::atomic::AtomicU64>,
@@ -137,14 +139,10 @@ impl EstimateCache {
         use std::sync::mpsc::TryRecvError;
         let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
         let reference_ptr=reference.map_or(0,|r|Arc::as_ptr(r) as usize);
-        let geo_ptr=Arc::as_ptr(&view.geo_distances) as usize;
         let active_signature=view.active_pokemon.as_ref().map(|p|
             (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny,
                 aoe_enabled,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
                 p.tm_elemental.clone(),p.types.clone()));
-        // XP and gross-gold modifiers change independently of the lead,
-        // catalog and combat geometry. Recompute rankings immediately on
-        // activation, expiration or any server-reported bonus adjustment.
         let b=&view.bonuses;
         let bonus_signature=[
             b.vip_active as u64,b.guild_boost_active as u64,
@@ -155,22 +153,39 @@ impl EstimateCache {
             b.delayed_xp_multiplier.to_bits(),b.extra_loot_pct.to_bits(),
             b.guild_known as u64,
         ];
-        // Only the inputs actually read by estimate_with_aoe invalidate its
-        // results. Changing hunts or receiving a combat receipt does not
-        // change the modeled throughput for any destination.
         let active_species_id=view.active_pokemon.as_ref().and_then(|p|p.species_id);
         let active_max_hp=view.active_pokemon.as_ref().and_then(|p|p.max_hp);
-        let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
-            || self.reference_ptr!=reference_ptr || self.geo_ptr!=geo_ptr || self.live!=live
-            || self.active_signature!=active_signature
-            || self.active_species_id!=active_species_id
-            || self.active_max_hp!=active_max_hp
-            || self.bonus_signature!=bonus_signature;
-        if changed {
+        // Catalog/lead/bonus changes affect all forecasts. Geometry changes
+        // affect only the destinations whose full-wave revision advanced.
+        let full_changed=self.account!=Some(account) ||
+            self.catalog_ptr!=catalog_ptr ||
+            self.reference_ptr!=reference_ptr || self.live!=live ||
+            self.active_signature!=active_signature ||
+            self.active_species_id!=active_species_id ||
+            self.active_max_hp!=active_max_hp ||
+            self.bonus_signature!=bonus_signature;
+        let mut changed_geometry=std::collections::BTreeSet::new();
+        if self.geo_revisions.as_ref().is_none_or(|old|
+            !Arc::ptr_eq(old,&view.geo_revisions)) {
+            let prior=self.geo_revisions.as_deref();
+            for (slug,revision) in view.geo_revisions.iter() {
+                if prior.and_then(|previous|previous.get(slug))!=Some(revision) {
+                    changed_geometry.insert(slug.clone());
+                }
+            }
+            if let Some(prior)=prior {
+                for slug in prior.keys() {
+                    if !view.geo_revisions.contains_key(slug) {
+                        changed_geometry.insert(slug.clone());
+                    }
+                }
+            }
+            self.geo_revisions=Some(Arc::clone(&view.geo_revisions));
+        }
+        if full_changed || !changed_geometry.is_empty() {
             self.account=Some(account);
             self.catalog_ptr=catalog_ptr;
             self.reference_ptr=reference_ptr;
-            self.geo_ptr=geo_ptr;
             self.active_signature=active_signature;
             self.active_species_id=active_species_id;
             self.active_max_hp=active_max_hp;
@@ -178,52 +193,85 @@ impl EstimateCache {
             self.live=live;
             self.refreshed=None;
             self.failed_at=None;
-            self.last_archived=None;
+            // Keep the current-hunt archival throttle when only an unrelated
+            // destination learned new geometry.
+            if full_changed || self.last_archived.as_ref()
+                .is_some_and(|(slug,_)|changed_geometry.contains(slug)) {
+                self.last_archived=None;
+            }
             self.generation=self.generation.wrapping_add(1);
             self.cancellation.store(self.generation,std::sync::atomic::Ordering::Release);
-            // Keep the receiver until its worker has actually exited. The
-            // worker checks the generation between hunts and stops early.
-            self.values.clear();
+            if full_changed {
+                self.values.clear();
+                self.geometry_dirty.clear();
+                self.full_required=true;
+            } else {
+                for slug in changed_geometry {
+                    self.values.remove(&slug);
+                    self.geometry_dirty.insert(slug);
+                }
+            }
         }
-        let complete=self.pending.as_ref().map(|(generation,rx)|
-            (*generation,rx.try_recv()));
+        // A canceled worker is never published; do not spawn its replacement
+        // until the old receiver has completed or disconnected.
+        let complete=self.pending.as_ref().map(|(generation,full,rx)|
+            (*generation,*full,rx.try_recv()));
         match complete {
-            Some((generation,Ok(values)))=>{
+            Some((generation,full,Ok(values)))=>{
                 self.pending=None;
                 if generation==self.generation {
-                    self.values=values;
+                    if full {
+                        self.values=values;
+                        self.full_required=false;
+                        self.geometry_dirty.clear();
+                    } else {
+                        for (slug,forecast) in values {
+                            self.geometry_dirty.remove(&slug);
+                            self.values.insert(slug,forecast);
+                        }
+                    }
                     self.refreshed=Some(Instant::now());
                     self.failed_at=None;
                 }
             }
-            Some((generation,Err(TryRecvError::Disconnected)))=>{
+            Some((generation,_,Err(TryRecvError::Disconnected)))=>{
                 self.pending=None;
-                // An obsolete worker was canceled, not a failed forecast.
                 if generation==self.generation {
                     self.failed_at=Some(Instant::now());
                 }
             }
             _=>{}
         }
-        // A completed generation remains valid until a relevant input changes.
-        // Do not launch another full combat simulation on a 20-second timer.
         if !live || self.pending.is_some() || self.refreshed.is_some() ||
             self.failed_at.is_some_and(|at|at.elapsed()<Duration::from_secs(20)) {
             return;
         }
-        let Some(reference)=reference else {return};
+        let Some(reference)=reference else{return};
+        // Some obsolete geometry may refer to a hunt removed from the
+        // catalog. No worker should be scheduled for a non-existent target.
+        self.geometry_dirty.retain(|slug|
+            view.hunts.iter().any(|hunt|hunt.slug==*slug));
+        if !self.full_required && self.geometry_dirty.is_empty() {
+            self.refreshed=Some(Instant::now());
+            return;
+        }
         self.failed_at=None;
+        let full=self.full_required;
+        let affected=if full {None} else {Some(self.geometry_dirty.clone())};
         let guide=Arc::clone(reference);
         let snapshot=view.clone();
         let generation=self.generation;
         let cancellation=Arc::clone(&self.cancellation);
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
-        self.pending=Some((generation,rx));
+        self.pending=Some((generation,full,rx));
         std::thread::spawn(move ||{
             let mut values=std::collections::BTreeMap::new();
-            for hunt in snapshot.hunts.iter(){
+            for hunt in snapshot.hunts.iter() {
                 if cancellation.load(std::sync::atomic::Ordering::Acquire)!=generation {
                     return;
+                }
+                if affected.as_ref().is_some_and(|slugs|!slugs.contains(&hunt.slug)) {
+                    continue;
                 }
                 values.insert(hunt.slug.clone(),
                     native_atlas::estimate_with_aoe(&snapshot,hunt,&guide,aoe_enabled));
@@ -247,7 +295,6 @@ impl EstimateCache {
 }
 impl Drop for EstimateCache {
     fn drop(&mut self) {
-        // Closing a panel/account invalidates the last job too.
         self.cancellation.store(u64::MAX,std::sync::atomic::Ordering::Release);
     }
 }
@@ -3493,7 +3540,7 @@ mod tests {
         cache.refresh(0,&view,Some(&guide),true,false);
         // Simulate a slow in-flight worker whose receiver cannot complete.
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
-        cache.pending=Some((cache.generation,rx));
+        cache.pending=Some((cache.generation,true,rx));
         cache.refreshed=None;
         let previous=cache.generation;
         view.bonuses.vip_active=true;
@@ -3511,6 +3558,55 @@ mod tests {
             "an obsolete generation must not publish its result");
         assert_eq!(cache.pending.as_ref().unwrap().0,cache.generation,
             "newest request starts only after the previous worker finishes");
+    }
+    #[test]
+    fn geometry_revision_recomputes_only_its_destination() {
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![
+            native_hunts::HuntEntry{slug:"a".into(),..Default::default()},
+            native_hunts::HuntEntry{slug:"b".into(),..Default::default()},
+        ]);
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        cache.full_required=false;
+        cache.refreshed=Some(Instant::now());
+        cache.values.insert("a".into(),Some(simulated_forecast(100.0,false)));
+        cache.values.insert("b".into(),Some(simulated_forecast(250.0,false)));
+        view.geo_revisions=Arc::new(std::collections::BTreeMap::from([
+            ("a".into(),1),("b".into(),1)]));
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.get("b").is_none(),
+            "the first geometry sample affects both destinations");
+        assert!(cache.geometry_dirty.contains("a"));
+        assert!(cache.geometry_dirty.contains("b"));
+        cache.geometry_dirty.clear();
+        cache.values.insert("a".into(),Some(simulated_forecast(100.0,false)));
+        cache.values.insert("b".into(),Some(simulated_forecast(250.0,false)));
+        cache.refreshed=Some(Instant::now());
+        let mut next=(*view.geo_revisions).clone();
+        next.insert("a".into(),2);
+        view.geo_revisions=Arc::new(next);
+        cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.geometry_dirty.len(),1);
+        assert!(cache.geometry_dirty.contains("a"));
+        assert!(cache.get("a").is_none());
+        assert_eq!(cache.get("b").unwrap().kills_h,250.0,
+            "unaffected forecasts must remain cached");
+        // A completed geometry-only worker patches one row, not the full map.
+        let (tx,rx)=std::sync::mpsc::sync_channel(1);
+        cache.pending=Some((cache.generation,false,rx));
+        tx.send(std::collections::BTreeMap::from([
+            ("a".to_owned(),Some(simulated_forecast(175.0,false)))
+        ])).unwrap();
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.geometry_dirty.is_empty());
+        assert_eq!(cache.get("a").unwrap().kills_h,175.0);
+        assert_eq!(cache.get("b").unwrap().kills_h,250.0);
+        let refreshed=cache.refreshed;
+        view.geo_revisions=Arc::new((*view.geo_revisions).clone());
+        cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.refreshed,refreshed,
+            "a new map allocation without version changes is not invalidation");
     }
     #[test]
     fn combat_cache_does_not_recompute_by_age_or_hunt_switch(){
