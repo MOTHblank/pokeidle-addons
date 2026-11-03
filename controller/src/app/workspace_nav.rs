@@ -390,7 +390,15 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 // above a responsive grid of account cards. Details replace
                 // the grid rather than leaving an empty two-column workspace.
                 if app.workspace.selected_details.is_none() {
-                    let totals = collect_overview_totals(app, &profiles);
+                    // Freeze one display sample per enabled account for this
+                    // frame. Totals, cards and status widgets share it, rather
+                    // than each cloning a large live hunt/roster snapshot.
+                    let samples: [Option<OverviewAccountSample>; 4] =
+                        std::array::from_fn(|index| {
+                            app.accounts[index].enabled.then(||
+                                OverviewAccountSample::capture(&app.games[index]))
+                        });
+                    let totals = collect_overview_totals(app, &profiles, &samples);
                     draw_overview_totals(ui, &totals);
                     ui.add_space(12.0);
                     let gap = 12.0;
@@ -406,7 +414,10 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(card_width, 0.0),
                                     Layout::top_down(Align::Min),
-                                    |ui| draw_overview_card(app, ui, *index, card_width),
+                                    |ui| draw_overview_card(
+                                        app, ui, *index, card_width,
+                                        samples[*index].as_ref().expect("enabled account sampled"),
+                                    ),
                                 );
                             }
                         });
