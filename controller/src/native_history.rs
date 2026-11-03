@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_DAYS: u64 = 90;
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
 const FINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 // The game worker never queues snapshots or serialized JSON. A single
 // generation counter represents all pending writes; bursts coalesce into
@@ -43,6 +44,7 @@ impl WriteSignal {
         self.wake.notify_one();
         Ok(sequence)
     }
+    #[cfg(test)]
     fn wait_written(&self,sequence:u64,timeout:Duration)->Result<(),String> {
         let state=self.state.lock()
             .map_err(|_|"History save coordinator unavailable".to_owned())?;
@@ -56,6 +58,7 @@ impl WriteSignal {
     }
     // Check infrequently from the socket worker; failed writes are retried
     // even if no new battle events arrive. Never stack requests during I/O.
+    #[cfg(test)]
     fn in_flight(&self)->Option<u64> {
         self.state.lock().ok().and_then(|state|
             (state.requested>state.completed).then_some(state.requested))
@@ -697,33 +700,19 @@ impl HistoryRecorder {
         if !force && self.last_flush.elapsed()<SAVE_INTERVAL {return}
         let retry=self.writer.as_ref().is_some_and(|writer|writer.retry_due());
         if !self.dirty && !retry {
-            // A forced disconnect/shutdown must never write an unchanged full
-            // document. It only waits for a previously requested save.
-            if force {
-                if let Some(writer)=self.writer.as_ref() {
-                    if let Some(sequence)=writer.in_flight() {
-                        if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
-                            if let Ok(mut snapshot)=self.shared.try_lock() {
-                                snapshot.save_error=Some(error);
-                            }
-                        }
-                    }
-                }
-            }
+            // Disconnect/Stop never queues an unchanged full document.
+            // Outstanding writes finish on the detached history writer.
             self.last_flush=Instant::now();
             return;
         }
         if let Some(writer)=self.writer.as_ref() {
             match writer.request() {
-                Ok(sequence)=>{
+                Ok(_sequence)=>{
+                    // Even a forced final flush is only a handoff. The socket
+                    // worker must never wait for a filesystem acknowledgement.
+                    // The detached writer retains this profile's file lease
+                    // until its last requested generation has been written.
                     self.dirty=false;
-                    if force {
-                        if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
-                            if let Ok(mut snapshot)=self.shared.try_lock() {
-                                snapshot.save_error=Some(error);
-                            }
-                        }
-                    }
                 }
                 Err(error)=>{
                     if let Ok(mut snapshot)=self.shared.try_lock() {
@@ -852,8 +841,8 @@ mod tests {
             drop(recorder);
             dropped_tx.send(()).unwrap();
         });
-        dropped_rx.recv_timeout(Duration::from_secs(3))
-            .expect("recorder Drop must honor its bounded final-write wait");
+        dropped_rx.recv_timeout(Duration::from_millis(250))
+            .expect("recorder Drop must not wait on the blocked history writer");
         dropping.join().unwrap();
         let (acquired_tx,acquired_rx)=mpsc::channel();
         let next_gate=Arc::clone(&gate);
@@ -914,6 +903,40 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
     #[test]
+    fn forced_dirty_flush_hands_off_without_waiting_for_the_writer() {
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path=std::env::temp_dir().join(format!(
+            "moth-history-nonblocking-flush-{}-{id}.json",std::process::id()));
+        let shared=Arc::new(Mutex::new(HistorySnapshot{
+            owner:"Test".into(),..Default::default()
+        }));
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .unwrap();
+        let mut held=shared.lock().unwrap();
+        held.lifetime.kills=31;
+        let mut recorder=HistoryRecorder {
+            shared:Arc::clone(&shared),last_hunt:None,last_kill:None,
+            last_pruned_day:unix_day(),dirty:true,
+            last_flush:Instant::now()-SAVE_INTERVAL,
+            last_lock_warning:None,writer:Some(Arc::clone(&writer)),
+            _lease:Arc::new(Arc::new(HistoryGate::default()).acquire()),
+        };
+        let started=Instant::now();
+        recorder.maybe_flush(true);
+        assert!(started.elapsed()<Duration::from_millis(250),
+            "force must only signal the writer, not wait for the locked snapshot");
+        assert_eq!(writer.in_flight(),Some(1));
+        drop(held);
+        writer.wait_written(1,FINAL_WRITE_TIMEOUT).unwrap();
+        drop(recorder);
+        writer.stop_and_join();
+        let raw=fs::read_to_string(&path).unwrap();
+        let recovered=HistorySnapshot::from_value(
+            &serde_json::from_str::<Value>(&raw).unwrap(),"Test").unwrap();
+        assert_eq!(recovered.lifetime.kills,31);
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn forced_clean_flush_does_not_queue_duplicate_history_snapshots() {
         let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path=std::env::temp_dir().join(
@@ -936,9 +959,11 @@ mod tests {
         recorder.maybe_flush(true);
         recorder.maybe_flush(true);
         assert_eq!(writer.state.lock().unwrap().requested,1,
-            "disconnect and Drop must not repeat an acknowledged save");
+            "disconnect must not duplicate the already queued final save");
+        writer.wait_written(1,FINAL_WRITE_TIMEOUT).unwrap();
         drop(recorder);
         assert_eq!(writer.state.lock().unwrap().requested,1);
+        writer.stop_and_join();
         fs::remove_file(path).unwrap();
     }
     #[test]
