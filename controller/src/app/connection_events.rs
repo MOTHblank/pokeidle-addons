@@ -58,11 +58,12 @@ impl ControllerApp {
                     let tx=self.capture_save_tx.clone();
                     let generation_state=Arc::clone(&self.capture_generations[index]);
                     let generation=generation_state.load(Ordering::Acquire);
+                    let updater=native.capture_settings_updater();
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
-                                crate::native_auth::set_capture_settings(
-                                    profile,&next,&generation_state,generation)))
+                                crate::native_auth::persist_and_apply_capture_settings(
+                                    profile,&next,&generation_state,generation,&updater)))
                             .unwrap_or_else(|_|
                                 Err("Encrypted restock save panicked".into()));
                         let _=tx.send(CaptureSavedEvent {
@@ -91,12 +92,8 @@ impl ControllerApp {
             }
             match event.result {
                 Ok(()) => {
-                    if let Some(native)=self.games[event.index].native.as_ref() {
-                        if let Err(error)=native.set_capture_settings(event.config.clone()) {
-                            self.capture_save_error[event.index]=Some(error);
-                            continue;
-                        }
-                    }
+                    // The encrypted save worker has already applied the
+                    // settings to the native engine; this is UI-only feedback.
                     reconcile_capture_draft(
                         &mut self.capture_drafts[event.index],&event.config,event.origin
                     );

@@ -187,6 +187,23 @@ pub fn set_capture_settings(profile: GameProfile,
     save(profile,&saved)
 }
 
+/// Persist to the OS vault, then apply the confirmed preferences to the live
+/// worker directly. UI repaint/visibility only controls acknowledgement text,
+/// never when Auto Catch or Restock starts using a successful save.
+pub fn persist_and_apply_capture_settings(
+    profile: GameProfile,
+    config: &crate::native_capture_config::CatchSettings,
+    generation: &std::sync::atomic::AtomicU64,
+    expected: u64,
+    updater: &crate::native_background::CaptureSettingsUpdater,
+) -> Result<(), String> {
+    set_capture_settings(profile,config,generation,expected)?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Capture settings save canceled: session changed".into());
+    }
+    updater.apply(config.clone())
+}
+
 #[cfg(windows)]
 mod platform {
     use super::*;
