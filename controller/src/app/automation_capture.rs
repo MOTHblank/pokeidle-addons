@@ -95,6 +95,8 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                     } else {
                         app.capture_save_error[index]=None;
                         app.capture_save_busy[index]=true;
+                        app.capture_save_ids[index]=app.capture_save_ids[index].wrapping_add(1);
+                        let request_id=app.capture_save_ids[index];
                         let tx=app.capture_save_tx.clone();
                         let generation_state=Arc::clone(&app.capture_generations[index]);
                         let generation=generation_state.load(Ordering::Acquire);
@@ -106,7 +108,8 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                                         profile,&next,&generation_state,generation,&updater)))
                                 .unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                             let _=tx.send(CaptureSavedEvent{
-                                index,generation,config:next,origin:CaptureSaveOrigin::Toggle,result
+                                index,generation,request_id,config:next,
+                                origin:CaptureSaveOrigin::Toggle,result
                             });
 
                         });
@@ -308,6 +311,8 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                 } else {
                     app.capture_save_error[index]=None;
                     app.capture_save_busy[index]=true;
+                    app.capture_save_ids[index]=app.capture_save_ids[index].wrapping_add(1);
+                    let request_id=app.capture_save_ids[index];
                     let tx=app.capture_save_tx.clone();
                     let generation_state=Arc::clone(&app.capture_generations[index]);
                     let generation=generation_state.load(Ordering::Acquire);
@@ -319,7 +324,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                                     profile,&to_save,&generation_state,generation,&updater))
                         ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                         let _=tx.send(CaptureSavedEvent{
-                            index,generation,config:to_save,
+                            index,generation,request_id,config:to_save,
                             origin:CaptureSaveOrigin::Editor,result
                         });
                     });
