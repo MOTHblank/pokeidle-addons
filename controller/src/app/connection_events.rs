@@ -26,7 +26,7 @@ impl ControllerApp {
     // Only this central event pump starts writes, not whichever page is visible.
     // A new choice made during an earlier save is automatically processed on
     // its acknowledgement, even if the picker has since been closed.
-    fn flush_queued_restock_saves(&mut self) {
+    fn flush_queued_restock_saves(&mut self, ctx:&egui::Context) {
         for index in 0..self.games.len() {
             if !self.restock_dirty[index] || self.capture_save_busy[index] { continue; }
             let Some(native)=self.games[index].native.as_ref() else {continue};
@@ -49,6 +49,7 @@ impl ControllerApp {
                     self.capture_save_busy[index]=true;
                     let profile=self.games[index].profile;
                     let tx=self.capture_save_tx.clone();
+                    let ctx=ctx.clone();
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
@@ -58,13 +59,16 @@ impl ControllerApp {
                         let _=tx.send(CaptureSavedEvent {
                             index,config:next,origin:CaptureSaveOrigin::Restock,result
                         });
+                        // A completed vault write immediately unlocks any queued
+                        // edit; do not wait for the background repaint timer.
+                        ctx.request_repaint();
                     });
                 }
             }
         }
     }
 
-    pub(super) fn refresh_processes(&mut self) {
+    pub(super) fn refresh_processes(&mut self, ctx:&egui::Context) {
         while let Ok(event)=self.capture_save_rx.try_recv() {
             self.capture_save_busy[event.index]=false;
             match event.result {
@@ -97,7 +101,7 @@ impl ControllerApp {
         }
         // Dispatch any staged restock save after processing previous
         // acknowledgements, regardless of the currently selected UI page.
-        self.flush_queued_restock_saves();
+        self.flush_queued_restock_saves(ctx);
         while let Ok(result)=self.inventory_catalog_rx.try_recv() {
             self.inventory_catalog_busy=false;
             match result {
