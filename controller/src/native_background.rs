@@ -646,6 +646,17 @@ fn publish_kick_roster(
     }
 }
 
+// A forecast is only meaningful while the server confirms an ordinary hunt,
+// a complete catalog and a selected Pokémon. Never model a Center or a
+// temporary/no-lead screen as a zero-throughput combat session.
+fn current_background_hunt(view:&HuntView)->Option<crate::native_hunts::HuntEntry> {
+    if !view.catalog_ready || view.in_center || view.active_pokemon.is_none() {
+        return None;
+    }
+    let slug=view.hunt_slug.as_deref()?;
+    view.hunts.iter().find(|hunt|hunt.slug==slug).cloned()
+}
+
 fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
     desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>,
@@ -1023,45 +1034,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     }
                     history_recorder.maybe_flush(false);
 
-                    // Not part of market/capture dispatch: only check the
-                    // schedule when due. A single current-hunt simulation
-                    // runs off-thread and submits through the history queue.
-                    // Until Atlas has been opened there are no extra worker
-                    // threads, reference downloads or combat calculations.
-                    if Instant::now()>=next_background_forecast {
-                        next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;
-                        let reference=background_forecast_reference.lock().ok()
-                            .and_then(|current|current.clone());
-                        if let Some((reference,aoe))=reference {
-                            let view=&hunt_intel.view;
-                            if view.catalog_ready && !view.in_center &&
-                                view.active_pokemon.is_some() {
-                                if let Some(hunt)=view.hunt_slug.as_ref().and_then(|slug|
-                                    view.hunts.iter().find(|hunt|&hunt.slug==slug)) {
-                                    let hunt=hunt.clone();
-                                    let view=view.clone();
-                                    let tx=background_forecast_tx.clone();
-                                    let _=thread::Builder::new()
-                                        .name("moth-current-hunt-forecast".into())
-                                        .spawn(move||{
-                                            let Some(model)=native_atlas::estimate_with_aoe(
-                                                &view,&hunt,&reference,aoe) else {return};
-                                            let Some(record)=HistoryForecast::now(
-                                                &hunt.slug,model.trainer_xp_h,
-                                                model.pokemon_xp_h,model.kills_h,
-                                                model.calibrated) else {return};
-                                            // No blocking, and dropping a full queue is
-                                            // safer than delaying gameplay or market buys.
-                                            let _=tx.try_send(record);
-                                        });
-                                }
-                            }
-                        }
-                    }
                     if last_hunt_publish.elapsed() >= Duration::from_secs(1) {
                         if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                         last_hunt_publish = Instant::now();
-                    }
+                        // Not part of market/capture dispatch: only check the                        // schedule when due. A single current-hunt simulation                        // runs off-thread and submits through the history queue.                        // Until Atlas has been opened there are no extra worker                        // threads, reference downloads or combat calculations.                        if Instant::now()>=next_background_forecast {                            next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;                            let reference=background_forecast_reference.lock().ok()                                .and_then(|current|current.clone());                            if let Some((reference,aoe))=reference {                                let view=&hunt_intel.view;                                if let Some(hunt)=current_background_hunt(view) {                                        let view=view.clone();                                        let tx=background_forecast_tx.clone();                                        let _=thread::Builder::new()                                            .name("moth-current-hunt-forecast".into())                                            .spawn(move||{                                                let Some(model)=native_atlas::estimate_with_aoe(                                                    &view,&hunt,&reference,aoe) else {return};                                                let Some(record)=HistoryForecast::now(                                                    &hunt.slug,model.trainer_xp_h,                                                    model.pokemon_xp_h,model.kills_h,                                                    model.calibrated) else {return};                                                // No blocking, and dropping a full queue is                                                // safer than delaying gameplay or market buys.                                                let _=tx.try_send(record);                                            });                                }                            }                        }                    }
                     // These snapshots are for egui, not for purchasing or capturing.
                     // Do not rebuild rule rows and clone market state 16 times/sec.
                     if last_status_publish.elapsed() >= Duration::from_secs(1) {
@@ -1257,6 +1233,20 @@ mod tests {
         let reference:Arc<Mutex<Option<(Arc<AtlasReference>,bool)>>> =
             Arc::new(Mutex::new(None));
         assert!(reference.lock().unwrap().is_none());
+    }
+    #[test]
+    fn current_hunt_forecasts_skip_center_and_incomplete_teams() {
+        let mut view=HuntView::default();
+        view.hunt_slug=Some("training".into());
+        view.hunts=Arc::new(vec![crate::native_hunts::HuntEntry {
+            slug:"training".into(), ..Default::default()
+        }]);
+        view.catalog_ready=true;
+        assert!(current_background_hunt(&view).is_none());
+        view.active_pokemon=Some(crate::native_hunts::PokemonInfo::default());
+        assert_eq!(current_background_hunt(&view).unwrap().slug,"training");
+        view.in_center=true;
+        assert!(current_background_hunt(&view).is_none());
     }
     #[test]
     fn connection_setup_has_time_for_server_handshake() {
