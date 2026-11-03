@@ -81,7 +81,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
             ui.add_space(7.0);
             ui.label(format!("{}: {}",tr("Boss status"),
-                if view.phase.is_empty() { tr("Idle") } else { &view.phase }));
+                if view.phase.is_empty() { tr("Idle") } else { tr(&view.phase) }));
             if let Some(original) = view.original_hunt.as_deref() {
                 ui.label(format!("{}: {}",tr("Return destination"),original));
             }
@@ -90,7 +90,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     view.auto_key.as_deref().unwrap_or("—")));
             }
             if let Some(error) = view.warning.as_deref() {
-                ui.colored_label(super::WARN,error);
+                ui.colored_label(super::WARN,tr(error));
             }
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(view.busy || view.auto,
