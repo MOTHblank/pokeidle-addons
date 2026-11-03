@@ -5,20 +5,20 @@ use super::*;
 impl ControllerApp {
     pub(super) fn start_native_handoff(&mut self, profile: GameProfile) {
         let index = profile.index();
-        if self.native_handoff_busy[index] { return; }
-        let Some(monitor) = self.games[index].monitor.clone() else {
+        if self.runtimes[index].session.native_handoff_busy { return; }
+        let Some(monitor) = self.runtimes[index].game.monitor.clone() else {
             self.set_status("Open Firefox and sign in to PokéIdle first", true);
             return;
         };
-        self.native_handoff_busy[index] = true;
-        self.native_handoff_last_attempt[index] = Some(Instant::now());
+        self.runtimes[index].session.native_handoff_busy = true;
+        self.runtimes[index].session.native_handoff_last_attempt = Some(Instant::now());
         logging::info(&format!(
             "{} capturing native game + Twitch IRC session via Firefox BiDi",
             self.account_name(profile)));
         self.set_status(format!("{}: signing in to PokéIdle and Twitch",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
-        let generation_state=Arc::clone(&self.auth_generations[index]);
+        let generation_state=Arc::clone(&self.runtimes[index].session.auth_generation);
         let generation=generation_state.load(Ordering::Acquire);
         let result = std::thread::Builder::new()
             .name(format!("moth-handoff-{}", profile.name()))
@@ -41,7 +41,7 @@ impl ControllerApp {
                 let _ = tx.send(NativeHandoffEvent { index, generation, result, cache_warning });
             });
         if let Err(error) = result {
-            self.native_handoff_busy[index] = false;
+            self.runtimes[index].session.native_handoff_busy = false;
             self.set_status(format!("Could not finish sign-in: {error}"), true);
         }
     }
@@ -52,21 +52,21 @@ impl ControllerApp {
 
     pub(super) fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
-        if self.games[index].is_running() || self.cached_native_busy[index] ||
-            self.native_handoff_busy[index] {
+        if self.runtimes[index].game.is_running() || self.runtimes[index].session.cached_native_busy ||
+            self.runtimes[index].session.native_handoff_busy {
             return;
         }
         // A new launch must not accept completion events from the old launch.
-        self.auth_generations[index].fetch_add(1,Ordering::AcqRel);
-        self.games[index].headless = headless;
-        self.games[index].browser_only = false;
-        if self.require_browser_login[index] {
+        self.runtimes[index].session.auth_generation.fetch_add(1,Ordering::AcqRel);
+        self.runtimes[index].game.headless = headless;
+        self.runtimes[index].game.browser_only = false;
+        if self.runtimes[index].session.require_browser_login {
             self.launch_firefox_bootstrap(profile, false);
             return;
         }
-        self.cached_native_busy[index] = true;
+        self.runtimes[index].session.cached_native_busy = true;
         let tx = self.cached_native_tx.clone();
-        let generation_state=Arc::clone(&self.auth_generations[index]);
+        let generation_state=Arc::clone(&self.runtimes[index].session.auth_generation);
         let generation=generation_state.load(Ordering::Acquire);
         let started = std::thread::Builder::new()
             .name(format!("moth-cache-{}", profile.name()))
@@ -109,8 +109,8 @@ impl ControllerApp {
                 });
             });
         if let Err(error) = started {
-            self.cached_native_busy[index] = false;
-            self.require_browser_login[index] = true;
+            self.runtimes[index].session.cached_native_busy = false;
+            self.runtimes[index].session.require_browser_login = true;
             self.set_status(format!("Saved login could not be used: {error}"), true);
             self.launch_firefox_bootstrap(profile, false);
         }
@@ -121,7 +121,7 @@ impl ControllerApp {
     pub(super) fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
-        if self.games[index].is_running() { return; }
+        if self.runtimes[index].game.is_running() { return; }
 
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
@@ -139,9 +139,9 @@ impl ControllerApp {
                 // Moth Firefox profile alive. Attach to its existing BiDi
                 // endpoint and complete native handoff; never spawn another
                 // Firefox on the same profile or kill it before Rust is ready.
-                self.games[index].orphaned_pid = Some(pid);
-                if self.games[index].monitor.is_none() {
-                    self.games[index].monitor = Some(MonitorHandle::start(
+                self.runtimes[index].game.orphaned_pid = Some(pid);
+                if self.runtimes[index].game.monitor.is_none() {
+                    self.runtimes[index].game.monitor = Some(MonitorHandle::start(
                         config.remote_debug_port, headless));
                 }
                 logging::info(&format!(
@@ -161,10 +161,10 @@ impl ControllerApp {
             }
         }
 
-        self.games[index].child = None;
-        self.games[index].monitor = None;
-        self.games[index].orphaned_pid = None;
-        self.games[index].headless = headless;
+        self.runtimes[index].game.child = None;
+        self.runtimes[index].game.monitor = None;
+        self.runtimes[index].game.orphaned_pid = None;
+        self.runtimes[index].game.headless = headless;
 
         logging::info(&format!(
             "launching {} with Firefox profile {} on BiDi port {}",
@@ -176,8 +176,8 @@ impl ControllerApp {
         match firefox::launch(&config, headless) {
             Ok((child, monitor)) => {
                 let pid = child.id();
-                self.games[index].child = Some(child);
-                self.games[index].monitor = Some(monitor);
+                self.runtimes[index].game.child = Some(child);
+                self.runtimes[index].game.monitor = Some(monitor);
                 self.set_status(
                     format!(
                         "{}: Firefox started in {} for sign-in",
@@ -207,15 +207,15 @@ impl ControllerApp {
 
         // A handoff worker might already be closing the Firefox game tab or
         // shutting down its process. Never race it with a new browser session.
-        if self.native_verifying[index] || self.games[index].handoff_closing {
+        if self.runtimes[index].session.native_verifying || self.runtimes[index].game.handoff_closing {
             self.set_status(format!(
                 "{account_name}: Sign-in is still finishing. Open Firefox after it completes."
             ), true);
             return;
         }
 
-        if self.games[index].browser_only && !self.games[index].headless &&
-            self.games[index].is_running() {
+        if self.runtimes[index].game.browser_only && !self.runtimes[index].game.headless &&
+            self.runtimes[index].game.is_running() {
             self.set_status(format!("{account_name}: Firefox is already open."), false);
             return;
         }
@@ -223,7 +223,7 @@ impl ControllerApp {
         // Stop native game/IRC or an authentication-only Firefox first. In
         // particular, don't run native and Firefox on the same game account.
         if !self.stop_one(profile) { return; }
-        self.games[index].browser_only = true;
+        self.runtimes[index].game.browser_only = true;
         self.launch_firefox_bootstrap(profile, false);
     }
 
@@ -232,8 +232,8 @@ impl ControllerApp {
         // session.new. Only an explicit user action restarts this profile;
         // never interrupt a running game automatically on telemetry failure.
         let index = Self::game_index(profile);
-        let headless = self.games[index].headless;
-        let browser_only = self.games[index].browser_only;
+        let headless = self.runtimes[index].game.headless;
+        let browser_only = self.runtimes[index].game.browser_only;
         logging::warn(&format!(
             "{} repairing an exhausted BiDi session by user-requested Firefox restart",
             self.account_name(profile)
@@ -242,7 +242,7 @@ impl ControllerApp {
             if browser_only {
                 // A manual Firefox launch must remain a manual Firefox launch
                 // even after an explicit monitor repair/restart.
-                self.games[index].browser_only = true;
+                self.runtimes[index].game.browser_only = true;
                 self.launch_firefox_bootstrap(profile, false);
             } else {
                 self.launch_one_mode(profile, headless);
@@ -257,20 +257,20 @@ impl ControllerApp {
         // A stopped account must not keep an independent Kick worker alive.
         self.stop_kick_account(index);
         let account_name = self.account_name(profile);
-        if self.games[index].handoff_closing {
+        if self.runtimes[index].game.handoff_closing {
             // The dedicated shutdown worker already owns and is closing the
             // Firefox process. Do not start native mode after explicit Stop.
-            self.native_close_cancelled[index] = true;
+            self.runtimes[index].session.native_close_cancelled = true;
             self.set_status(format!(
                 "{}: stopping sign-in", account_name), false);
             return true;
         }
         // Cancel in-flight cache lookups and browser handoffs. Results from
         // canceled workers are ignored even if a Stop is pressed mid-login.
-        self.cached_native_busy[index] = false;
-        self.native_handoff_busy[index] = false;
-        self.native_verifying[index] = false;
-        let slot = &mut self.games[index];
+        self.runtimes[index].session.cached_native_busy = false;
+        self.runtimes[index].session.native_handoff_busy = false;
+        self.runtimes[index].session.native_verifying = false;
+        let slot = &mut self.runtimes[index].game;
         if let Some(native) = slot.native.take() {
             native.stop();
             // A failed browser cleanup can leave an authenticated native game
@@ -427,7 +427,7 @@ impl ControllerApp {
         // A native handoff still owns the profile until its cleanup finishes.
         // stop_one intentionally cancels it asynchronously, so do not launch
         // another Firefox against the same locked profile during that window.
-        if self.native_verifying[index] || self.games[index].handoff_closing {
+        if self.runtimes[index].session.native_verifying || self.runtimes[index].game.handoff_closing {
             self.set_status(format!(
                 "{account_name}: Sign-in is still finishing. Try again after it completes."
             ), true);
@@ -452,7 +452,7 @@ impl ControllerApp {
         // active Firefox process or debugger with either sign-in provider.
         match firefox::find_profile_process(&config) {
             Ok(Some(pid)) => {
-                self.games[index].orphaned_pid = Some(pid);
+                self.runtimes[index].game.orphaned_pid = Some(pid);
                 self.set_status(
                     format!("{}: Firefox already uses this profile (PID {}). Use Stop before launching.", account_name, pid),
                     true,
@@ -483,15 +483,15 @@ impl ControllerApp {
         match firefox::launch_unmonitored(&config, url) {
             Ok(child) => {
                 let pid = child.id();
-                self.games[index].child = Some(child);
-                self.games[index].monitor = None;
-                self.games[index].orphaned_pid = None;
-                self.games[index].browser_only = true;
-                self.games[index].headless = false;
+                self.runtimes[index].game.child = Some(child);
+                self.runtimes[index].game.monitor = None;
+                self.runtimes[index].game.orphaned_pid = None;
+                self.runtimes[index].game.browser_only = true;
+                self.runtimes[index].game.headless = false;
                 // After the user closes this window, refresh browser auth
                 // before returning to native mode instead of trusting stale
                 // cached Twitch or game login credentials.
-                self.require_browser_login[index] = true;
+                self.runtimes[index].session.require_browser_login = true;
                 logging::info(&format!(
                     "{} Firefox spawned for {} sign-in without remote debugging (PID {})",
                     account_name, service, pid
