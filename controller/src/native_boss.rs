@@ -69,6 +69,7 @@ pub struct BossView {
     pub auto: bool,
     pub auto_key: Option<String>,
     pub arena: Option<String>,
+    pub busy: bool,
     pub phase: String,
     pub original_hunt: Option<String>,
     pub warning: Option<String>,
@@ -194,7 +195,10 @@ impl BossManager {
             trip: None, writer: Some(writer) })
     }
     pub fn publish(&self, shared: &Arc<Mutex<BossView>>) {
-        if let Ok(mut state) = shared.lock() { *state = self.view.clone(); }
+        if let Ok(mut state) = shared.lock() {
+            *state = self.view.clone();
+            state.busy = self.trip.is_some();
+        }
     }
     pub fn start(&mut self, key: &str, repeat: bool, hunt: &HuntView,
                  navigator: &mut HuntNavigator, now: Instant) -> Result<(), String> {
@@ -229,6 +233,11 @@ impl BossManager {
         Ok(())
     }
     pub fn stop(&mut self, navigator: &mut HuntNavigator) -> Option<GameCommand> {
+        if self.trip.is_none() && self.view.auto {
+            self.view.phase = "Stopping server boss repetition".into();
+            return self.view.auto_key.clone().map(|key|
+                GameCommand::BossAuto { active: false, key });
+        }
         let trip = self.trip.as_mut()?;
         trip.ended = true;
         if trip.stage == Stage::GoingCenter {
