@@ -89,6 +89,7 @@ struct Trip {
     stop_pending: bool,
     recovering: bool,
     dispatched_at: Option<Instant>,
+    resume_stop: bool,
 }
 
 #[derive(Default)]
@@ -237,6 +238,7 @@ impl BossManager {
             key: key.to_owned(), original: original.clone(), repeat,
             stage: Stage::GoingCenter, confirmed: false, ended: false,
             stop_pending: false, recovering: false, dispatched_at: None,
+            resume_stop: false,
         });
         self.view.original_hunt = original;
         self.view.warning = None;
@@ -376,6 +378,12 @@ impl BossManager {
                        navigator: &mut HuntNavigator, now: Instant) -> Option<GameCommand> {
         let trip = self.trip.as_mut()?;
         if trip.recovering { return None; }
+        if trip.resume_stop {
+            trip.resume_stop = false;
+            // Fresh command, only after the new authenticated welcome confirms
+            // the server is still repeating the same boss we were stopping.
+            return Some(GameCommand::BossAuto { active:false, key:trip.key.clone() });
+        }
         if trip.stage == Stage::GoingCenter && hunt.in_center {
             // Inventory can change while travel is waiting for a safe opening.
             // Recheck against the latest server snapshot, never the initial
@@ -490,9 +498,13 @@ impl BossManager {
             }
             trip.stage = Stage::Running;
             trip.confirmed = true;
-            trip.ended = false;
-            trip.stop_pending = false;
-            self.view.phase = "Server boss repetition resumed after reconnect".into();
+            trip.resume_stop = trip.stop_pending;
+            trip.ended = trip.stop_pending;
+            self.view.phase = if trip.resume_stop {
+                "Stopping boss repetition after reconnect".into()
+            } else {
+                "Server boss repetition resumed after reconnect".into()
+            };
         } else if let Some(arena) = self.view.arena.as_deref() {
             if arena != trip.key.as_str() {
                 self.view.warning = Some(
@@ -504,7 +516,9 @@ impl BossManager {
             }
             trip.stage = Stage::Running;
             trip.confirmed = true;
-            trip.ended = false;
+            // The server is no longer repeating. Wait for the existing arena
+            // to clear, even if its victory/loss event occurred while offline.
+            trip.ended = true;
             trip.stop_pending = false;
             self.view.phase = "Waiting for boss encounter after reconnect".into();
         } else if hunt.in_center {
@@ -675,6 +689,38 @@ mod tests {
             "auto":false,"arena":null}}}));
         manager.next_action(&view, &mut fresh, now);
         assert!(!manager.active(), "a trip started at center should finish there");
+    }
+
+    #[test]
+    fn requested_stop_survives_reconnect_without_restarting_farm() {
+        let mut manager = manager();
+        let mut navigator = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut navigator, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut navigator, now),
+            Some(GameCommand::BossAuto {active:true,..})));
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
+        assert!(matches!(manager.stop(&mut navigator),
+            Some(GameCommand::BossAuto {active:false,..})));
+        manager.on_disconnect();
+        manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
+            "key":"bronze","nome":"Bronze Boss",
+            "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
+        }],"estado":{"boss":{"auto":true,"autoKey":"bronze",
+            "arena":{"key":"bronze"}}}}));
+        let mut fresh = HuntNavigator::default();
+        manager.recover_on_welcome(&view);
+        assert!(matches!(manager.next_action(&view, &mut fresh, now),
+            Some(GameCommand::BossAuto {active:false,..})));
+        assert!(manager.next_action(&view, &mut fresh, now).is_none());
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossAuto","ativo":false}]}));
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":false,"arena":null}}}));
+        manager.next_action(&view, &mut fresh, now);
+        assert!(!manager.active());
     }
 
     #[test]
