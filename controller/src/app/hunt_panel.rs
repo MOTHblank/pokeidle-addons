@@ -2285,7 +2285,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         draw_atlas_explorer(ui,&view,native,live,index,
             app.ui_options.atlas_aoe_enabled[index],
             app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
-            &mut app.atlas_page[index],&app.hunt_estimate_cache[index],
+            &mut app.workspace.hunt_filters.atlas_page[index],&app.hunt_estimate_cache[index],
             &app.atlas_scenarios[index],&mut app.atlas_results[index],
             &mut app.hunt_action_error[index]);
         return;
@@ -2711,34 +2711,34 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(tr("Sort recommendations by")).size(12.0).strong());
-                        if app.hunt_ranking==HuntRanking::PokemonXp {
-                            app.hunt_ranking=HuntRanking::TrainerXp;
+                        if app.workspace.hunt_filters.ranking==HuntRanking::PokemonXp {
+                            app.workspace.hunt_filters.ranking=HuntRanking::TrainerXp;
                         }
                         for (ranking,label) in [
                             (HuntRanking::TrainerXp,tr("XP/h")),
                             (HuntRanking::Gold,tr("Gross gold/h")),
                         ]{
-                            if ui.selectable_value(&mut app.hunt_ranking,ranking,label)
+                            if ui.selectable_value(&mut app.workspace.hunt_filters.ranking,ranking,label)
                                 .changed(){
                                 app.workspace.hunt_page=0;
                             }
                         }
                     });
                     ui.horizontal_wrapped(|ui|{
-                        if ui.add(egui::TextEdit::singleline(&mut app.hunt_query)
+                        if ui.add(egui::TextEdit::singleline(&mut app.workspace.hunt_filters.query)
                             .hint_text(tr("Hunt, area, region or species")).desired_width(220.0)).changed(){
                             app.workspace.hunt_page=0;
                         }
                         let regions=atlas_locations(hunts,None);
                         egui::ComboBox::from_id_salt("hunt-region")
-                            .selected_text(if app.hunt_region.is_empty(){
+                            .selected_text(if app.workspace.hunt_filters.region.is_empty(){
                                 tr("All areas").to_owned()
-                            }else{app.hunt_region.clone()})
+                            }else{app.workspace.hunt_filters.region.clone()})
                             .show_ui(ui,|ui|{
-                                if ui.selectable_value(&mut app.hunt_region,
+                                if ui.selectable_value(&mut app.workspace.hunt_filters.region,
                                     String::new(),tr("All areas")).changed(){app.workspace.hunt_page=0;}
                                 for region in regions{
-                                    if ui.selectable_value(&mut app.hunt_region,
+                                    if ui.selectable_value(&mut app.workspace.hunt_filters.region,
                                         region.clone(),region.as_str()).changed(){app.workspace.hunt_page=0;}
                                 }
                             });
@@ -2748,26 +2748,26 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 .collect::<Vec<_>>();
                             types.sort_unstable();types.dedup();
                             egui::ComboBox::from_id_salt("hunt-species-type")
-                                .selected_text(if app.hunt_type.is_empty(){
+                                .selected_text(if app.workspace.hunt_filters.pokemon_type.is_empty(){
                                     tr("All types").to_owned()
-                                }else{app.hunt_type.clone()})
+                                }else{app.workspace.hunt_filters.pokemon_type.clone()})
                                 .show_ui(ui,|ui|{
-                                    if ui.selectable_value(&mut app.hunt_type,
+                                    if ui.selectable_value(&mut app.workspace.hunt_filters.pokemon_type,
                                         String::new(),tr("All types")).changed(){app.workspace.hunt_page=0;}
                                     for kind in types{
-                                        if ui.selectable_value(&mut app.hunt_type,
+                                        if ui.selectable_value(&mut app.workspace.hunt_filters.pokemon_type,
                                             kind.to_owned(),atlas_type_name(kind)).changed(){app.workspace.hunt_page=0;}
                                     }
                                 });
                         }
                         if ui.small_button(tr("Clear filters")).clicked(){
-                            app.hunt_query.clear();app.hunt_region.clear();
-                            app.hunt_type.clear();app.workspace.hunt_page=0;
+                            app.workspace.hunt_filters.query.clear();app.workspace.hunt_filters.region.clear();
+                            app.workspace.hunt_filters.pokemon_type.clear();app.workspace.hunt_page=0;
                         }
                     });
                     let reference=app.hunt_reference.as_deref();
-                    let ranked=ranked_hunts(hunts,reference,app.hunt_ranking,live,
-                        &app.hunt_query,&app.hunt_region,&app.hunt_type,
+                    let ranked=ranked_hunts(hunts,reference,app.workspace.hunt_filters.ranking,live,
+                        &app.workspace.hunt_filters.query,&app.workspace.hunt_filters.region,&app.workspace.hunt_filters.pokemon_type,
                         &app.hunt_estimate_cache[index]);
                     ui.label(RichText::new(format!(
                         "{} {} · {}",
@@ -2778,7 +2778,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(7.0);
                     for (offset,result) in ranked.iter().skip(visible.start)
                         .take(visible.end-visible.start).enumerate(){
-                        draw_hunt_row(ui,result,visible.start+offset+1,app.hunt_ranking,
+                        draw_hunt_row(ui,result,visible.start+offset+1,app.workspace.hunt_filters.ranking,
                             hunts,reference,live,native,&mut app.hunt_action_error[index],
                             app.ui_options.atlas_aoe_enabled[index]);
                         ui.add_space(5.0);
@@ -2793,9 +2793,9 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     tr("Widen the search or clear the region and type filters.")
                                 ).size(11.0).color(MUTED));
                                 if ui.small_button(tr("Clear ranking filters")).clicked(){
-                                    app.hunt_query.clear();
-                                    app.hunt_region.clear();
-                                    app.hunt_type.clear();
+                                    app.workspace.hunt_filters.query.clear();
+                                    app.workspace.hunt_filters.region.clear();
+                                    app.workspace.hunt_filters.pokemon_type.clear();
                                     app.workspace.hunt_page=0;
                                 }
                             });

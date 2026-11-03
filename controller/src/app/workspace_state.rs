@@ -1,12 +1,33 @@
 //! UI-only workspace selection and presentation preferences.
 //! No native sessions, worker channels, background jobs or timers live here.
 //! Keep defaults equivalent to the previous ControllerApp initialization.
-use super::{AccountsSection, AutomationSection, HuntSubtab, PanelTab};
+use super::{AccountsSection, AutomationSection, HuntRanking, HuntSubtab, PanelTab};
 
 #[derive(Default)]
 pub(super) struct BrowserTabEditor {
     pub(super) input: String,
     pub(super) open: bool,
+}
+
+/// Hunt Atlas search and ranking belong to the currently visible workspace.
+pub(super) struct HuntUiFilters {
+    pub(super) query: String,
+    pub(super) region: String,
+    pub(super) pokemon_type: String,
+    pub(super) ranking: HuntRanking,
+    pub(super) atlas_page: [usize;4],
+}
+
+impl Default for HuntUiFilters {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            region: String::new(),
+            pokemon_type: String::new(),
+            ranking: HuntRanking::TrainerXp,
+            atlas_page: [0;4],
+        }
+    }
 }
 
 pub(super) struct WorkspaceState {
@@ -28,6 +49,7 @@ pub(super) struct WorkspaceState {
     pub(super) market_copy_targets: [bool;4],
     pub(super) market_copy_activation: bool,
     pub(super) browser_tabs: [BrowserTabEditor; 4],
+    pub(super) hunt_filters: HuntUiFilters,
 }
 
 impl Default for WorkspaceState {
@@ -51,6 +73,7 @@ impl Default for WorkspaceState {
             market_copy_targets: [false;4],
             market_copy_activation: false,
             browser_tabs: std::array::from_fn(|_| BrowserTabEditor::default()),
+            hunt_filters: HuntUiFilters::default(),
         }
     }
 }

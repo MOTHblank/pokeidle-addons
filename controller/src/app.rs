@@ -854,10 +854,10 @@ pub struct ControllerApp {
 
 
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
-    hunt_query: String,
-    hunt_region: String,
-    hunt_type: String,
-    hunt_ranking: HuntRanking,
+
+
+
+
 
 
     hunt_action_error: [Option<String>;4],
@@ -865,7 +865,7 @@ pub struct ControllerApp {
     atlas_results: [hunt_panel::ExplorerCache;4],
     atlas_filters: [hunt_panel::AtlasFilters;4],
     atlas_scenarios: [hunt_panel::AtlasScenario;4],
-    atlas_page: [usize;4],
+
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
@@ -999,10 +999,10 @@ impl ControllerApp {
 
 
             offline_histories: std::array::from_fn(|_|None),
-            hunt_query: String::new(),
-            hunt_region: String::new(),
-            hunt_type: String::new(),
-            hunt_ranking: HuntRanking::TrainerXp,
+
+
+
+
 
 
             hunt_action_error: std::array::from_fn(|_|None),
@@ -1010,7 +1010,7 @@ impl ControllerApp {
             atlas_results: std::array::from_fn(|_|hunt_panel::ExplorerCache::default()),
             atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
             atlas_scenarios: std::array::from_fn(|_|hunt_panel::AtlasScenario::default()),
-            atlas_page: [0;4],
+
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
