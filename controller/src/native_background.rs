@@ -173,6 +173,14 @@ pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
 
 type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
+// Connection-state transitions notify the controller without a polling loop
+// or a dependency on the egui display refresh cadence.
+type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+fn notify_phase_change(wake: &PhaseWake) {
+    let callback = wake.lock().ok().and_then(|slot| slot.clone());
+    if let Some(callback) = callback { callback(); }
+}
+
 pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
     created_at: Instant,
@@ -189,6 +197,7 @@ pub struct NativeSession {
     hunts: Arc<Mutex<HuntView>>,
     history: Arc<Mutex<HistorySnapshot>>,
     forecast_tx:mpsc::SyncSender<HistoryForecast>,
+    phase_wake:PhaseWake,
 }
 impl NativeSession {
     /// Establish *both* verified WebSockets before handing ownership away
@@ -237,6 +246,8 @@ impl NativeSession {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_stop = Arc::clone(&stop);
+        let phase_wake:PhaseWake=Arc::new(Mutex::new(None));
+        let worker_phase_wake=Arc::clone(&phase_wake);
         thread::Builder::new().name("moth-native-game".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -244,7 +255,8 @@ impl NativeSession {
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_capture_config,
-                        worker_market_rules, worker_rules_revision, worker_session_reset, hunt_intel, worker_hunts,
+                        worker_market_rules, worker_rules_revision, worker_session_reset,
+                        Arc::clone(&worker_phase_wake), hunt_intel, worker_hunts,
                         history_recorder,forecast_rx);
                 }));
                 if result.is_err() {
@@ -252,13 +264,15 @@ impl NativeSession {
                         state.phase = "Failed".into();
                         state.error = Some("PokéIdle connection stopped unexpectedly. See the controller log.".into());
                     });
+                    notify_phase_change(&worker_phase_wake);
                     worker_stop.store(true, Ordering::Relaxed);
                 }
             })
             .map_err(|error| format!("Could not start the PokéIdle connection: {error}"))?;
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, market_rules, market_rules_revision, session_reset, hunts, history, forecast_tx
+            capture_config, market_rules, market_rules_revision, session_reset, hunts, history, forecast_tx,
+            phase_wake
         })
     }
     pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
@@ -364,6 +378,16 @@ impl NativeSession {
             return None;
         }
         state.kick_official_roster.clone()
+    }
+    /// Called after the authenticated session is adopted into its account.
+    /// Both game and Twitch state changes can request immediate recovery.
+    pub fn set_phase_waker(&self, wake:Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut slot)=self.phase_wake.lock() {
+            *slot=Some(Arc::clone(&wake));
+        }
+        self.twitch.set_phase_waker(Arc::clone(&wake));
+        // A worker can expire while its initial handoff is still in flight.
+        if self.snapshot().phase=="NeedsLogin" { wake(); }
     }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -568,6 +592,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
     session_reset: Arc<AtomicBool>,
+    phase_wake:PhaseWake,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>,
     mut history_recorder: HistoryRecorder,
@@ -627,6 +652,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.error = None;
                     s.last_received = Some(Instant::now());
                 });
+                notify_phase_change(&phase_wake);
                 let mut last_ping = Instant::now();
                 // Delayed capture receipts are diagnostic, not connection failures.
                 // Summarize them at most once every five minutes per game socket.
@@ -1052,6 +1078,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         s.pending_pokemon_sale=None;
                         s.pokemon_sale_error=Some("Connection lost before Pokémon sale confirmation".into());
                     });
+                    notify_phase_change(&phase_wake);
                 }
             }
             Err(error) => {
@@ -1070,6 +1097,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.phase = if needs_login { "NeedsLogin" } else { "Reconnecting" }.into();
                     s.error = Some(error);
                 });
+                notify_phase_change(&phase_wake);
                 if needs_login { break; }
             }
         }
@@ -1080,6 +1108,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     }
     if stop.load(Ordering::Relaxed) {
         update(&snapshot, |s| s.phase = "Stopped".into());
+        notify_phase_change(&phase_wake);
     }
 }
 
@@ -1087,6 +1116,16 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn state_waker_fires_without_waiting_for_a_view_refresh() {
+        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count=Arc::clone(&calls);
+        let wake:PhaseWake=Arc::new(Mutex::new(Some(Arc::new(move || {
+            count.fetch_add(1,Ordering::Relaxed);
+        }))));
+        notify_phase_change(&wake);
+        assert_eq!(calls.load(Ordering::Relaxed),1);
+    }
     #[test]
     fn rejects_non_game_and_unencrypted_endpoints() {
         assert!(websocket_authority("ws://pokeidle.io/ws").is_err());

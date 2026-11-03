@@ -82,6 +82,7 @@ static PT_BR: AtomicBool = AtomicBool::new(true);
 // Redraw cached information more often without triggering additional BiDi reads.
 const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
 const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
+const AUTH_PROGRESS_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
 // eframe/egui reports native window focus via ViewportInfo. Treat missing
 // focus information as foreground instead of disabling live monitoring on
@@ -744,6 +745,43 @@ fn make_tray_icon() -> Result<tray_icon::Icon, String> {
         .map_err(|error| format!("could not create tray icon image: {error}"))
 }
 
+// Every worker completion wakes the application event pump, even when its
+// window is unfocused or hidden in the tray. UI repaint *frequency* must never
+// be the clock that drives authentication and native session transitions.
+struct WakeSender<T> {
+    sender: Sender<T>,
+    ctx: egui::Context,
+}
+impl<T> Clone for WakeSender<T> {
+    fn clone(&self) -> Self {
+        Self { sender: self.sender.clone(), ctx: self.ctx.clone() }
+    }
+}
+impl<T> WakeSender<T> {
+    fn send(&self, event: T) -> Result<(), mpsc::SendError<T>> {
+        self.sender.send(event)?;
+        self.ctx.request_repaint();
+        Ok(())
+    }
+}
+fn wake_channel<T>(ctx: &egui::Context) -> (WakeSender<T>, Receiver<T>) {
+    let (sender, receiver) = mpsc::channel();
+    (WakeSender { sender, ctx: ctx.clone() }, receiver)
+}
+
+#[cfg(test)]
+mod lifecycle_wake_tests {
+    use super::*;
+    #[test]
+    fn background_worker_events_reach_the_pump_without_render_polling() {
+        let ctx=egui::Context::default();
+        let (tx,rx)=wake_channel(&ctx);
+        let worker=tx.clone();
+        std::thread::spawn(move||worker.send(42usize).unwrap()).join().unwrap();
+        assert_eq!(rx.try_recv().unwrap(),42);
+    }
+}
+
 struct NativeHandoffEvent {
     index: usize,
     result: Result<serde_json::Value, String>,
@@ -822,18 +860,19 @@ struct CaptureSavedEvent {
 }
 pub struct ControllerApp {
     workspace: WorkspaceState,
-    native_handoff_tx: Sender<NativeHandoffEvent>,
+    lifecycle_ctx: egui::Context,
+    native_handoff_tx: WakeSender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
     native_handoff_busy: [bool; 4],
     native_handoff_last_attempt: [Option<Instant>; 4],
-    native_verified_tx: Sender<NativeVerifiedEvent>,
+    native_verified_tx: WakeSender<NativeVerifiedEvent>,
     native_verified_rx: Receiver<NativeVerifiedEvent>,
     native_verifying: [bool; 4],
     native_error: [Option<String>; 4],
-    native_closed_tx: Sender<NativeBrowserClosedEvent>,
+    native_closed_tx: WakeSender<NativeBrowserClosedEvent>,
     native_closed_rx: Receiver<NativeBrowserClosedEvent>,
     native_close_cancelled: [bool; 4],
-    cached_native_tx: Sender<CachedNativeEvent>,
+    cached_native_tx: WakeSender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
     cached_native_busy: [bool; 4],
     require_browser_login: [bool; 4],
@@ -871,7 +910,7 @@ pub struct ControllerApp {
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
-    hunt_reference_tx: Sender<Result<AtlasReference,String>>,
+    hunt_reference_tx: WakeSender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
     capture_drafts:[Option<CatchSettings>;4],
     // Restock has optimistic per-account editing state. Never rebuild the
@@ -881,14 +920,14 @@ pub struct ControllerApp {
 
     capture_save_busy:[bool;4],
     capture_save_error:[Option<String>;4],
-    capture_save_tx:Sender<CaptureSavedEvent>,
+    capture_save_tx:WakeSender<CaptureSavedEvent>,
     capture_save_rx:Receiver<CaptureSavedEvent>,
 
     inventory_catalog:Option<Arc<ItemCatalog>>,
     visuals:VisualCache,
     inventory_catalog_error:Option<String>,
     inventory_catalog_busy:bool,
-    inventory_catalog_tx:Sender<Result<ItemCatalog,String>>,
+    inventory_catalog_tx:WakeSender<Result<ItemCatalog,String>>,
     inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
     accounts: [AccountConfig; 4],
     /// Kick website sessions run independently per account. Bearer tokens
@@ -939,13 +978,13 @@ impl ControllerApp {
         ));
         logging::info("controller UI initialized with egui/eframe");
         let update_status = update::start_update_check();
-        let (native_handoff_tx, native_handoff_rx) = mpsc::channel();
-        let (cached_native_tx, cached_native_rx) = mpsc::channel();
-        let (native_closed_tx, native_closed_rx) = mpsc::channel();
-        let (native_verified_tx, native_verified_rx) = mpsc::channel();
-        let (hunt_reference_tx, hunt_reference_rx) = mpsc::channel();
-        let (capture_save_tx,capture_save_rx)=mpsc::channel();
-        let (inventory_catalog_tx,inventory_catalog_rx)=mpsc::channel();
+        let (native_handoff_tx, native_handoff_rx) = wake_channel(&cc.egui_ctx);
+        let (cached_native_tx, cached_native_rx) = wake_channel(&cc.egui_ctx);
+        let (native_closed_tx, native_closed_rx) = wake_channel(&cc.egui_ctx);
+        let (native_verified_tx, native_verified_rx) = wake_channel(&cc.egui_ctx);
+        let (hunt_reference_tx, hunt_reference_rx) = wake_channel(&cc.egui_ctx);
+        let (capture_save_tx,capture_save_rx)=wake_channel(&cc.egui_ctx);
+        let (inventory_catalog_tx,inventory_catalog_rx)=wake_channel(&cc.egui_ctx);
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -959,6 +998,7 @@ impl ControllerApp {
         };
 
         Self {
+            lifecycle_ctx: cc.egui_ctx.clone(),
             native_handoff_tx,
             native_handoff_rx,
             native_handoff_busy: [false; 4],
@@ -1080,6 +1120,14 @@ impl ControllerApp {
         }
     }
 
+    // Native and Twitch recovery signals wake the control-plane pump directly.
+    // Display refresh throttling never blocks an expired-login transition.
+    fn adopt_native_session(&mut self, index: usize, session: NativeSession) {
+        let ctx = self.lifecycle_ctx.clone();
+        session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
+        self.games[index].native = Some(session);
+    }
+
     fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
         let tracker = &mut self.idle_progress[index];
         let eligible = health.telemetry_is_fresh()
@@ -1144,7 +1192,7 @@ impl Drop for ControllerApp {
 
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.refresh_processes(ui.ctx());
+        self.refresh_processes();
         self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
         // resetting the current frame's Pokémon sprite usage.
@@ -1160,11 +1208,18 @@ impl eframe::App for ControllerApp {
         // Live native panels publish snapshots at one-second cadence.
         // Repaint only while visible; tray/background retains the cheap timer.
         let background = self.controller_in_background(ui.ctx());
+        // Firefox's BiDi monitor may become ready without emitting a channel
+        // reply. Give temporary sign-ins a lightweight progress heartbeat even
+        // when the tray's ordinary display timer is 30 seconds.
+        let auth_in_progress = self.games.iter().enumerate().any(|(i,slot)|
+            self.accounts[i].enabled && slot.monitor.is_some() &&
+            slot.native.is_none() && !slot.browser_only);
         let native_detail = self.games.iter().any(|game| game.native.is_some())
             && (matches!(self.workspace.panel_tab, PanelTab::Hunts | PanelTab::Automation)
                 || self.workspace.panel_tab == PanelTab::Overview);
         ui.ctx().request_repaint_after(
-            if background { UI_BACKGROUND_REPAINT_INTERVAL }
+            if auth_in_progress { AUTH_PROGRESS_REPAINT_INTERVAL }
+            else if background { UI_BACKGROUND_REPAINT_INTERVAL }
             else if native_detail { Duration::from_secs(1) }
             else { UI_REPAINT_INTERVAL }
         );

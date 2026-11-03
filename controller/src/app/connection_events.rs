@@ -1,5 +1,6 @@
-//! Consume existing worker channels and reconcile cached session state on UI frames.
-//! No additional network calls, monitors, loops or independent session ownership.
+//! Reconcile worker completion events in the application's event pump.
+//! Every asynchronous sender wakes this pump; display repaint throttling
+//! never determines when a native/Firefox authentication stage completes.
 use super::*;
 
 // Restock acknowledgements update only the restock fields of an open Capture
@@ -26,7 +27,7 @@ impl ControllerApp {
     // Only this central event pump starts writes, not whichever page is visible.
     // A new choice made during an earlier save is automatically processed on
     // its acknowledgement, even if the picker has since been closed.
-    fn flush_queued_restock_saves(&mut self, ctx:&egui::Context) {
+    fn flush_queued_restock_saves(&mut self) {
         for index in 0..self.games.len() {
             if !self.restock_dirty[index] || self.capture_save_busy[index] { continue; }
             let Some(native)=self.games[index].native.as_ref() else {continue};
@@ -49,7 +50,6 @@ impl ControllerApp {
                     self.capture_save_busy[index]=true;
                     let profile=self.games[index].profile;
                     let tx=self.capture_save_tx.clone();
-                    let ctx=ctx.clone();
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
@@ -59,16 +59,13 @@ impl ControllerApp {
                         let _=tx.send(CaptureSavedEvent {
                             index,config:next,origin:CaptureSaveOrigin::Restock,result
                         });
-                        // A completed vault write immediately unlocks any queued
-                        // edit; do not wait for the background repaint timer.
-                        ctx.request_repaint();
                     });
                 }
             }
         }
     }
 
-    pub(super) fn refresh_processes(&mut self, ctx:&egui::Context) {
+    pub(super) fn refresh_processes(&mut self) {
         while let Ok(event)=self.capture_save_rx.try_recv() {
             self.capture_save_busy[event.index]=false;
             match event.result {
@@ -101,7 +98,7 @@ impl ControllerApp {
         }
         // Dispatch any staged restock save after processing previous
         // acknowledgements, regardless of the currently selected UI page.
-        self.flush_queued_restock_saves(ctx);
+        self.flush_queued_restock_saves();
         while let Ok(result)=self.inventory_catalog_rx.try_recv() {
             self.inventory_catalog_busy=false;
             match result {
@@ -209,7 +206,7 @@ impl ControllerApp {
                     }
                     logging::info(&format!(
                         "{}: connecting to PokéIdle and Twitch", self.account_name(profile)));
-                    self.games[index].native = Some(event.native);
+                    self.adopt_native_session(index, event.native);
                     self.capture_drafts[index]=None;
                     self.restock_drafts[index]=None;
                     self.restock_dirty[index]=false;
@@ -226,7 +223,7 @@ impl ControllerApp {
                     // Native game is already authenticated; Firefox's game
                     // tab was closed. Retain native ownership and the remaining
                     // Firefox handle for a later explicit cleanup attempt.
-                    self.games[index].native = Some(event.native);
+                    self.adopt_native_session(index, event.native);
                     self.capture_drafts[index]=None;
                     self.restock_drafts[index]=None;
                     self.restock_dirty[index]=false;
@@ -261,7 +258,7 @@ impl ControllerApp {
             }
             match event.result {
                 Ok(Some(session)) => {
-                    self.games[event.index].native = Some(session);
+                    self.adopt_native_session(event.index, session);
                     self.capture_drafts[event.index]=None;
                     self.automation_drafts[event.index]=AutomationDraft::default();
                     self.set_status(format!(

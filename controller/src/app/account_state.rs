@@ -34,9 +34,18 @@ impl ControllerApp {
         // Exactly one account may be expanded when focused. Background mode
         // overrides that selection without clearing the open details panel.
         for (index, slot) in self.games.iter().enumerate() {
-            let pace = monitor_pace_for_slot(
+            let display_pace = monitor_pace_for_slot(
                 self.workspace.selected_details, index, self.accounts[index].enabled, background
             );
+            // Sign-in is control-plane work, not display telemetry. Keep the
+            // BiDi authentication monitor responsive even while minimized.
+            let awaiting_handoff = self.accounts[index].enabled &&
+                slot.native.is_none() && !slot.browser_only;
+            let pace = if awaiting_handoff {
+                MonitorPace::Detailed
+            } else {
+                display_pace
+            };
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.set_pace(pace);
             }
