@@ -238,7 +238,7 @@ impl ControllerApp {
     pub(super) fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         // A stopped account must not keep an independent Kick worker alive.
-        self.kick_monitors[index].take();
+        self.stop_kick_account(index);
         let account_name = self.account_name(profile);
         if self.games[index].handoff_closing {
             // The dedicated shutdown worker already owns and is closing the
