@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::thread;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_LOOT: usize = 500;
 
@@ -88,6 +88,7 @@ struct Trip {
     ended: bool,
     stop_pending: bool,
     recovering: bool,
+    dispatched_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -235,7 +236,7 @@ impl BossManager {
         self.trip = Some(Trip {
             key: key.to_owned(), original: original.clone(), repeat,
             stage: Stage::GoingCenter, confirmed: false, ended: false,
-            stop_pending: false, recovering: false,
+            stop_pending: false, recovering: false, dispatched_at: None,
         });
         self.view.original_hunt = original;
         self.view.warning = None;
@@ -376,7 +377,22 @@ impl BossManager {
         let trip = self.trip.as_mut()?;
         if trip.recovering { return None; }
         if trip.stage == Stage::GoingCenter && hunt.in_center {
+            // Inventory can change while travel is waiting for a safe opening.
+            // Recheck against the latest server snapshot, never the initial
+            // click-time balance. Do not ask the server for a doomed entry.
+            let allowed = self.view.catalog.iter().find(|boss| boss.key == trip.key)
+                .is_some_and(|boss| hunt.trainer_level.unwrap_or(0) >= boss.min_level &&
+                    hunt.items.get(&boss.token_id).copied().unwrap_or(0) >= boss.tokens_per_entry);
+            if !allowed {
+                trip.stage = Stage::Running;
+                trip.ended = true;
+                self.view.warning = Some(
+                    "Boss tokens or requirements changed before entry; returning to saved hunt".into());
+                self.view.phase = "Boss entry cancelled".into();
+                return None;
+            }
             trip.stage = Stage::Running;
+            trip.dispatched_at = Some(now);
             self.view.phase = if trip.repeat {
                 "Server farming requested".into()
             } else {
@@ -387,6 +403,17 @@ impl BossManager {
             } else {
                 GameCommand::BossEnter(trip.key.clone())
             });
+        }
+        if trip.stage == Stage::Running && !trip.confirmed && !trip.ended &&
+            trip.dispatched_at.is_some_and(|at|
+                now.saturating_duration_since(at) >= Duration::from_secs(20)) &&
+            !self.view.auto && self.view.arena.is_none() && hunt.in_center {
+            // The server may have rejected the command or the receipt may be
+            // missing. Never resend a costly entry; return safely instead.
+            trip.ended = true;
+            self.view.warning = Some(
+                "Boss start was not confirmed by server; returning to saved hunt".into());
+            self.view.phase = "Boss start unconfirmed".into();
         }
         if trip.stage == Stage::Running && trip.ended && !trip.stop_pending &&
             !self.view.auto && hunt.in_center && self.view.arena.is_none() {
@@ -684,6 +711,37 @@ mod tests {
         assert!(manager.trip.as_ref().unwrap().ended);
     }
 
+    #[test]
+    fn token_balance_is_rechecked_after_travel() {
+        let mut manager = manager();
+        let mut navigator = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut navigator, now).unwrap();
+        view.in_center = true;
+        view.items = Arc::new([(500,0)].into());
+        assert!(manager.next_action(&view, &mut navigator, now).is_none());
+        assert_eq!(manager.view.phase, "Boss entry cancelled");
+        manager.next_action(&view, &mut navigator, now);
+        assert_eq!(manager.view.phase, "Returning to saved hunt");
+    }
+    #[test]
+    fn no_server_ack_does_not_leave_trip_stuck_forever() {
+        let mut manager = manager();
+        let mut navigator = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut navigator, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut navigator, now),
+            Some(GameCommand::BossAuto {active:true,..})));
+        assert!(manager.next_action(&view, &mut navigator,
+            now + Duration::from_secs(19)).is_none());
+        assert!(manager.active());
+        manager.next_action(&view, &mut navigator, now + Duration::from_secs(20));
+        assert!(!manager.active(), "start from center finishes safely without any ack");
+        assert!(manager.view.warning.as_deref().unwrap_or("").contains("not confirmed"));
+    }
     #[test]
     fn loot_uses_confirmed_boss_death_events_only() {
         let mut m = manager();
