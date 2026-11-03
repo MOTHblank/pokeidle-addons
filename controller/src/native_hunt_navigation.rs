@@ -114,6 +114,10 @@ impl HuntNavigator {
     pub fn center_pending(&self) -> bool {
         self.target == Some(Destination::Center)
     }
+    /// Indicates a Center command was dispatched before a local cancellation.
+    pub fn center_command_sent(&self) -> bool {
+        self.center_pending() && self.last_select.is_some()
+    }
     pub fn cancel(&mut self) {
         self.target = None;
         self.started = None;
