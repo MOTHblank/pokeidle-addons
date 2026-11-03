@@ -202,7 +202,8 @@ impl BossManager {
             *state = self.view.clone();
             state.busy = self.trip.is_some();
             state.can_stop = self.view.auto || self.trip.as_ref().is_some_and(|trip|
-                !trip.recovering && (trip.repeat || trip.stage == Stage::GoingCenter));
+                !trip.recovering && (trip.stage == Stage::GoingCenter ||
+                    (trip.repeat && trip.stage == Stage::Running)));
         }
     }
     pub fn start(&mut self, key: &str, repeat: bool, hunt: &HuntView,
@@ -334,7 +335,9 @@ impl BossManager {
                         if log.len() > MAX_LOOT { log.remove(0); }
                         if let Some(writer) = &self.writer { writer.append(entry); }
                         if let Some(trip) = self.trip.as_mut() {
-                            if !trip.repeat && trip.stage == Stage::Running {
+                            if !trip.repeat && trip.stage == Stage::Running &&
+                                trip.confirmed && event.get("key").and_then(Value::as_str)
+                                    == Some(trip.key.as_str()) {
                                 trip.ended = true;
                             }
                         }
@@ -448,6 +451,7 @@ impl BossManager {
         let Some(trip) = self.trip.as_mut() else { return; };
         if !trip.recovering { return; }
         trip.recovering = false;
+        self.view.warning = None;
         if self.view.auto {
             if self.view.auto_key.as_deref() != Some(trip.key.as_str()) {
                 self.view.warning = Some(
@@ -463,7 +467,7 @@ impl BossManager {
             trip.stop_pending = false;
             self.view.phase = "Server boss repetition resumed after reconnect".into();
         } else if let Some(arena) = self.view.arena.as_deref() {
-            if arena != trip.key {
+            if arena != trip.key.as_str() {
                 self.view.warning = Some(
                     "Another boss encounter is active; saved hunt return was cancelled".into());
                 self.trip = None;
@@ -587,6 +591,99 @@ mod tests {
             Some(GameCommand::BossAuto { active:false, .. })));
         assert!(matches!(commands.last(),Some(GameCommand::BossExit)));
     }
+    #[test]
+    fn return_after_socket_reconnect_never_restarts_boss() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        view.in_center = true;
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::BossAuto {active:true,..})));
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
+        manager.on_disconnect();
+        assert!(manager.active());
+        assert!(manager.next_action(&view, &mut nav, now).is_none());
+
+        // Farm ended while offline. The new socket's full welcome is the
+        // first authoritative evidence that returning is now safe.
+        manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
+            "key":"bronze","nome":"Bronze Boss",
+            "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
+        }],"estado":{"boss":{"auto":false,"arena":null}}}));
+        let mut fresh = HuntNavigator::default();
+        manager.recover_on_welcome(&view);
+        assert!(manager.next_action(&view, &mut fresh, now).is_none());
+        assert!(matches!(fresh.next_action(&view, now),
+            Some(GameCommand::Hunt(slug)) if slug=="bulbasaur"));
+        view.in_center = false;
+        manager.next_action(&view, &mut fresh, now);
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn reconnect_while_auto_running_only_monitors_existing_server_farm() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::BossAuto {active:true,..})));
+        manager.on_disconnect();
+        manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
+            "key":"bronze","nome":"Bronze Boss",
+            "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
+        }],"estado":{"boss":{"auto":true,"autoKey":"bronze",
+            "arena":{"key":"bronze"}}}}));
+        let mut fresh = HuntNavigator::default();
+        manager.recover_on_welcome(&view);
+        assert!(manager.active());
+        assert!(manager.next_action(&view, &mut fresh, now).is_none());
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossAuto","ativo":false}]}));
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":false,"arena":null}}}));
+        manager.next_action(&view, &mut fresh, now);
+        assert!(!manager.active(), "a trip started at center should finish there");
+    }
+
+    #[test]
+    fn lost_connection_before_center_cancels_pending_boss_entry() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        manager.on_disconnect();
+        view.in_center = true;
+        manager.recover_on_welcome(&view);
+        assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn one_off_boss_victory_must_match_requested_boss() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", false, &view, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::BossEnter(_))));
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossMorto",
+            "key":"other","nome":"Other Boss","drops":[]}]}));
+        assert!(manager.active());
+        assert!(!manager.trip.as_ref().unwrap().ended);
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossEntrou","key":"bronze"}]}));
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossMorto",
+            "key":"bronze","nome":"Bronze Boss","drops":[]}]}));
+        assert!(manager.trip.as_ref().unwrap().ended);
+    }
+
     #[test]
     fn loot_uses_confirmed_boss_death_events_only() {
         let mut m = manager();
