@@ -12,6 +12,8 @@ use crate::native_capture_config::CatchSettings;
 use crate::native_items::{self, ItemCatalog};
 use crate::native_visuals::{Kind as SpriteKind, VisualCache};
 use crate::native_atlas::{self, Reference as AtlasReference};
+// Views borrow cached state; only ControllerApp owns sessions, monitors,
+// worker channels and their scheduling. Rendering must not add polling loops.
 mod hunt_panel;
 mod market_panel;
 mod kick_panel;
@@ -24,23 +26,26 @@ mod automation_game;
 mod automation_capture;
 mod automation_restock;
 mod automation_widgets;
-mod account_state;
-mod connection_events;
-mod session_actions;
-use automation_game::*;
-use automation_capture::*;
-use automation_restock::*;
-use automation_widgets::*;
 mod runtime_panel;
 mod accounts_panel;
 mod status_widgets;
-use localization::*;
-use workspace_nav::*;
-use overview_panel::*;
-use automation_panel::*;
-use runtime_panel::*;
-use accounts_panel::*;
-use status_widgets::*;
+mod account_state;
+mod connection_events;
+mod session_actions;
+
+// Each shared symbol is intentional: no wildcard panel imports.
+use localization::{pt_br, localize_status, tr_dynamic, tr};
+use workspace_nav::{draw_header_actions, draw_account_switcher, draw_options_panel, draw_sidebar, draw_instance_section};
+use overview_panel::{OverviewTotals, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
+use automation_panel::draw_automation_panel;
+use automation_game::{draw_game_automation_contents, draw_game_details};
+use automation_capture::{auto_catch_setting_label, draw_native_automation};
+use automation_restock::{restock_fields_equal, draw_overview_restock};
+use automation_widgets::{detail_stat_line, resource_chip, automation_badge, bonus_chip};
+use runtime_panel::{draw_runtime_section, draw_credits};
+use accounts_panel::draw_accounts_panel;
+use status_widgets::{status_chip, status_badge, runtime_chip, runtime_row, section_label, sidebar_button, compact_text};
+use kick_panel::{multikick_link, open_kick_channels_in_regular_browser};
 use hunt_panel::HuntSubtab;
 use crate::monitor::{
     Health, MonitorHandle, MonitorPace, MONITOR_HEARTBEAT_INTERVAL,
@@ -767,6 +772,15 @@ enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AccountsSection { Profiles, Kick }
+
+/// Profile commands are application actions, not sidebar presentation state.
+#[derive(Clone, Copy)]
+enum ProfileAction {
+    GoogleSignIn,
+    Twitch,
+    Folder,
+}
+
 
 /// Account-local automation workspaces. Keep the selected section while
 /// switching accounts; the scroll position is isolated per account/section.

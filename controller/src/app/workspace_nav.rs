@@ -195,13 +195,6 @@ pub(super) fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) 
         .size(11.0).color(DIM));
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum ProfileAction {
-    GoogleSignIn,
-    Twitch,
-    Folder,
-}
-
 pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
     egui::Panel::left("sidebar")
         .resizable(false)
@@ -362,68 +355,6 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 );
             });
         });
-}
-
-pub(super) fn multikick_link(streams: &[KickStream]) -> Option<(String, Vec<String>)> {
-    let mut channels: Vec<String> = Vec::new();
-
-    for stream in streams.iter() {
-        let url = stream.url.trim();
-        let Some(path) = url
-            .strip_prefix("https://kick.com/")
-            .or_else(|| url.strip_prefix("https://www.kick.com/"))
-        else {
-            continue;
-        };
-
-        let channel = path
-            .split(|character| character == '/' || character == '?' || character == '#')
-            .next()
-            .unwrap_or_default()
-            .trim();
-
-        if channel.is_empty()
-            || !channel
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
-        {
-            continue;
-        }
-
-        if !channels.iter().any(|existing| existing.eq_ignore_ascii_case(channel)) {
-            channels.push(channel.to_string());
-        }
-    }
-
-    if channels.is_empty() {
-        None
-    } else {
-        Some((format!("https://multikick.com/{}", channels.join("/")), channels))
-    }
-}
-
-pub(super) fn open_kick_channels_in_regular_browser(channels: &[String]) -> Result<usize, String> {
-    if channels.is_empty() {
-        return Err("no live KICK channels to open".to_string());
-    }
-    let mut opened = 0usize;
-    for channel in channels {
-        if channel.is_empty() || !channel.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
-            continue;
-        }
-        let url = format!("https://kick.com/{channel}");
-        let mut command = Command::new(if cfg!(windows) { "explorer.exe" } else { "xdg-open" });
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        command.arg(&url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("could not open live KICK channel {channel}: {error}"))?;
-        opened += 1;
-    }
-    if opened == 0 { Err("no valid live KICK channels to open".to_string()) } else { Ok(opened) }
 }
 
 pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
