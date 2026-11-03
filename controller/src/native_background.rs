@@ -216,7 +216,7 @@ impl NativeSession {
         Self::spawn(profile, credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
     }
     fn spawn(profile: GameProfile, credentials: Credentials, twitch: TwitchSession,
-        initial: Option<(GameSocket, String)>, settings: Option<Value>) -> Result<Self, String> {
+        initial: Option<(GameSocket, Value)>, settings: Option<Value>) -> Result<Self, String> {
         let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
@@ -460,7 +460,7 @@ fn set_live_read_timeout(socket: &mut GameSocket) -> Result<(), String> {
     result.map_err(|error| format!("Could not configure live PokéIdle updates: {error}"))
 }
 
-fn open_session(credentials: &Credentials) -> Result<(GameSocket, String), String> {
+fn open_session(credentials: &Credentials) -> Result<(GameSocket, Value), String> {
     crate::native_tls::ensure()?;
     let addrs = (credentials.host.as_str(), credentials.port)
         .to_socket_addrs().map_err(|_| "Could not find the PokéIdle server. Check your connection.".to_owned())?;
@@ -507,13 +507,13 @@ fn open_session(credentials: &Credentials) -> Result<(GameSocket, String), Strin
     while Instant::now() < until {
         match socket.read() {
             Ok(Message::Text(text)) => {
-                if serde_json::from_str::<Value>(text.as_ref()).ok()
-                    .and_then(|v| v.get("t").and_then(Value::as_str).map(str::to_owned))
-                    .as_deref() == Some("welcome") {
-                    // Receiving welcome confirms authentication. Keep the full
-                    // initial state for the native read-only account dashboard.
-                    set_live_read_timeout(&mut socket)?;
-                    return Ok((socket, text.to_string()));
+                if let Ok(frame) = serde_json::from_str::<Value>(text.as_ref()) {
+                    if frame.get("t").and_then(Value::as_str) == Some("welcome") {
+                        // Preserve the parsed welcome across the verified handoff.
+                        // The game worker must not parse this large frame twice.
+                        set_live_read_timeout(&mut socket)?;
+                        return Ok((socket, frame));
+                    }
                 }
             }
             Ok(Message::Close(_)) => return Err("PokéIdle closed the connection during sign-in".into()),
@@ -659,7 +659,7 @@ fn current_background_hunt(view:&HuntView)->Option<crate::native_hunts::HuntEntr
 
 fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
-    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, String)>,
+    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, Value)>,
     mut gameplay: Gameplay, mut restock: Restock,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
@@ -690,11 +690,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     let mut last_metadata_attempt: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
         match first_session.take().map(Ok).unwrap_or_else(|| open_session(&credentials)) {
-            Ok((mut socket, welcome)) => {
+            Ok((mut socket, frame)) => {
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
-                // A server frame has one parsed representation. All consumers
-                // inspect borrowed values instead of deserializing it again.
-                let Ok(frame) = serde_json::from_str::<Value>(&welcome) else { continue };
+                // The handshake already parsed this frame; all consumers borrow it.
                 let received_at = Instant::now();
                 let roster_changed=observe_value(&snapshot, &frame, &desired);
                 publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
