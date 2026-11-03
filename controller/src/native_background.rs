@@ -396,9 +396,6 @@ impl NativeSession {
             restock_enabled: Arc::clone(&self.restock_enabled),
         }
     }
-    pub fn set_capture_settings(&self, settings:CatchSettings)->Result<(),String> {
-        self.capture_settings_updater().apply(settings)
-    }
     pub fn twitch_snapshot(&self) -> TwitchSnapshot {
         self.twitch.snapshot()
     }
