@@ -5,17 +5,17 @@ use super::*;
 use crate::native_market::{BuyRule, MarketRules};
 
 pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
-    let profile = app.games[index].profile;
-    if app.market_drafts[index].is_none() {
+    let profile = app.runtimes[index].game.profile;
+    if app.runtimes[index].automation.market_draft.is_none() {
         match MarketRules::load(profile) {
-            Ok(settings) => app.market_drafts[index] = Some(settings),
+            Ok(settings) => app.runtimes[index].automation.market_draft = Some(settings),
             Err(error) => {
-                app.market_drafts[index] = Some(MarketRules::default());
-                app.market_notices[index] = format!("Could not load market rules; buying disabled: {error}");
+                app.runtimes[index].automation.market_draft = Some(MarketRules::default());
+                app.runtimes[index].automation.market_notice = format!("Could not load market rules; buying disabled: {error}");
             }
         }
     }
-    let live_status=app.games[index].native.as_ref().map(|n|n.snapshot().native_market);
+    let live_status=app.runtimes[index].game.native.as_ref().map(|n|n.snapshot().native_market);
     let mut save=false;
     let mut jump_to_snatch=false;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
@@ -44,11 +44,12 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             if !status.last.is_empty() {ui.label(RichText::new(tr_dynamic(status.last.clone())).size(10.0).color(MUTED));}
             if let Some(error)=&status.error {ui.label(RichText::new(tr_dynamic(error.to_string())).size(10.0).color(WARN));}
         }
-        if !app.market_notices[index].is_empty() {
-            ui.label(RichText::new(tr_dynamic(app.market_notices[index].clone())).size(10.0).color(WARN));
+        if !app.runtimes[index].automation.market_notice.is_empty() {
+            ui.label(RichText::new(tr_dynamic(app.runtimes[index].automation.market_notice.clone())).size(10.0).color(WARN));
         }
         draw_market_copy_controls(app,ui,index);
-        let Some(cfg)=app.market_drafts[index].as_mut() else {return};
+        let automation = &mut app.runtimes[index].automation;
+        let Some(cfg)=automation.market_draft.as_mut() else {return};
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui|{
             ui.checkbox(&mut cfg.enabled,tr("Enable automatic buying"))
@@ -176,7 +177,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 tr("Enter the offer ID and the highest price you will pay per unit. Before buying, Snatch checks the seller, quantity, currency, price and unlock time. It will not buy an offer it cannot verify.")
             ).size(10.0).color(DIM));
             ui.horizontal_wrapped(|ui|{
-                let t=&mut app.market_snatch_drafts[index];
+                let t=&mut automation.market_snatch_draft;
                 egui::ComboBox::from_id_salt(("snatch-kind",index))
                     .selected_text(if t.kind=="pokemon"{"Pokémon"}else{tr("Item")})
                     .show_ui(ui,|ui|{
@@ -198,14 +199,14 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     target.arm();
                     if target.id==0 || target.max_price==0 ||
                         (target.kind=="item" && target.item_id==0) {
-                        app.market_notices[index]=
+                        automation.market_notice=
                             tr("Enter a real listing ID, item ID (for items), and maximum price.").into();
                     } else if cfg.snatch_targets.iter().any(|old|old.id==target.id) {
-                        app.market_notices[index]=
+                        automation.market_notice=
                             tr("This offer is already in your Snatch list.").into();
                     } else {
                         cfg.snatch_targets.push(target);
-                        app.market_notices[index]=tr("Offer added to Snatch and saved for this account.").into();
+                        automation.market_notice=tr("Offer added to Snatch and saved for this account.").into();
                         save=true;
                     }
                 }
@@ -239,7 +240,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             }
             if let Some(i)=remove {
                 cfg.snatch_targets.remove(i);
-                app.market_notices[index]=tr("Offer removed from Snatch.").into();
+                automation.market_notice=tr("Offer removed from Snatch.").into();
                 save=true;
             }
             if let Some(status)=live_status.as_ref() {
@@ -279,7 +280,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         if !cfg.snatch_targets.iter().any(|t|t.id==target.id) &&
                             cfg.snatch_targets.len()<40 {
                             cfg.snatch_targets.push(target);
-                            app.market_notices[index]=tr("Offer added to your Snatch list.").into();
+                            automation.market_notice=tr("Offer added to your Snatch list.").into();
                             save=true;
                         }
                     }
@@ -304,16 +305,16 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             ui.label(RichText::new(
                 "To import old Moth Watch rules, open Firefox developer tools and copy the result of localStorage.getItem('moth-pokeidle-market-bot-config-v1'). Paste it below. Imported rules stay disabled until you review and save them."
             ).size(10.0).color(DIM));
-            ui.add(egui::TextEdit::multiline(&mut app.market_imports[index])
+            ui.add(egui::TextEdit::multiline(&mut automation.market_import)
                 .hint_text(tr("Paste Moth Watch JSON settings…"))
                 .desired_rows(3).desired_width(f32::INFINITY));
             if ui.small_button(tr("Import settings into editor")).clicked() {
-                match MarketRules::import_watch(&app.market_imports[index]) {
+                match MarketRules::import_watch(&automation.market_import) {
                     Ok(imported)=>{
                         *cfg=imported;
-                        app.market_notices[index]=tr("Rules imported. Review and save them to use automatic buying.").into();
+                        automation.market_notice=tr("Rules imported. Review and save them to use automatic buying.").into();
                     }
-                    Err(error)=>app.market_notices[index]=format!("Import rejected: {error}"),
+                    Err(error)=>automation.market_notice=format!("Import rejected: {error}"),
                 }
             }
         });
@@ -321,22 +322,22 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             if ui.button(tr("Save market rules")).clicked(){save=true;}
             if ui.small_button(tr("Revert unsaved changes")).clicked(){
                 match MarketRules::load(profile) {
-                    Ok(saved)=>{*cfg=saved;app.market_notices[index]=tr("Reloaded saved market rules.").into();}
-                    Err(error)=>app.market_notices[index]=error,
+                    Ok(saved)=>{*cfg=saved;automation.market_notice=tr("Reloaded saved market rules.").into();}
+                    Err(error)=>automation.market_notice=error,
                 }
             }
             ui.label(RichText::new(tr("Changes take effect only after Save.")).size(10.0).color(DIM));
         });
     });
     if save {
-        let cfg=app.market_drafts[index].as_ref().cloned().unwrap_or_default();
-        let result=match app.games[index].native.as_ref() {
+        let cfg=app.runtimes[index].automation.market_draft.as_ref().cloned().unwrap_or_default();
+        let result=match app.runtimes[index].game.native.as_ref() {
             Some(native)=>native.set_market_rules(cfg),
             None=>cfg.save(profile),
         };
         match result {
-            Ok(())=>app.market_notices[index]=tr("Market rules saved for this account.").into(),
-            Err(error)=>app.market_notices[index]=format!("Market settings NOT applied: {error}"),
+            Ok(())=>app.runtimes[index].automation.market_notice=tr("Market rules saved for this account.").into(),
+            Err(error)=>app.runtimes[index].automation.market_notice=format!("Market settings NOT applied: {error}"),
         }
     }
 }
@@ -352,7 +353,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
             tr("Copies the values currently in this editor, including unsaved changes.")
         ).size(10.0).color(DIM));
         ui.horizontal_wrapped(|ui| {
-            for dest in 0..app.games.len() {
+            for dest in 0..app.runtimes.len() {
                 if dest == source { continue; }
                 let name = app.accounts[dest].name.trim();
                 let label = if name.is_empty() {
@@ -368,7 +369,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
         ui.label(RichText::new(
             tr("Default: buying remains OFF on destination accounts. Only select the option above to copy the source's enabled/paused state.")
         ).size(10.0).color(DIM));
-        let selected=(0..app.games.len()).any(|dest|
+        let selected=(0..app.runtimes.len()).any(|dest|
             dest!=source && app.workspace.market_copy_targets[dest]);
         if ui.add_enabled(selected,egui::Button::new(
             tr("Overwrite buying settings on selected accounts"))).clicked() {
@@ -376,20 +377,20 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
         }
     });
     if !apply { return; }
-    let Some(source_rules)=app.market_drafts[source].as_ref().cloned() else { return };
+    let Some(source_rules)=app.runtimes[source].automation.market_draft.as_ref().cloned() else { return };
     if let Err(error)=source_rules.validate() {
-        app.market_notices[source]=format!("Copy canceled; fix source rules: {error}");
+        app.runtimes[source].automation.market_notice=format!("Copy canceled; fix source rules: {error}");
         return;
     }
     let mut copied=Vec::new();
     let mut failures=Vec::new();
-    for dest in 0..app.games.len() {
+    for dest in 0..app.runtimes.len() {
         if dest==source || !app.workspace.market_copy_targets[dest] { continue; }
-        let profile=app.games[dest].profile;
+        let profile=app.runtimes[dest].game.profile;
         // Respect the destination's in-memory draft first: a newly armed
         // Snatch listing may not have been saved yet. Its queue must survive
         // copying the separate automatic buying strategy.
-        let existing=if let Some(draft)=app.market_drafts[dest].as_ref() {
+        let existing=if let Some(draft)=app.runtimes[dest].automation.market_draft.as_ref() {
             draft.clone()
         } else {
             match MarketRules::load(profile) {
@@ -402,14 +403,14 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
         };
         let copied_rules=existing.copy_buying_from(
             &source_rules,app.workspace.market_copy_activation);
-        let result=match app.games[dest].native.as_ref() {
+        let result=match app.runtimes[dest].game.native.as_ref() {
             Some(native)=>native.set_market_rules(copied_rules.clone()),
             None=>copied_rules.save(profile)
         };
         match result {
             Ok(())=>{
-                app.market_drafts[dest]=Some(copied_rules);
-                app.market_notices[dest]=format!(
+                app.runtimes[dest].automation.market_draft=Some(copied_rules);
+                app.runtimes[dest].automation.market_notice=format!(
                     "Buying settings copied from account {}. Snatch queue preserved.",
                     source+1);
                 app.workspace.market_copy_targets[dest]=false;
@@ -424,7 +425,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
     } else {
         format!("Buying settings copied to account(s) {}",copied.join(", "))
     };
-    app.market_notices[source]=if failures.is_empty() {
+    app.runtimes[source].automation.market_notice=if failures.is_empty() {
         success
     } else {
         format!("{success}. Failed: {}",failures.join(" · "))
