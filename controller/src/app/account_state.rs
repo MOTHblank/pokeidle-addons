@@ -40,7 +40,8 @@ impl ControllerApp {
             // Sign-in is control-plane work, not display telemetry. Keep the
             // BiDi authentication monitor responsive even while minimized.
             let awaiting_handoff = self.accounts[index].enabled &&
-                slot.native.is_none() && !slot.browser_only;
+                slot.native.is_none() && !slot.browser_only &&
+                !slot.stopping && !slot.shutdown_failed;
             let pace = if awaiting_handoff {
                 MonitorPace::Detailed
             } else {
