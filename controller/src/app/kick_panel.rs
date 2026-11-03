@@ -2,6 +2,7 @@
 //! setup and detailed monitoring live here, instead of nested pop-out dialogs.
 use super::*;
 use crate::native_auth;
+use crate::native_kick::select_kick_streams;
 
 // Kick channel link generation and browser launching are shared by
 // account/automation views, but remain Kick-specific helpers.
@@ -81,25 +82,6 @@ fn stored_channel_list(app: &ControllerApp, index: usize) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Favorite order wins the limited viewer slots, followed by other official
-/// live channels, then manual channels. Offline official creators never occupy
-/// slots; the complete roster remains available in the Kick workspace.
-fn select_kick_streams(official_live: &[String], manual: &[String],
-                       prefs: &KickStreamPreferences) -> Vec<String> {
-    let mut names = Vec::<String>::new();
-    for slug in official_live.iter().chain(manual) {
-        if !names.contains(slug) { names.push(slug.clone()); }
-    }
-    // Stable ordering preserves the original official-first order among
-    // non-favorites. Favorites follow the order they were starred.
-    names.sort_by_key(|slug| {
-        let position = prefs.favorites.iter().position(|favorite| favorite == slug);
-        (position.is_none(), position.unwrap_or(usize::MAX))
-    });
-    names.truncate(prefs.max_streams.min(12));
-    names
-}
-
 pub(super) fn desired_kick_channels(app: &ControllerApp, index: usize) -> Vec<String> {
     let official = if app.kick_discovery_available[index] {
         app.kick_discovered_live[index].as_slice()
@@ -163,22 +145,15 @@ impl ControllerApp {
             if self.kick_saved_login[index] && monitor_missing {
                 self.start_kick_account(index);
             }
-            let desired=roster_changed.then(||desired_kick_channels(self,index));
-            let sync_offline=native_changed || roster_changed || monitor_missing;
-            let remaining=if sync_offline && self.kick_monitors[index].is_some() {
-                self.kick_discovered_roster[index].as_ref()
-                    .map(|roster|roster.iter().map(|c|c.slug.clone()).collect::<Vec<_>>())
-                    .unwrap_or_default()
-            } else {Vec::new()};
-            if let Some(monitor)=self.kick_monitors[index].as_mut() {
-                let outcome=desired.as_ref().map(|names|monitor.sync_channels(names))
-                    .transpose().and_then(|_| {
-                        if sync_offline {monitor.sync_offline_officials(&remaining)}
-                        else {Ok(())}
-                    });
-                if let Err(error)=outcome {
-                    logging::warn(&format!("Kick channel synchronization failed: {error}"));
-                    self.set_status(error,true);
+            // Native workers publish roster revisions directly to the parked
+            // Kick coordinator. UI frames handle only the browser sign-in
+            // fallback, and never override the authoritative native roster.
+            if self.games[index].native.is_none() && (roster_changed || monitor_missing) {
+                let manual=stored_channel_list(self,index);
+                let fallback=self.kick_discovered_live[index].clone();
+                let prefs=self.kick_stream_preferences[index].clone();
+                if let Some(monitor)=self.kick_monitors[index].as_ref() {
+                    monitor.update_preferences(manual,fallback,prefs);
                 }
             }
         }
@@ -194,19 +169,14 @@ impl ControllerApp {
         // Channel preferences remain editable during automatic monitoring.
         // Apply changes immediately without restarting unaffected streams.
         self.kick_display_cache[index]=KickDisplayCache::default();
-        let desired = desired_kick_channels(self, index);
-        // Changing manual channels changes which official creators are
-        // supervised. Reconcile the offline point poller immediately rather
-        // than waiting for another server roster event.
-        let official: Vec<String> = self.kick_discovered_roster[index].as_ref()
-            .map(|roster|roster.iter().map(|creator|creator.slug.clone()).collect())
-            .unwrap_or_default();
-        if let Some(monitor) = self.kick_monitors[index].as_mut() {
-            if let Err(error) = monitor.sync_channels(&desired)
-                .and_then(|_|monitor.sync_offline_officials(&official)) {
-                logging::warn(&format!("Kick channel synchronization failed: {error}"));
-                self.set_status(error, true);
-            }
+        // The same event-driven coordinator reconciles user preferences and
+        // authoritative game roster changes, so neither can overwrite the
+        // other's channel selection during a background refresh.
+        let manual=stored_channel_list(self,index);
+        let fallback=self.kick_discovered_live[index].clone();
+        let prefs=self.kick_stream_preferences[index].clone();
+        if let Some(monitor)=self.kick_monitors[index].as_ref() {
+            monitor.update_preferences(manual,fallback,prefs);
         }
     }
     fn toggle_kick_favorite(&mut self, index: usize, slug: &str) {
@@ -282,11 +252,19 @@ impl ControllerApp {
                 Err(error) => { self.set_status(error, true); return; },
             }
         };
-        let monitor = match KickMonitor::start(token.clone(), &target.join(",")) {
+        let monitor = match KickSupervisor::start(token.clone(), &target.join(","),
+            stored_channel_list(self,index),self.kick_discovered_live[index].clone(),
+            self.kick_stream_preferences[index].clone()) {
             Ok(worker) => worker,
             Err(error) => { self.set_status(error, true); return; },
         };
         self.kick_monitors[index] = Some(monitor);
+        // Kick can start before or after PokéIdle native login. Both paths
+        // must subscribe to the server's existing and future roster changes.
+        if let (Some(game),Some(kick))=(self.games[index].native.as_ref(),
+                                       self.kick_monitors[index].as_ref()) {
+            game.set_kick_roster_publisher(kick.roster_publisher());
+        }
         self.kick_display_cache[index]=KickDisplayCache::default();
         self.kick_api_token_input[index].clear();
         let mut message = kick_label(pt_br(),
@@ -313,6 +291,13 @@ impl ControllerApp {
         }
         self.set_status(message, error);
     }
+    pub(super) fn stop_kick_account(&mut self,index:usize) {
+        if let Some(game)=self.games[index].native.as_ref() {
+            game.clear_kick_roster_publisher();
+        }
+        self.kick_monitors[index].take();
+        self.kick_display_cache[index]=KickDisplayCache::default();
+    }
     fn forget_kick_account(&mut self, index: usize) {
         let Some(profile) = GameProfile::from_index(index) else { return; };
         // Clear the Firefox copy first. Leaving its session_token behind makes
@@ -324,8 +309,7 @@ impl ControllerApp {
         match native_auth::clear_kick_token(profile) {
             Ok(()) => {
                 // Explicit sign-out stops existing authenticated connections.
-                self.kick_monitors[index].take();
-                self.kick_display_cache[index]=KickDisplayCache::default();
+                self.stop_kick_account(index);
                 self.kick_api_token_input[index].clear();
                 self.kick_saved_login[index] = false;
                 crate::native_kick_login::reset(profile);
@@ -677,12 +661,12 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .size(11.0).color(WARN));
         if app.kick_saved_login[index] {
             if ui.small_button(kick_label(br, "Retry Kick connection", "Tentar conexão Kick novamente")).clicked() {
-                app.kick_monitors[index].take();
+                app.stop_kick_account(index);
                 app.start_kick_account(index);
             }
         } else if ui.small_button(kick_label(br,
             "Stop and enter token again", "Parar e informar token novamente")).clicked() {
-            app.kick_monitors[index].take();
+            app.stop_kick_account(index);
             app.kick_display_cache[index]=KickDisplayCache::default();
         }
     } else if let Some(error) = monitor.as_ref().and_then(|snapshot|
@@ -762,7 +746,7 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         // A manually entered token may be intentionally unsaved. Give the
         // user a way to replace it without restarting the controller.
         if ui.small_button(kick_label(br, "Stop Kick monitoring", "Parar monitoramento Kick")).clicked() {
-            app.kick_monitors[index].take();
+            app.stop_kick_account(index);
             app.kick_display_cache[index]=KickDisplayCache::default();
         }
         ui.add_space(8.0);
