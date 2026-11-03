@@ -204,13 +204,15 @@ mod shutdown_lifecycle_tests {
     }
 
     #[test]
-    fn stop_followups_cannot_be_confused_with_explicit_stop() {
-        // Only the initiating action may set a deferred restart. An ordinary
-        // Stop clears it, and a stale generation cannot run it after cleanup.
-        let queued = Some(AfterStop::Native { headless: true });
-        assert!(matches!(queued, Some(AfterStop::Native { headless: true })));
-        let cancelled: Option<AfterStop> = None;
-        assert!(cancelled.is_none());
+    fn shutdown_worker_finishes_after_window_closes() {
+        let complete = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&complete);
+        track_firefox_shutdown(std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            flag.store(true, Ordering::Release);
+        }));
+        finish_firefox_shutdown_after_window();
+        assert!(complete.load(Ordering::Acquire));
     }
 }
 
