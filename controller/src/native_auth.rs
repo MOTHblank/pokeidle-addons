@@ -102,7 +102,7 @@ mod capture_handoff_tests {
         let stop_generation=Arc::clone(&generation);
         let stopping=std::thread::spawn(move || {
             starting_tx.send(()).unwrap();
-            invalidate_capture_generation(GameProfile::Game1,&stop_generation);
+            invalidate_capture_generation(&stop_generation);
             done_tx.send(()).unwrap();
         });
         starting_rx.recv().unwrap();
