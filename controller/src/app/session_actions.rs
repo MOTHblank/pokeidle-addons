@@ -268,8 +268,6 @@ impl ControllerApp {
             return;
         }
         if self.stop_one(profile) {
-            self.run_after_stop(profile, action);
-        } else if self.games[index].stopping {
             self.after_stop[index] = Some(action);
         }
     }
@@ -295,14 +293,14 @@ impl ControllerApp {
 
     /// Stop is idempotent while a shutdown worker owns the process. Never
     /// perform WMI/process discovery, BiDi close, or process waits on egui.
-    /// A false return means completion is pending or the worker failed to start.
+    /// Returns whether shutdown was accepted (not whether it has finished).
     pub(super) fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
         // An explicit Stop cancels any previously requested restart.
         self.after_stop[index] = None;
         if self.games[index].stopping {
             self.set_status(format!("{}: stopping", self.account_name(profile)), false);
-            return false;
+            return true;
         }
         self.invalidate_capture_session(index);
         self.stop_kick_account(index);
@@ -317,7 +315,7 @@ impl ControllerApp {
             self.games[index].stopping = true;
             self.native_close_cancelled[index] = true;
             self.set_status(format!("{}: stopping sign-in", account_name), false);
-            return false;
+            return true;
         }
 
         if let Some(native) = self.games[index].native.take() {
@@ -360,6 +358,11 @@ impl ControllerApp {
                     index, generation, ownership, result
                 });
             });
+        if let Ok(worker) = started {
+            track_firefox_shutdown(worker);
+            self.set_status(format!("{}: stopping in the background", account_name), false);
+            return true;
+        }
         if let Err(error) = started {
             // A failed spawn must restore the exact process ownership rather
             // than drop its Child and allow an overlapping replacement.
@@ -374,7 +377,6 @@ impl ControllerApp {
             ), true);
             return false;
         }
-        self.set_status(format!("{}: stopping in the background", account_name), false);
         false
     }
 
