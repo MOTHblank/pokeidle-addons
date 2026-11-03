@@ -18,6 +18,8 @@ impl ControllerApp {
         self.set_status(format!("{}: signing in to PokéIdle and Twitch",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
+        let generation_state=Arc::clone(&self.auth_generations[index]);
+        let generation=generation_state.load(Ordering::Acquire);
         let result = std::thread::Builder::new()
             .name(format!("moth-handoff-{}", profile.name()))
             .spawn(move || {
@@ -30,12 +32,13 @@ impl ControllerApp {
                 if let Ok(value) = &mut result {
                     if crate::native_background::validate_bootstrap(value).is_ok() {
                         let (merged,warning) =
-                            crate::native_auth::cache_browser_handoff(profile,value);
+                            crate::native_auth::cache_browser_handoff(
+                                profile,value,&generation_state,generation);
                         *value=merged;
                         cache_warning=warning;
                     }
                 }
-                let _ = tx.send(NativeHandoffEvent { index, result, cache_warning });
+                let _ = tx.send(NativeHandoffEvent { index, generation, result, cache_warning });
             });
         if let Err(error) = result {
             self.native_handoff_busy[index] = false;
@@ -53,6 +56,8 @@ impl ControllerApp {
             self.native_handoff_busy[index] {
             return;
         }
+        // A new launch must not accept completion events from the old launch.
+        self.auth_generations[index].fetch_add(1,Ordering::AcqRel);
         self.games[index].headless = headless;
         self.games[index].browser_only = false;
         if self.require_browser_login[index] {
@@ -61,6 +66,8 @@ impl ControllerApp {
         }
         self.cached_native_busy[index] = true;
         let tx = self.cached_native_tx.clone();
+        let generation_state=Arc::clone(&self.auth_generations[index]);
+        let generation=generation_state.load(Ordering::Acquire);
         let started = std::thread::Builder::new()
             .name(format!("moth-cache-{}", profile.name()))
             .spawn(move || {
@@ -77,7 +84,8 @@ impl ControllerApp {
                         crate::native_tls::ensure()?;
                         detected.and_then(|_| {
                             if existing_firefox { return Ok(None); }
-                            crate::native_auth::load(profile)
+                            crate::native_auth::load_for_auth(
+                                profile,&generation_state,generation)
                                 .and_then(|saved| saved.map(|bootstrap| {
                                     // Never project a cached, unverified connection as
                                     // started. A failed welcome needs a fresh Firefox
@@ -89,8 +97,15 @@ impl ControllerApp {
                 ).unwrap_or_else(|_| {
                     Err("Native cache verification panicked; see sanitized controller log".into())
                 });
+                let result=match result {
+                    Ok(Some(native)) if generation_state.load(Ordering::Acquire)!=generation => {
+                        native.stop();
+                        Err("Cached login canceled: launch changed".into())
+                    }
+                    other=>other,
+                };
                 let _ = tx.send(CachedNativeEvent {
-                    index, existing_firefox, result
+                    index, generation, existing_firefox, result
                 });
             });
         if let Err(error) = started {
