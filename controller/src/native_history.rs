@@ -638,16 +638,14 @@ mod tests {
         }));
         let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
             .expect("start temporary history writer");
-        {
-            let mut snapshot=shared.lock().unwrap();
-            snapshot.lifetime.kills=1;
-        }
-        writer.request().unwrap();
-        {
-            let mut snapshot=shared.lock().unwrap();
-            snapshot.lifetime.kills=17;
-        }
+        // Keep the live snapshot locked while requests flood in. The
+        // writer can only observe the newest state after the guard releases.
+        let mut snapshot=shared.lock().unwrap();
+        snapshot.lifetime.kills=1;
+        for _ in 0..100 {writer.request().unwrap();}
+        snapshot.lifetime.kills=17;
         let final_generation=writer.request().unwrap();
+        drop(snapshot);
         writer.wait_written(final_generation,FINAL_WRITE_TIMEOUT)
             .expect("final snapshot acknowledged");
         let raw=fs::read_to_string(&path).unwrap();
