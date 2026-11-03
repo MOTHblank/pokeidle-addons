@@ -43,6 +43,55 @@ fn reconcile_capture_draft(
 }
 
 impl ControllerApp {
+    /// Reconcile the only shutdown owner for this account. A failed cleanup
+    /// returns its exact Child/monitor handles for a subsequent explicit Stop.
+    fn finish_firefox_stop(
+        &mut self, index: usize, generation: u64,
+        ownership: FirefoxStopOwnership, result: Result<(), String>,
+    ) {
+        if !self.games[index].stopping {
+            logging::error("Firefox shutdown completion without Stopping ownership");
+            return;
+        }
+        let profile = self.games[index].profile;
+        let current = self.auth_generations[index].load(Ordering::Acquire);
+        self.games[index].stopping = false;
+        if generation != current {
+            // A newer session boundary may have invalidated an earlier queued
+            // restart, but this worker still owns the browser being stopped.
+            self.after_stop[index] = None;
+        }
+        match result {
+            Ok(()) => {
+                // Process and monitor were already closed in the worker.
+                self.games[index].child = None;
+                self.games[index].orphaned_pid = None;
+                self.games[index].monitor = None;
+                self.games[index].shutdown_failed = false;
+                if let Some(action) = self.after_stop[index].take() {
+                    self.run_after_stop(profile, action);
+                } else {
+                    self.set_status(format!(
+                        "{}: stopped", self.account_name(profile)
+                    ), false);
+                }
+            }
+            Err(error) => {
+                self.after_stop[index] = None;
+                self.games[index].shutdown_failed = true;
+                self.games[index].child = ownership.child;
+                self.games[index].orphaned_pid = ownership.orphaned_pid;
+                self.games[index].monitor = ownership.monitor;
+                logging::error(&format!(
+                    "{} Firefox shutdown failed: {}", self.account_name(profile), error
+                ));
+                self.set_status(format!(
+                    "{}: could not close Firefox: {}", self.account_name(profile), error
+                ), true);
+            }
+        }
+    }
+
     // Only this central event pump starts writes, not whichever page is visible.
     // A new choice made during an earlier save is automatically processed on
     // its acknowledgement, even if the picker has since been closed.
@@ -104,6 +153,11 @@ impl ControllerApp {
     }
 
     pub(super) fn refresh_processes(&mut self) {
+        while let Ok(event) = self.firefox_stopped_rx.try_recv() {
+            self.finish_firefox_stop(
+                event.index, event.generation, event.ownership, event.result
+            );
+        }
         while let Ok(event)=self.capture_save_rx.try_recv() {
             // An old completion cannot clear a newer request's busy flag or
             // overwrite drafts, even when the native session was replaced.
@@ -256,7 +310,7 @@ impl ControllerApp {
             logging::info(&format!(
                 "{} native game welcome + Twitch IRC 001 confirmed; closing Firefox",
                 self.account_name(profile)));
-            std::thread::spawn(move || {
+            let worker = std::thread::spawn(move || {
                 let mut result = if let Some(child) = child.as_mut() {
                     firefox::stop_child(child, monitor.as_ref())
                 } else {
@@ -275,6 +329,7 @@ impl ControllerApp {
                     child, orphaned_pid, monitor, result
                 });
             });
+            track_firefox_shutdown(worker);
         }
         // Browser shutdown is asynchronous: the UI never blocks for BiDi
         // browser.close, process reaping or a force-kill fallback.
@@ -283,11 +338,30 @@ impl ControllerApp {
             let profile = GameProfile::from_index(index).expect("known slot");
             self.games[index].handoff_closing = false;
             let cancelled = std::mem::replace(&mut self.native_close_cancelled[index], false);
+            if cancelled && self.games[index].stopping {
+                // Explicit Stop takes precedence over either handoff outcome,
+                // even if a future path cancels without changing generation.
+                event.native.stop();
+                let current=self.auth_generations[index].load(Ordering::Acquire);
+                self.finish_firefox_stop(index, current, FirefoxStopOwnership {
+                    child:event.child, orphaned_pid:event.orphaned_pid,
+                    monitor:event.monitor
+                }, event.result);
+                continue;
+            }
             if event.generation!=self.auth_generations[index].load(Ordering::Acquire) {
                 event.native.stop();
-                // Failed Firefox cleanup still belongs to this slot: retain
-                // handles for an explicit Stop instead of orphaning a process.
-                if event.result.is_err() {
+                if self.games[index].stopping {
+                    // Explicit Stop canceled this handoff. The handoff worker
+                    // still owns Firefox; settle Stopping only after it finishes.
+                    let current=self.auth_generations[index].load(Ordering::Acquire);
+                    self.finish_firefox_stop(index, current, FirefoxStopOwnership {
+                        child:event.child, orphaned_pid:event.orphaned_pid,
+                        monitor:event.monitor
+                    }, event.result);
+                } else if event.result.is_err() {
+                    // Retain failed cleanup when a different session boundary
+                    // invalidated the handoff without an explicit Stop.
                     self.games[index].child=event.child;
                     self.games[index].orphaned_pid=event.orphaned_pid;
                     self.games[index].monitor=event.monitor;
@@ -540,6 +614,8 @@ impl ControllerApp {
         }
         let mut command_feedback = Vec::new();
         for slot in &mut self.games {
+            // The shutdown worker has exclusive ownership of this profile.
+            if slot.stopping { continue; }
             if let Some(monitor) = slot.monitor.as_ref() {
                 while let Some(result) = monitor.take_command_feedback() {
                     command_feedback.push((
@@ -613,7 +689,8 @@ impl ControllerApp {
             if !self.accounts[index].enabled || self.games[index].browser_only ||
                self.native_handoff_busy[index] || self.games[index].native.is_some() ||
                self.native_verifying[index] ||
-               self.games[index].handoff_closing || self.games[index].monitor.is_none() {
+               self.games[index].handoff_closing || self.games[index].stopping ||
+               self.games[index].shutdown_failed || self.games[index].monitor.is_none() {
                 continue;
             }
             let health = self.games[index].health();

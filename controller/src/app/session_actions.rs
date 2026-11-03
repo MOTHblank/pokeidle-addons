@@ -5,7 +5,8 @@ use super::*;
 impl ControllerApp {
     pub(super) fn start_native_handoff(&mut self, profile: GameProfile) {
         let index = profile.index();
-        if self.native_handoff_busy[index] { return; }
+        if self.native_handoff_busy[index] || self.games[index].stopping ||
+            self.games[index].shutdown_failed { return; }
         let Some(monitor) = self.games[index].monitor.clone() else {
             self.set_status("Open Firefox and sign in to PokéIdle first", true);
             return;
@@ -52,6 +53,12 @@ impl ControllerApp {
 
     pub(super) fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
+        if self.games[index].stopping || self.games[index].shutdown_failed {
+            self.set_status(format!(
+                "{}: finish or retry Firefox Stop before starting this account",
+                self.account_name(profile)), true);
+            return;
+        }
         if self.games[index].is_running() || self.cached_native_busy[index] ||
             self.native_handoff_busy[index] {
             return;
@@ -119,9 +126,15 @@ impl ControllerApp {
     /// Authentication-only browser fallback. Never call as the ordinary
     /// Launch path while reusable native game + Twitch credentials exist.
     pub(super) fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
+        self.launch_firefox_bootstrap_impl(profile, headless, true);
+    }
+
+    fn launch_firefox_bootstrap_impl(
+        &mut self, profile: GameProfile, headless: bool, discover_existing: bool
+    ) {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
-        if self.games[index].is_running() { return; }
+        if self.games[index].is_running() || self.games[index].stopping { return; }
 
         let config = match crate::config::Config::for_profile(profile) {
             Ok(config) => config,
@@ -133,6 +146,7 @@ impl ControllerApp {
 
         // An existing Firefox may own this profile even if the controller was
         // restarted or its Child handle was lost. Never spawn over that session.
+        if discover_existing {
         match firefox::find_profile_process(&config) {
             Ok(Some(pid)) => {
                 // A previous crash may have left an authenticated, controlled
@@ -159,6 +173,7 @@ impl ControllerApp {
                 self.set_status(format!("{}: {}", account_name, error), true);
                 return;
             }
+        }
         }
 
         self.games[index].child = None;
@@ -207,9 +222,10 @@ impl ControllerApp {
 
         // A handoff worker might already be closing the Firefox game tab or
         // shutting down its process. Never race it with a new browser session.
-        if self.native_verifying[index] || self.games[index].handoff_closing {
+        if self.native_verifying[index] || self.games[index].handoff_closing ||
+            self.games[index].stopping {
             self.set_status(format!(
-                "{account_name}: Sign-in is still finishing. Open Firefox after it completes."
+                "{account_name}: Wait until this account finishes stopping before opening Firefox."
             ), true);
             return;
         }
@@ -220,11 +236,8 @@ impl ControllerApp {
             return;
         }
 
-        // Stop native game/IRC or an authentication-only Firefox first. In
-        // particular, don't run native and Firefox on the same game account.
-        if !self.stop_one(profile) { return; }
-        self.games[index].browser_only = true;
-        self.launch_firefox_bootstrap(profile, false);
+        // Do not start a second profile owner until shutdown is fully confirmed.
+        self.request_stop_then(profile, AfterStop::Firefox);
     }
 
     pub(super) fn repair_monitor(&mut self, profile: GameProfile) {
@@ -238,113 +251,144 @@ impl ControllerApp {
             "{} repairing an exhausted BiDi session by user-requested Firefox restart",
             self.account_name(profile)
         ));
+        if self.games[index].stopping {
+            self.set_status(format!(
+                "{}: already stopping; retry Firefox repair when it completes",
+                self.account_name(profile)), true);
+            return;
+        }
+        self.request_stop_then(profile, if browser_only {
+            AfterStop::Firefox
+        } else {
+            AfterStop::Native { headless }
+        });
+    }
+
+    /// A restart is a continuation of the *same explicit action*, not an
+    /// independent Start. It may run only after the previous owner is gone.
+    fn request_stop_then(&mut self, profile: GameProfile, action: AfterStop) {
+        let index = profile.index();
+        if self.games[index].stopping {
+            self.set_status(format!(
+                "{}: Firefox is still stopping; please try again afterward",
+                self.account_name(profile)), true);
+            return;
+        }
         if self.stop_one(profile) {
-            if browser_only {
-                // A manual Firefox launch must remain a manual Firefox launch
-                // even after an explicit monitor repair/restart.
-                self.games[index].browser_only = true;
-                self.launch_firefox_bootstrap(profile, false);
-            } else {
-                self.launch_one_mode(profile, headless);
-            }
+            self.after_stop[index] = Some(action);
         }
     }
 
+    pub(super) fn run_after_stop(&mut self, profile: GameProfile, action: AfterStop) {
+        let index = profile.index();
+        // A late completion must not take ownership over a newer Stop or launch.
+        if self.games[index].stopping || self.games[index].is_running() {
+            return;
+        }
+        match action {
+            AfterStop::Native { headless } => self.launch_one_mode(profile, headless),
+            AfterStop::Firefox => {
+                self.games[index].browser_only = true;
+                // Stop worker just verified this dedicated profile is free;
+                // do not repeat blocking OS process enumeration on egui.
+                self.launch_firefox_bootstrap_impl(profile, false, false);
+            }
+            AfterStop::Unmonitored(action) =>
+                self.launch_unmonitored_sign_in(profile, action),
+        }
+    }
+
+    /// Stop is idempotent while a shutdown worker owns the process. Never
+    /// perform WMI/process discovery, BiDi close, or process waits on egui.
+    /// Returns whether shutdown was accepted (not whether it has finished).
     pub(super) fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
-        // A generation transition cannot overtake an in-progress vault write.
-        self.invalidate_capture_session(index);
-        // A stopped account must not keep an independent Kick worker alive.
-        self.stop_kick_account(index);
-        let account_name = self.account_name(profile);
-        if self.games[index].handoff_closing {
-            // The dedicated shutdown worker already owns and is closing the
-            // Firefox process. Do not start native mode after explicit Stop.
-            self.native_close_cancelled[index] = true;
-            self.set_status(format!(
-                "{}: stopping sign-in", account_name), false);
+        // An explicit Stop cancels any previously requested restart.
+        self.after_stop[index] = None;
+        if self.games[index].stopping {
+            self.set_status(format!("{}: stopping", self.account_name(profile)), false);
             return true;
         }
-        // Cancel in-flight cache lookups and browser handoffs. Results from
-        // canceled workers are ignored even if a Stop is pressed mid-login.
+        self.invalidate_capture_session(index);
+        // An explicit retry is the only path that can release a failed Stop.
+        // Keep Start blocked while the new cleanup worker is active.
+        self.games[index].shutdown_failed = false;
+        self.stop_kick_account(index);
         self.cached_native_busy[index] = false;
         self.native_handoff_busy[index] = false;
         self.native_verifying[index] = false;
-        let slot = &mut self.games[index];
-        if let Some(native) = slot.native.take() {
+        let account_name = self.account_name(profile);
+
+        if self.games[index].handoff_closing {
+            // The authenticated handoff's existing worker owns Firefox. The
+            // same completion path will settle this explicit Stop.
+            self.games[index].stopping = true;
+            self.native_close_cancelled[index] = true;
+            self.set_status(format!("{}: stopping sign-in", account_name), false);
+            return true;
+        }
+
+        if let Some(native) = self.games[index].native.take() {
             native.stop();
-            // A failed browser cleanup can leave an authenticated native game
-            // plus an owned Firefox launcher. Stop must close BOTH owners.
-            if slot.child.is_none() && slot.orphaned_pid.is_none() {
-                if let Some(monitor) = slot.monitor.take() { monitor.stop(); }
-                self.set_status(format!("{}: PokéIdle and Twitch stopped.", account_name), false);
-                return true;
-            }
         }
 
-        // Stop also works after restarting the controller, before any attempt
-        // to launch that profile has made the orphan process visible.
-        if slot.child.is_none() && slot.orphaned_pid.is_none() {
-            if let Ok(config) = Config::for_profile(profile) {
-                match firefox::find_profile_process(&config) {
-                    Ok(Some(pid)) => slot.orphaned_pid = Some(pid),
-                    Ok(None) => {}
-                    Err(error) => {
-                        self.set_status(format!("{}: {}", account_name, error), true);
-                        return false;
-                    }
-                }
+        let ownership = std::sync::Arc::new(std::sync::Mutex::new(Some(
+            FirefoxStopOwnership {
+                child: self.games[index].child.take(),
+                orphaned_pid: self.games[index].orphaned_pid.take(),
+                monitor: self.games[index].monitor.take(),
             }
-        }
-
-        if let Some(mut child) = slot.child.take() {
-            logging::info(&format!(
-                "stopping {} Firefox PID {}", account_name, child.id()
-            ));
-            let closed = firefox::stop_child(&mut child, slot.monitor.as_ref())
-                .and_then(|_| Config::for_profile(profile))
-                .and_then(|config| firefox::stop_profile_processes(&config));
-            match closed {
-                Ok(()) => {
-                    if let Some(monitor) = slot.monitor.take() {
+        )));
+        self.games[index].stopping = true;
+        let tx = self.firefox_stopped_tx.clone();
+        let generation = self.auth_generations[index].load(Ordering::Acquire);
+        let worker_ownership = Arc::clone(&ownership);
+        let started = std::thread::Builder::new()
+            .name(format!("moth-stop-{}", profile.name()))
+            .spawn(move || {
+                let mut ownership = worker_ownership.lock()
+                    .expect("Firefox shutdown ownership lock poisoned")
+                    .take().expect("Firefox shutdown must have one owner");
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(child) = ownership.child.as_mut() {
+                        firefox::stop_child(child, ownership.monitor.as_ref())?;
+                    }
+                    // Include a discovered orphan from a previous controller
+                    // crash, even when there was no local Child handle.
+                    Config::for_profile(profile)
+                        .and_then(|config| firefox::stop_profile_processes(&config))?;
+                    if let Some(monitor) = ownership.monitor.as_ref() {
                         monitor.stop();
                     }
-                    slot.orphaned_pid = None;
-                    self.set_status(format!("{} Firefox profile completely closed.", account_name), false);
-                    true
-                }
-                Err(error) => {
-                    logging::error(&format!("{} Firefox shutdown failed: {}", account_name, error));
-                    slot.child = Some(child);
-                    self.set_status(format!("{}: could not close Firefox: {}", account_name, error), true);
-                    false
-                }
+                    Ok::<(), String>(())
+                })).unwrap_or_else(|_| {
+                    Err("Firefox shutdown worker panicked".into())
+                });
+                let _ = tx.send(FirefoxStoppedEvent {
+                    index, generation, ownership, result
+                });
+            });
+        match started {
+            Ok(worker) => {
+                track_firefox_shutdown(worker);
+                self.set_status(format!("{}: stopping in the background", account_name), false);
+                true
             }
-        } else if slot.orphaned_pid.is_some() {
-            // Stop was explicitly clicked; never terminate a recovered process
-            // automatically when the controller itself exits.
-            let result = Config::for_profile(profile)
-                .and_then(|config| firefox::stop_profile_processes(&config));
-            match result {
-                Ok(()) => {
-                    slot.orphaned_pid = None;
-                    if let Some(monitor) = slot.monitor.take() {
-                        monitor.stop();
-                    }
-                    self.set_status(format!("{} Firefox closed.", account_name), false);
-                    true
-                }
-                Err(error) => {
-                    self.set_status(format!("{}: could not close Firefox: {}", account_name, error), true);
-                    false
-                }
+            Err(error) => {
+                // A failed spawn must restore the exact process ownership rather
+                // than drop its Child and allow an overlapping replacement.
+                let mut ownership = ownership.lock().expect("shutdown ownership available")
+                    .take().expect("worker never acquired ownership");
+                self.games[index].child = ownership.child.take();
+                self.games[index].orphaned_pid = ownership.orphaned_pid.take();
+                self.games[index].monitor = ownership.monitor.take();
+                self.games[index].stopping = false;
+                self.games[index].shutdown_failed = true;
+                self.set_status(format!(
+                    "{}: could not schedule Firefox shutdown: {}", account_name, error
+                ), true);
+                false
             }
-        } else {
-            if let Some(monitor) = slot.monitor.take() {
-                monitor.stop();
-            }
-            self.set_status(format!("{} is already stopped.", account_name), false);
-            true
         }
     }
 
@@ -377,16 +421,16 @@ impl ControllerApp {
     }
 
     pub(super) fn stop_all(&mut self) {
-        let mut all_stopped = true;
+        // All four workers are queued independently; no per-account process
+        // wait can delay starting shutdown for the remaining accounts.
+        let mut accepted = true;
         for profile in GameProfile::ALL {
-            if !self.stop_one(profile) {
-                all_stopped = false;
-            }
+            accepted &= self.stop_one(profile);
         }
-        if all_stopped {
-            self.set_status("All accounts stopped. Firefox login windows were closed.", false);
-        } else {
-            self.set_status("Some Firefox instances could not be stopped; check the log.", true);
+        if !accepted {
+            self.set_status("Some Firefox shutdown workers could not start. Retry Stop.", true);
+        } else if self.games.iter().any(|slot| slot.stopping) {
+            self.set_status("Stopping all accounts in the background.", false);
         }
     }
 
@@ -427,19 +471,23 @@ impl ControllerApp {
         // A native handoff still owns the profile until its cleanup finishes.
         // stop_one intentionally cancels it asynchronously, so do not launch
         // another Firefox against the same locked profile during that window.
-        if self.native_verifying[index] || self.games[index].handoff_closing {
+        if self.native_verifying[index] || self.games[index].handoff_closing ||
+            self.games[index].stopping {
             self.set_status(format!(
-                "{account_name}: Sign-in is still finishing. Try again after it completes."
+                "{account_name}: Wait until this account finishes stopping before signing in."
             ), true);
             return;
         }
 
-        // Stop the native game/Twitch sockets and any monitored Firefox so
-        // authentication runs solely in an ordinary user-controlled browser.
-        if !self.stop_one(profile) {
-            return;
-        }
+        // The follow-up is tied to the explicit Stop generation and only runs
+        // after the worker has verified the profile is fully released.
+        self.request_stop_then(profile, AfterStop::Unmonitored(action));
+    }
 
+    fn launch_unmonitored_sign_in(&mut self, profile: GameProfile, action: ProfileAction) {
+        let index = Self::game_index(profile);
+        let account_name = self.account_name(profile);
+        if self.games[index].stopping || self.games[index].is_running() { return; }
         let config = match Config::for_profile(profile) {
             Ok(config) => config,
             Err(error) => {
@@ -448,24 +496,10 @@ impl ControllerApp {
             }
         };
 
-        // Preserve the existing per-account cookies, but do not share an
-        // active Firefox process or debugger with either sign-in provider.
-        match firefox::find_profile_process(&config) {
-            Ok(Some(pid)) => {
-                self.games[index].orphaned_pid = Some(pid);
-                self.set_status(
-                    format!("{}: Firefox already uses this profile (PID {}). Use Stop before launching.", account_name, pid),
-                    true,
-                );
-                return;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.set_status(format!("{}: {}", account_name, error), true);
-                return;
-            }
-        }
-
+        // The dedicated Stop worker already confirmed this profile has no
+        // living Firefox owner. A second WMI scan here would stall the UI.
+        // Firefox itself still enforces the profile lock if another program
+        // opens the same profile between cleanup and this new launch.
         let (service, url, status_suffix) = match action {
             ProfileAction::GoogleSignIn => (
                 "Google",
