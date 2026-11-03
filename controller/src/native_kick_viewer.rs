@@ -295,10 +295,14 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
+    if stop.load(Ordering::Acquire) { return Ok(()); }
     let token = auth.checked(|| viewer_token(client, meta, bearer))?;
+    if stop.load(Ordering::Acquire) { return Ok(()); }
     let mut socket = ws_connect(&token)?;
+    if stop.load(Ordering::Acquire) { return Ok(()); }
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
+    if stop.load(Ordering::Acquire) { return Ok(()); }
     let media = MediaRunner::start(meta.playback_url.clone(), Arc::clone(&stop), bandwidth)?;
     let started = Instant::now();
     let mut last_handshake = started;
