@@ -8,7 +8,7 @@ pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui
     // Take one read-only snapshot for the entire render. All network parsing
     // and commands remain on the game worker, never the egui render thread.
     let (status, view, twitch) = {
-        let native = app.games[index].native.as_ref().expect("native details require a session");
+        let native = app.runtimes[index].game.native.as_ref().expect("native details require a session");
         (native.snapshot(), native.hunt_snapshot(), native.twitch_snapshot())
     };
     let phase_online = status.phase == "Online";
