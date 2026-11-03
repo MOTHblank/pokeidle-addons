@@ -447,6 +447,9 @@ impl ControllerApp {
             }
         }
         for profile in recover {
+            // Expired-login recovery is also a session boundary. Cancel any
+            // old capture save before Firefox imports/preserves its settings.
+            self.invalidate_capture_session(profile.index());
             self.require_browser_login[profile.index()] = true;
             self.set_status(format!(
                 "{}: login expired, opening Firefox to sign in again",

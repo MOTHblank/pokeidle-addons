@@ -1182,15 +1182,20 @@ impl ControllerApp {
         }
     }
 
+    // A session transition is serialized with in-flight encrypted writes.
+    // Reset old UI acknowledgements only after the vault boundary is crossed.
+    fn invalidate_capture_session(&mut self,index:usize) {
+        crate::native_auth::invalidate_capture_generation(&self.capture_generations[index]);
+        self.capture_save_busy[index]=false;
+        self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
+    }
+
     // Native and Twitch recovery signals wake the control-plane pump directly.
     // Display refresh throttling never blocks an expired-login transition.
     fn adopt_native_session(&mut self, index: usize, session: NativeSession) {
         // Adopted sessions have independent settings lifetimes even when the
         // user reauthenticates without explicitly stopping the old session.
-        self.capture_generations[index].fetch_add(1,Ordering::AcqRel);
-        // The previous session's pending write must not block a new editor.
-        self.capture_save_busy[index]=false;
-        self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
+        self.invalidate_capture_session(index);
         let ctx = self.lifecycle_ctx.clone();
         session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
         // Historical forecasts remain dormant for users who have never opened
