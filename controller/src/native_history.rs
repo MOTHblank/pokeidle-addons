@@ -495,7 +495,10 @@ impl HistoryRecorder {
         if kind!=Some("batalha"){return}
         let Some(events)=frame.get("ev").and_then(Value::as_array) else{return};
         let day=unix_day();
-        let Ok(mut snapshot)=self.shared.lock() else{return};
+        let Ok(mut guard)=self.shared.lock() else{return};
+        // Work through a normal &mut reference so distinct fields (daily
+        // counters and lifetime totals) can be updated together safely.
+        let snapshot:&mut HistorySnapshot=&mut *guard;
         let mut slug=self.last_hunt.clone()
             .or_else(||hunt.filter(|s|s.len()<=128).map(str::to_owned))
             .unwrap_or_else(||"unknown".into());
