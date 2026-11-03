@@ -343,6 +343,7 @@ fn capture_write_transaction<T>(
     // again outside the closure could falsely report a completed vault
     // write as canceled, without having rolled it back.
     write()
+}
 
 fn load_capture_vault(profile:GameProfile)->Result<Option<Value>,CaptureSaveFailure>{
     platform::load(profile).map_err(CaptureSaveFailure::vault)?
