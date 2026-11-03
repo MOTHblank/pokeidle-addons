@@ -724,7 +724,7 @@ mod tests {
         manager.start("bronze", true, &state, &mut nav, now).unwrap();
         assert!(matches!(manager.next_action(&state, &mut nav, now),
             Some(GameCommand::BossAuto { active:true, .. })));
-        assert!(matches!(manager.stop(&mut nav),
+        assert!(matches!(manager.stop(&mut nav, &state, now),
             Some(GameCommand::BossAuto { active:false, .. })));
         manager.next_action(&state, &mut nav, now);
         assert!(manager.active(), "must not return before the server stops");
@@ -814,7 +814,7 @@ mod tests {
             Some(GameCommand::BossAuto {active:true,..})));
         manager.ingest(&json!({"t":"estado","estado":{"boss":{
             "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
-        assert!(matches!(manager.stop(&mut navigator),
+        assert!(matches!(manager.stop(&mut navigator, &view, now),
             Some(GameCommand::BossAuto {active:false,..})));
         manager.on_disconnect();
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
@@ -899,6 +899,126 @@ mod tests {
         assert!(!manager.active(), "start from center finishes safely without any ack");
         assert!(manager.view.warning.as_deref().unwrap_or("").contains("not confirmed"));
     }
+    #[test]
+    fn cancel_before_center_dispatch_does_not_leave_a_trip_running() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(manager.stop(&mut nav, &view, now).is_none());
+        assert!(!manager.active());
+        assert!(nav.next_action(&view, now).is_none());
+    }
+
+    #[test]
+    fn cancel_after_center_dispatch_restores_hunt_on_late_arrival() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(nav.next_action(&view, now), Some(GameCommand::Center)));
+        assert!(manager.stop(&mut nav, &view, now).is_none());
+        assert!(manager.active(), "in-flight travel still needs reconciliation");
+        assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(nav.next_action(&view, now).is_none());
+        view.in_center = true;
+        assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(matches!(nav.next_action(&view, now),
+            Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+        view.in_center = false;
+        manager.next_action(&view, &mut nav, now);
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn canceled_center_request_can_time_out_without_a_boss_start() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(nav.next_action(&view, now), Some(GameCommand::Center)));
+        manager.stop(&mut nav, &view, now);
+        assert!(manager.active());
+        assert!(manager.next_action(&view, &mut nav,
+            now + Duration::from_secs(19)).is_none());
+        assert!(manager.active());
+        assert!(manager.next_action(&view, &mut nav,
+            now + Duration::from_secs(20)).is_none());
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn stop_state_without_start_ack_finishes_when_server_is_inactive() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::BossAuto { active: true, .. })));
+        assert!(matches!(manager.stop(&mut nav, &view, now),
+            Some(GameCommand::BossAuto { active: false, .. })));
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{"auto":false,"arena":null}}}));
+        manager.next_action(&view, &mut nav, now);
+        assert!(!manager.active(), "authoritative inactive state must settle Stop");
+    }
+
+    #[test]
+    fn stop_without_event_times_out_only_if_server_is_inactive() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        manager.next_action(&view, &mut nav, now);
+        manager.stop(&mut nav, &view, now);
+        manager.next_action(&view, &mut nav, now + Duration::from_secs(19));
+        assert!(manager.active());
+        manager.next_action(&view, &mut nav, now + Duration::from_secs(20));
+        assert!(!manager.active());
+        assert!(manager.view.warning.as_deref().unwrap_or("").contains("not acknowledged"));
+    }
+
+    #[test]
+    fn invalid_loot_json_is_quarantined_before_new_writes() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap_or_default().as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "moth-boss-corrupt-test-{}-{stamp}", std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("loot.json");
+        let damaged = b"invalid boss journal, keep me";
+        fs::write(&path, damaged).unwrap();
+        let (loaded, warning) = load_log(&path).unwrap();
+        assert!(loaded.is_empty());
+        assert!(warning.unwrap_or_default().contains("preserved"));
+        assert!(!path.exists());
+        let quarantined = fs::read_dir(&root).unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|candidate| candidate != &path)
+            .expect("damaged journal backup");
+        assert_eq!(fs::read(&quarantined).unwrap(), damaged);
+        let fresh = BossLoot {
+            at: 1, key: "bronze".into(), boss: "Bronze Boss".into(), drops: vec![],
+        };
+        save_log(&path, &[fresh.clone()]).unwrap();
+        assert_eq!(load_log(&path).unwrap().0, vec![fresh]);
+        assert_eq!(fs::read(&quarantined).unwrap(), damaged);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_journal_is_not_replaced_by_empty_history() {
+        // Reading a directory as a journal fails; new persistence must not start.
+        assert!(load_log(&std::env::temp_dir()).is_err());
+    }
+
     #[test]
     fn loot_uses_confirmed_boss_death_events_only() {
         let mut m = manager();
