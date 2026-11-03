@@ -84,7 +84,8 @@ fn start_history_writer(
                     drop(snapshot);
                     // JSON creation and serialization never run on the game
                     // socket worker or under the live-history mutex.
-                    write_atomic(&path,&copy.to_value(&nick).to_string())
+                    serialize_history(&copy,&nick)
+                        .and_then(|raw|write_atomic(&path,&raw))
                 }
                 Err(_)=>Err("History snapshot unavailable".into()),
             };
@@ -103,7 +104,8 @@ fn start_history_writer(
         .map_err(|error|format!("Could not start history writer: {error}"))?;
     Ok(signal)
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoryDay {
     pub day: u64,
     pub hunt: String,
@@ -210,10 +212,15 @@ impl HistoryDay {
     }
 }
 /// Model estimate captured when Hunt Atlas was actually open and authenticated.
-#[derive(Clone,Debug)]
+#[derive(Clone,Debug,serde::Serialize)]
 pub struct HistoryForecast {
     pub day:u64,pub hour:u64,pub hunt:String,
-    pub trainer_xp_h:f64,pub pokemon_xp_h:f64,pub kills_h:f64,
+    #[serde(rename = "trainerH")]
+    pub trainer_xp_h:f64,
+    #[serde(rename = "pokemonH")]
+    pub pokemon_xp_h:f64,
+    #[serde(rename = "killsH")]
+    pub kills_h:f64,
     pub calibrated:bool,
 }
 impl HistoryForecast {
@@ -245,6 +252,22 @@ impl HistoryForecast {
         Some(Self{day,hour,hunt,trainer_xp_h,pokemon_xp_h,kills_h,
             calibrated:raw.get("calibrated").and_then(Value::as_bool).unwrap_or(false)})
     }
+}
+// Borrow the derived history instead of cloning every row into serde_json::Value.
+// This preserves the v1 on-disk field names without another JSON tree.
+#[derive(serde::Serialize)]
+struct HistoryDocument<'a> {
+    version: u8,
+    nick: &'a str,
+    lifetime: &'a HistoryDay,
+    days: &'a [HistoryDay],
+    forecasts: &'a [HistoryForecast],
+}
+fn serialize_history(snapshot:&HistorySnapshot,nick:&str)->Result<String,String>{
+    serde_json::to_string(&HistoryDocument{
+        version:1,nick,lifetime:&snapshot.lifetime,
+        days:&snapshot.days,forecasts:&snapshot.forecasts
+    }).map_err(|error|format!("History serialization: {error}"))
 }
 #[derive(Clone,Debug,Default)]
 pub struct HistorySnapshot {
@@ -654,6 +677,24 @@ mod tests {
         assert_eq!(recovered.lifetime.kills,17);
         writer.stop();
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn background_writer_serialization_matches_existing_disk_schema() {
+        let mut snapshot=HistorySnapshot::default();
+        snapshot.days.push(HistoryDay{
+            day:123,hunt:"route-a".into(),kills:8,captures:2,
+            balls_used:BTreeMap::from([(4,3)]),
+            drops:BTreeMap::from([("Heart Stone".into(),1)]),
+            ..Default::default()
+        });
+        snapshot.forecasts.push(HistoryForecast{
+            day:123,hour:123*24,hunt:"route-a".into(),
+            trainer_xp_h:1200.0,pokemon_xp_h:800.0,
+            kills_h:50.0,calibrated:true
+        });
+        let encoded=serialize_history(&snapshot,"Trainer").unwrap();
+        let decoded:Value=serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded,snapshot.to_value("Trainer"));
     }
     #[test]
     fn roundtrip_daily_gameplay_totals_excluding_raw_tokens() {
