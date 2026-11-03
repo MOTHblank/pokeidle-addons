@@ -196,6 +196,10 @@ mod shutdown_lifecycle_tests {
         assert!(slot.is_running());
         assert_eq!(slot.health().state, "Stopping");
         slot.stopping = false;
+        slot.shutdown_failed = true;
+        assert!(slot.is_running());
+        assert_eq!(slot.health().state, "Stop failed");
+        slot.shutdown_failed = false;
         assert!(!slot.is_running());
     }
 
@@ -333,6 +337,8 @@ struct GameSlot {
     handoff_closing: bool,
     // A shutdown worker owns the browser until its completion is reconciled.
     stopping: bool,
+    // Failed cleanup retains ownership until an explicit Stop retry succeeds.
+    shutdown_failed: bool,
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
     headless: bool,
@@ -348,6 +354,7 @@ impl GameSlot {
             native: None,
             handoff_closing: false,
             stopping: false,
+            shutdown_failed: false,
             child: None,
             monitor: None,
             headless: true,
@@ -357,7 +364,8 @@ impl GameSlot {
     }
 
     fn is_running(&mut self) -> bool {
-        if self.native.is_some() || self.handoff_closing || self.stopping { return true; }
+        if self.native.is_some() || self.handoff_closing || self.stopping ||
+            self.shutdown_failed { return true; }
         if let Some(child) = self.child.as_mut() {
             // On an OS inspection error, conservatively keep ownership rather
             // than offer a duplicate launch into a potentially locked profile.
@@ -386,9 +394,9 @@ impl GameSlot {
         &self,
         native_sample: Option<(&crate::native_background::NativeSnapshot, &HuntView)>,
     ) -> Health {
-        if self.stopping {
+        if self.stopping || self.shutdown_failed {
             let mut health = Health::default();
-            health.state = "Stopping".into();
+            health.state = if self.stopping { "Stopping" } else { "Stop failed" }.into();
             return health;
         }
         if self.handoff_closing {
