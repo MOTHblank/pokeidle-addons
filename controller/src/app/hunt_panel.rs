@@ -120,6 +120,7 @@ pub(super) struct EstimateCache {
     geo_ptr: usize,
     live: bool,
     refreshed: Option<Instant>,
+    failed_at:Option<Instant>,
     last_archived:Option<(String,Instant)>,
     pending: Option<std::sync::mpsc::Receiver<
         std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>>,
@@ -137,11 +138,14 @@ impl EstimateCache {
             Some(Ok(values))=>{
                 self.values=values;
                 self.refreshed=Some(Instant::now());
+                self.failed_at=None;
                 self.pending=None;
             }
             Some(Err(TryRecvError::Disconnected))=>{
                 self.pending=None;
-                self.refreshed=Some(Instant::now()); // Backoff on worker panic.
+                // Only a failed worker retries after a delay. Successful
+                // forecasts never refresh just because time passed.
+                self.failed_at=Some(Instant::now());
             }
             _=>{}
         }
@@ -187,16 +191,19 @@ impl EstimateCache {
             self.bonus_signature=bonus_signature;
             self.live=live;
             self.refreshed=None;
+            self.failed_at=None;
             self.last_archived=None;
             self.pending=None; // Discard outdated asynchronous results.
             self.values.clear();
         }
         // A completed generation remains valid until a relevant input changes.
         // Do not launch another full combat simulation on a 20-second timer.
-        if !live || self.pending.is_some() || self.refreshed.is_some() {
+        if !live || self.pending.is_some() || self.refreshed.is_some() ||
+            self.failed_at.is_some_and(|at|at.elapsed()<Duration::from_secs(20)) {
             return;
         }
         let Some(reference)=reference else {return};
+        self.failed_at=None;
         let guide=Arc::clone(reference);
         let snapshot=view.clone();
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
@@ -344,7 +351,7 @@ impl RankingsCache {
         let pace=(recent && m.seconds>=20.0 && m.kills>=5
             && m.kills_h.is_finite() && m.kills_h>0.0)
             .then_some(m.kills_h.to_bits());
-        let actual=if recent {
+        let actual=(if recent {
             match ranking {
                 HuntRanking::TrainerXp if m.valid_trainer=>Some(m.trainer_xp_h),
                 HuntRanking::PokemonXp if m.valid_pokemon=>Some(m.pokemon_xp_h),
@@ -352,7 +359,7 @@ impl RankingsCache {
                     Some(m.gold_gross_h),
                 _=>None,
             }
-        }else{None}.filter(|n|n.is_finite()).map(f64::to_bits);
+        }else{None}).filter(|n|n.is_finite()).map(f64::to_bits);
         (view.hunt_slug.clone(),pace,actual)
     }
     fn update(&mut self,view:&HuntView,reference:Option<&Arc<AtlasReference>>,
@@ -1061,7 +1068,6 @@ pub(super) struct ExplorerCache {
     reference_ptr:usize,
     forecast_at:Option<Instant>,
     model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
-    hunt_slug:Option<String>,
     trainer_level:Option<u32>,
     outland_catalog:Option<[(u32,f64);8]>,
     roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
@@ -1127,7 +1133,6 @@ impl ExplorerCache {
             self.reference_ptr!=reference_ptr ||
             self.forecast_at!=estimates.refreshed ||
             self.model_signature!=estimates.active_signature ||
-            self.hunt_slug!=view.hunt_slug ||
             self.trainer_level!=view.trainer_level ||
             self.outland_catalog!=view.outland_catalog ||
             ownership_changed ||
@@ -1143,7 +1148,6 @@ impl ExplorerCache {
             self.reference_ptr=reference_ptr;
             self.forecast_at=estimates.refreshed;
             self.model_signature=estimates.active_signature.clone();
-            self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
             self.outland_catalog=view.outland_catalog;
             self.roster_ready=view.roster_ready;
@@ -3553,6 +3557,7 @@ mod tests {
         scenario.modifiers_open=true;
         scenario.hunt_slug="different".into();
         scenario.ball=BallKind::Beast;
+        view.hunt_slug=Some("other-hunt".into());
         results.update(&view,None,&estimates,&filters,&scenario);
         assert_eq!(results.rebuilds,1);
         view.pokemon_roster=Arc::new(vec![native_hunts::PokemonInfo{
