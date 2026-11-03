@@ -92,8 +92,11 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             if let Some(error) = view.warning.as_deref() {
                 ui.colored_label(super::WARN,tr(error));
             }
+            if let Some(error) = hunt.navigation_warning.as_deref() {
+                ui.colored_label(super::WARN,tr(error));
+            }
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(view.busy || view.auto,
+                if ui.add_enabled(view.can_stop,
                     egui::Button::new(tr("Stop repetition and return"))).clicked() {
                     action = Some(GameCommand::BossStop);
                 }
