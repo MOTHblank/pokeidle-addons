@@ -5,7 +5,8 @@ use super::*;
 impl ControllerApp {
     pub(super) fn start_native_handoff(&mut self, profile: GameProfile) {
         let index = profile.index();
-        if self.native_handoff_busy[index] || self.games[index].stopping { return; }
+        if self.native_handoff_busy[index] || self.games[index].stopping ||
+            self.games[index].shutdown_failed { return; }
         let Some(monitor) = self.games[index].monitor.clone() else {
             self.set_status("Open Firefox and sign in to PokéIdle first", true);
             return;
