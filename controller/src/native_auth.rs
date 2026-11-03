@@ -114,7 +114,7 @@ mod capture_handoff_tests {
         done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         stopping.join().unwrap();
         assert_eq!(generation.load(Ordering::Acquire),4);
-        assert!(capture_write_transaction(&generation,3,||
+        assert!(capture_write_transaction::<()>(&generation,3,||
             panic!("an old session must never enter the vault writer")).is_err());
     }
     #[test]
