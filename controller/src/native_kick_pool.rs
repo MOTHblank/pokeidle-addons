@@ -59,7 +59,10 @@ impl Pool {
         queue.pending.push_back(Task { stop, work });
         if queue.idle > 0 {
             self.shared.available.notify_one();
-        } else if queue.workers < self.limit {
+        }
+        // One idle worker can handle one queued job, not an entire burst.
+        // Spawn for any backlog beyond the workers that are already idle.
+        if queue.workers < self.limit && queue.pending.len() > queue.idle {
             queue.workers += 1;
             let shared = Arc::clone(&self.shared);
             match thread::Builder::new().name(self.name.into())
@@ -177,9 +180,14 @@ mod tests {
 
         let stale = Arc::new(AtomicBool::new(false));
         let (stale_tx, stale_rx) = mpsc::channel();
-        pool.submit(Arc::clone(&stale), Box::new(move || {
-            let _ = stale_tx.send(());
-        })).unwrap();
+        for _ in 0..MAX_PENDING {
+            let stale_tx = stale_tx.clone();
+            pool.submit(Arc::clone(&stale), Box::new(move || {
+                let _ = stale_tx.send(());
+            })).unwrap();
+        }
+        assert!(pool.submit(Arc::new(AtomicBool::new(false)),
+            Box::new(|| {})).is_err(), "all queued slots must be bounded");
         stale.store(true, Ordering::Release);
         let (fresh_tx, fresh_rx) = mpsc::channel();
         pool.submit(Arc::new(AtomicBool::new(false)), Box::new(move || {
@@ -188,5 +196,27 @@ mod tests {
         release_tx.send(()).unwrap();
         fresh_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(stale_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn active_channel_jobs_run_in_parallel() {
+        let pool = Pool::new("moth-kick-pool-parallel-test", 2);
+        let (started_tx, started_rx) = mpsc::channel();
+        let release = Arc::new(AtomicBool::new(false));
+        for _ in 0..2 {
+            let started_tx = started_tx.clone();
+            let release = Arc::clone(&release);
+            pool.submit(Arc::new(AtomicBool::new(false)), Box::new(move || {
+                let _ = started_tx.send(());
+                while !release.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            })).unwrap();
+        }
+        for _ in 0..2 {
+            started_rx.recv_timeout(Duration::from_secs(2))
+                .expect("pool must run both blocking jobs concurrently");
+        }
+        release.store(true, Ordering::Release);
     }
 }
