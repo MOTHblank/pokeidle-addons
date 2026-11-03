@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -28,6 +28,7 @@ struct WriteState {
 struct WriteSignal {
     state:Mutex<WriteState>,
     wake:Condvar,
+    handle:Mutex<Option<thread::JoinHandle<()>>>,
 }
 impl WriteSignal {
     fn request(&self)->Result<u64,String> {
@@ -62,6 +63,52 @@ impl WriteSignal {
         if let Ok(mut state)=self.state.lock() {state.stopping=true;}
         self.wake.notify_all();
     }
+    // A stopped socket worker must not release its profile to a replacement
+    // recorder while its previous writer can still rename the same file.
+    fn stop_and_join(&self) {
+        self.stop();
+        if let Ok(mut worker)=self.handle.lock() {
+            if let Some(handle)=worker.take() {
+                if handle.join().is_err() {
+                    crate::logging::warn("Native history writer panicked during shutdown");
+                }
+            }
+        }
+    }
+}
+
+// Only one recorder at a time may own a profile's history file, including
+// the time spent reading it and draining the previous writer. Stop remains
+// nonblocking for the UI; the replacement session waits on its startup thread.
+#[derive(Default)]
+struct HistoryGate {
+    active:Mutex<bool>,
+    available:Condvar,
+}
+struct HistoryLease {
+    gate:Arc<HistoryGate>,
+}
+impl HistoryGate {
+    fn acquire(self:&Arc<Self>)->HistoryLease {
+        let mut active=self.active.lock().unwrap_or_else(|error|error.into_inner());
+        while *active {
+            active=self.available.wait(active).unwrap_or_else(|error|error.into_inner());
+        }
+        *active=true;
+        HistoryLease{gate:Arc::clone(self)}
+    }
+}
+impl Drop for HistoryLease {
+    fn drop(&mut self) {
+        let mut active=self.gate.active.lock().unwrap_or_else(|error|error.into_inner());
+        *active=false;
+        self.gate.available.notify_one();
+    }
+}
+fn profile_history_gate(profile:GameProfile)->Arc<HistoryGate> {
+    static GATES:OnceLock<[Arc<HistoryGate>;4]>=OnceLock::new();
+    Arc::clone(&GATES.get_or_init(||
+        std::array::from_fn(|_|Arc::new(HistoryGate::default())))[profile.index()])
 }
 
 // One writer per active native session, parked on a condvar when idle.
@@ -72,7 +119,7 @@ fn start_history_writer(
 )->Result<Arc<WriteSignal>,String> {
     let signal=Arc::new(WriteSignal::default());
     let worker_signal=Arc::clone(&signal);
-    thread::Builder::new().name("moth-native-history".into())
+    let handle=thread::Builder::new().name("moth-native-history".into())
         .spawn(move || {
             // Report severe snapshot-copy contention once per writer session,
             // not on every five-second save.
@@ -120,6 +167,7 @@ fn start_history_writer(
             }
         })
         .map_err(|error|format!("Could not start history writer: {error}"))?;
+    *signal.handle.lock().map_err(|_|"History writer handle unavailable".to_owned())?=Some(handle);
     Ok(signal)
 }
 #[derive(Clone, Debug, Default, serde::Serialize)]
@@ -456,9 +504,11 @@ pub struct HistoryRecorder {
     dirty:bool,
     last_flush:Instant,
     writer:Option<Arc<WriteSignal>>,
+    _lease:HistoryLease,
 }
 impl HistoryRecorder {
     pub fn new(profile:GameProfile,nick:String)->Self {
+        let lease=profile_history_gate(profile).acquire();
         let path=history_path(profile,&nick);
         let mut snapshot=HistorySnapshot::default();
         let path=match path {
@@ -495,10 +545,11 @@ impl HistoryRecorder {
             }
         });
         Self {shared,last_hunt:None,last_kill:None,last_pruned_day:today,
-            dirty:false,last_flush:Instant::now(),writer}
+            dirty:false,last_flush:Instant::now(),writer,_lease:lease}
     }
     pub fn record_forecast(&mut self,model:HistoryForecast){
-        if model.day!=unix_day(){return}
+        let day=model.day;
+        if day!=unix_day(){return}
         let Ok(mut snapshot)=self.shared.lock() else{return};
         if let Some(previous)=snapshot.forecasts.iter_mut()
             .find(|row|row.hour==model.hour && row.hunt==model.hunt){
@@ -508,9 +559,9 @@ impl HistoryRecorder {
         }
         // Capturing only one model per hour/hunt prevents redraw-generated
         // history inflation. The async history writer owns persistence.
-        if self.last_pruned_day!=model.day {
-            snapshot.retain_recent(model.day);
-            self.last_pruned_day=model.day;
+        if self.last_pruned_day!=day {
+            snapshot.retain_recent(day);
+            self.last_pruned_day=day;
         }
         // Never grow the 90-day journal beyond what the loader accepts.
         if snapshot.forecasts.len()>5000 {
@@ -644,7 +695,7 @@ impl HistoryRecorder {
 impl Drop for HistoryRecorder {
     fn drop(&mut self){
         self.maybe_flush(true);
-        if let Some(writer)=self.writer.as_ref(){writer.stop();}
+        if let Some(writer)=self.writer.as_ref(){writer.stop_and_join();}
     }
 }
 #[cfg(test)]
@@ -657,7 +708,8 @@ mod tests {
         let mut history=HistoryRecorder{
             shared:Arc::new(Mutex::new(HistorySnapshot::default())),
             last_hunt:None,last_kill:None,last_pruned_day:unix_day(),dirty:false,
-            last_flush:Instant::now(),writer:None
+            last_flush:Instant::now(),writer:None,
+            _lease:Arc::new(HistoryGate::default()).acquire()
         };
         history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
         history.ingest(r#"{"t":"batalha","ev":[
@@ -670,6 +722,25 @@ mod tests {
             .unwrap().trainer_xp,5);
         assert_eq!(snapshot.days.iter().find(|d|d.hunt=="route-b")
             .unwrap().trainer_xp,10);
+    }
+    #[test]
+    fn replacement_history_recorder_waits_for_previous_owner() {
+        let gate=Arc::new(HistoryGate::default());
+        let first=gate.acquire();
+        let (ready_tx,ready_rx)=std::sync::mpsc::channel();
+        let (acquired_tx,acquired_rx)=std::sync::mpsc::channel();
+        let next=Arc::clone(&gate);
+        let replacement=thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            let _lease=next.acquire();
+            acquired_tx.send(()).unwrap();
+        });
+        ready_rx.recv().unwrap();
+        assert!(acquired_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "replacement must not read while old session owns the file");
+        drop(first);
+        acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        replacement.join().unwrap();
     }
     #[test]
     fn pending_history_saves_coalesce_without_queuing_full_snapshots() {
@@ -707,7 +778,7 @@ mod tests {
         let recovered=HistorySnapshot::from_value(
             &serde_json::from_str::<Value>(&raw).unwrap(),"Test").unwrap();
         assert_eq!(recovered.lifetime.kills,17);
-        writer.stop();
+        writer.stop_and_join();
         fs::remove_file(path).unwrap();
     }
     #[test]
@@ -726,7 +797,8 @@ mod tests {
         let mut recorder=HistoryRecorder {
             shared,last_hunt:None,last_kill:None,last_pruned_day:unix_day(),
             dirty:true,last_flush:Instant::now()-SAVE_INTERVAL,
-            writer:Some(Arc::clone(&writer))
+            writer:Some(Arc::clone(&writer)),
+            _lease:Arc::new(HistoryGate::default()).acquire()
         };
         recorder.maybe_flush(false);
         let initial=writer.state.lock().unwrap().requested;
