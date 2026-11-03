@@ -358,26 +358,27 @@ impl ControllerApp {
                     index, generation, ownership, result
                 });
             });
-        if let Ok(worker) = started {
-            track_firefox_shutdown(worker);
-            self.set_status(format!("{}: stopping in the background", account_name), false);
-            return true;
+        match started {
+            Ok(worker) => {
+                track_firefox_shutdown(worker);
+                self.set_status(format!("{}: stopping in the background", account_name), false);
+                true
+            }
+            Err(error) => {
+                // A failed spawn must restore the exact process ownership rather
+                // than drop its Child and allow an overlapping replacement.
+                let mut ownership = ownership.lock().expect("shutdown ownership available")
+                    .take().expect("worker never acquired ownership");
+                self.games[index].child = ownership.child.take();
+                self.games[index].orphaned_pid = ownership.orphaned_pid.take();
+                self.games[index].monitor = ownership.monitor.take();
+                self.games[index].stopping = false;
+                self.set_status(format!(
+                    "{}: could not schedule Firefox shutdown: {}", account_name, error
+                ), true);
+                false
+            }
         }
-        if let Err(error) = started {
-            // A failed spawn must restore the exact process ownership rather
-            // than drop its Child and allow an overlapping replacement.
-            let mut ownership = ownership.lock().expect("shutdown ownership available")
-                .take().expect("worker never acquired ownership");
-            self.games[index].child = ownership.child.take();
-            self.games[index].orphaned_pid = ownership.orphaned_pid.take();
-            self.games[index].monitor = ownership.monitor.take();
-            self.games[index].stopping = false;
-            self.set_status(format!(
-                "{}: could not schedule Firefox shutdown: {}", account_name, error
-            ), true);
-            return false;
-        }
-        false
     }
 
     pub(super) fn launch_enabled(&mut self) {
