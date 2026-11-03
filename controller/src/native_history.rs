@@ -51,6 +51,13 @@ impl WriteSignal {
         }
         state.last_error.clone().map_or(Ok(()),Err)
     }
+    // Check infrequently from the socket worker; failed writes are retried
+    // even if no new battle events arrive. Never stack requests during I/O.
+    fn retry_due(&self)->bool {
+        self.state.lock().is_ok_and(|state|
+            state.last_error.is_some() && state.completed==state.requested &&
+            !state.pending && !state.stopping)
+    }
     fn stop(&self) {
         if let Ok(mut state)=self.state.lock() {state.stopping=true;}
         self.wake.notify_all();
@@ -66,7 +73,11 @@ fn start_history_writer(
     let signal=Arc::new(WriteSignal::default());
     let worker_signal=Arc::clone(&signal);
     thread::Builder::new().name("moth-native-history".into())
-        .spawn(move || loop {
+        .spawn(move || {
+            // Report severe snapshot-copy contention once per writer session,
+            // not on every five-second save.
+            let mut reported_slow_copy=false;
+            loop {
             let sequence={
                 let Ok(mut state)=worker_signal.state.lock() else{return};
                 while !state.pending {
@@ -80,8 +91,14 @@ fn start_history_writer(
             };
             let result=match shared.lock() {
                 Ok(snapshot)=>{
+                    let started=Instant::now();
                     let copy=snapshot.clone();
                     drop(snapshot);
+                    if !reported_slow_copy && started.elapsed()>Duration::from_millis(50) {
+                        reported_slow_copy=true;
+                        crate::logging::warn(
+                            "Native history snapshot copy held the game-history lock over 50 ms");
+                    }
                     // JSON creation and serialization never run on the game
                     // socket worker or under the live-history mutex.
                     serialize_history(&copy,&nick)
@@ -100,6 +117,7 @@ fn start_history_writer(
                 state.last_error=result.err();
                 worker_signal.wake.notify_all();
             } else {return}
+            }
         })
         .map_err(|error|format!("Could not start history writer: {error}"))?;
     Ok(signal)
@@ -434,6 +452,7 @@ pub struct HistoryRecorder {
     pub shared: Arc<Mutex<HistorySnapshot>>,
     last_hunt: Option<String>,
     last_kill:Option<(String,Instant)>,
+    last_pruned_day:u64,
     dirty:bool,
     last_flush:Instant,
     writer:Option<Arc<WriteSignal>>,
@@ -461,7 +480,8 @@ impl HistoryRecorder {
             Err(error)=>{snapshot.load_error=Some(error);None}
         };
         snapshot.owner=nick.clone();
-        snapshot.retain_recent(unix_day());
+        let today=unix_day();
+        snapshot.retain_recent(today);
         let shared=Arc::new(Mutex::new(snapshot));
         let writer=path.and_then(|path| {
             match start_history_writer(Arc::clone(&shared),path,nick.clone()) {
@@ -474,7 +494,7 @@ impl HistoryRecorder {
                 }
             }
         });
-        Self {shared,last_hunt:None,last_kill:None,
+        Self {shared,last_hunt:None,last_kill:None,last_pruned_day:today,
             dirty:false,last_flush:Instant::now(),writer}
     }
     pub fn record_forecast(&mut self,model:HistoryForecast){
@@ -488,7 +508,10 @@ impl HistoryRecorder {
         }
         // Capturing only one model per hour/hunt prevents redraw-generated
         // history inflation. The async history writer owns persistence.
-        snapshot.retain_recent(unix_day());
+        if self.last_pruned_day!=model.day {
+            snapshot.retain_recent(model.day);
+            self.last_pruned_day=model.day;
+        }
         // Never grow the 90-day journal beyond what the loader accepts.
         if snapshot.forecasts.len()>5000 {
             snapshot.forecasts.sort_by_key(|row|row.hour);
@@ -579,12 +602,21 @@ impl HistoryRecorder {
             }
         }
         self.last_hunt=Some(slug);
-        if self.dirty{
+        // Pruning scans the retained journal: run once per UTC day, not on
+        // every battle receipt while the game socket is time-sensitive.
+        if self.last_pruned_day!=day {
             snapshot.retain_recent(day);
+            self.last_pruned_day=day;
         }
     }
     pub fn maybe_flush(&mut self,force:bool) {
-        if !force && (!self.dirty || self.last_flush.elapsed()<SAVE_INTERVAL){return}
+        if !force && self.last_flush.elapsed()<SAVE_INTERVAL {return}
+        if !force && !self.dirty &&
+            !self.writer.as_ref().is_some_and(|writer|writer.retry_due()) {
+            // Keep retry checks at five-second cadence even while idle.
+            self.last_flush=Instant::now();
+            return;
+        }
         if let Some(writer)=self.writer.as_ref() {
             match writer.request() {
                 Ok(sequence)=>{
@@ -624,7 +656,7 @@ mod tests {
         // production history directory.
         let mut history=HistoryRecorder{
             shared:Arc::new(Mutex::new(HistorySnapshot::default())),
-            last_hunt:None,last_kill:None,dirty:false,
+            last_hunt:None,last_kill:None,last_pruned_day:unix_day(),dirty:false,
             last_flush:Instant::now(),writer:None
         };
         history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
@@ -677,6 +709,45 @@ mod tests {
         assert_eq!(recovered.lifetime.kills,17);
         writer.stop();
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn failed_history_write_retries_without_new_battle_receipts() {
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let blocked=std::env::temp_dir().join(
+            format!("moth-history-retry-{}-{id}",std::process::id()));
+        let path=blocked.join("history.json");
+        fs::write(&blocked,"not a directory").unwrap();
+        let shared=Arc::new(Mutex::new(HistorySnapshot {
+            owner:"Test".into(),..Default::default()
+        }));
+        shared.lock().unwrap().lifetime.kills=17;
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .expect("start temporary history writer");
+        let mut recorder=HistoryRecorder {
+            shared,last_hunt:None,last_kill:None,last_pruned_day:unix_day(),
+            dirty:true,last_flush:Instant::now()-SAVE_INTERVAL,
+            writer:Some(Arc::clone(&writer))
+        };
+        recorder.maybe_flush(false);
+        let initial=writer.state.lock().unwrap().requested;
+        assert!(writer.wait_written(initial,FINAL_WRITE_TIMEOUT).is_err());
+        assert!(!recorder.dirty);
+        assert!(writer.retry_due());
+        fs::remove_file(&blocked).unwrap();
+        fs::create_dir(&blocked).unwrap();
+        recorder.last_flush=Instant::now()-SAVE_INTERVAL;
+        recorder.maybe_flush(false);
+        let retry=writer.state.lock().unwrap().requested;
+        assert!(retry>initial,"failed write must schedule a retry with no new events");
+        writer.wait_written(retry,FINAL_WRITE_TIMEOUT).unwrap();
+        assert!(!writer.retry_due());
+        drop(recorder);
+        let saved=fs::read_to_string(&path).unwrap();
+        let recovered=HistorySnapshot::from_value(
+            &serde_json::from_str::<Value>(&saved).unwrap(),"Test").unwrap();
+        assert_eq!(recovered.lifetime.kills,17);
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&blocked).unwrap();
     }
     #[test]
     fn background_writer_serialization_matches_existing_disk_schema() {
