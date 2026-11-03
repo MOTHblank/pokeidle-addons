@@ -5,7 +5,7 @@ use super::{automation_badge, draw_native_missing_panel, egui, format_number,
 
 pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.workspace.automation_account;
-    let Some(native) = app.games[index].native.as_ref() else {
+    let Some(native) = app.runtimes[index].game.native.as_ref() else {
         draw_native_missing_panel(app,ui,Some(index),
             tr("Start this account to manage game settings"));
         return;
@@ -13,8 +13,8 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
     let snapshot = native.snapshot();
     let view = native.hunt_snapshot();
     if let Some(automation) = view.automation.as_ref() {
-        if !app.automation_drafts[index].initialized {
-            app.automation_drafts[index]=AutomationDraft::from_server(automation);
+        if !app.runtimes[index].automation.automation_draft.initialized {
+            app.runtimes[index].automation.automation_draft=AutomationDraft::from_server(automation);
         }
         let mut commands:Vec<(String,serde_json::Value)>=Vec::new();
         let can_edit=snapshot.phase=="Online" &&
@@ -24,7 +24,7 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tr("Game automation")).size(13.0).strong().color(TEXT));
                 if ui.small_button(tr("Reload game settings")).clicked() {
-                    app.automation_drafts[index]=AutomationDraft::from_server(automation);
+                    app.runtimes[index].automation.automation_draft=AutomationDraft::from_server(automation);
                 }
                 if let Some(field)=snapshot.native_automation.pending_field.as_deref() {
                     ui.label(RichText::new(format!("{}: {field}",tr("Awaiting confirmation")))
@@ -71,7 +71,7 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
                 ui.add_space(5.0);
             }
             ui.add_space(10.0);
-            let draft=&mut app.automation_drafts[index];
+            let draft=&mut app.runtimes[index].automation.automation_draft;
             ui.horizontal_wrapped(|ui| {
                 if automation.get("hpLimiar").is_some() {
                     ui.label(tr("Potion HP threshold (%)"));
