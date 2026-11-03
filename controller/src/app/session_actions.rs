@@ -119,6 +119,12 @@ impl ControllerApp {
     /// Authentication-only browser fallback. Never call as the ordinary
     /// Launch path while reusable native game + Twitch credentials exist.
     pub(super) fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
+        self.launch_firefox_bootstrap_impl(profile, headless, true);
+    }
+
+    fn launch_firefox_bootstrap_impl(
+        &mut self, profile: GameProfile, headless: bool, discover_existing: bool
+    ) {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
         if self.games[index].is_running() || self.games[index].stopping { return; }
@@ -133,6 +139,7 @@ impl ControllerApp {
 
         // An existing Firefox may own this profile even if the controller was
         // restarted or its Child handle was lost. Never spawn over that session.
+        if discover_existing {
         match firefox::find_profile_process(&config) {
             Ok(Some(pid)) => {
                 // A previous crash may have left an authenticated, controlled
@@ -159,6 +166,7 @@ impl ControllerApp {
                 self.set_status(format!("{}: {}", account_name, error), true);
                 return;
             }
+        }
         }
 
         self.games[index].child = None;
@@ -276,7 +284,9 @@ impl ControllerApp {
             AfterStop::Native { headless } => self.launch_one_mode(profile, headless),
             AfterStop::Firefox => {
                 self.games[index].browser_only = true;
-                self.launch_firefox_bootstrap(profile, false);
+                // Stop worker just verified this dedicated profile is free;
+                // do not repeat blocking OS process enumeration on egui.
+                self.launch_firefox_bootstrap_impl(profile, false, false);
             }
             AfterStop::Unmonitored(action) =>
                 self.launch_unmonitored_sign_in(profile, action),
@@ -469,24 +479,10 @@ impl ControllerApp {
             }
         };
 
-        // Preserve the existing per-account cookies, but do not share an
-        // active Firefox process or debugger with either sign-in provider.
-        match firefox::find_profile_process(&config) {
-            Ok(Some(pid)) => {
-                self.games[index].orphaned_pid = Some(pid);
-                self.set_status(
-                    format!("{}: Firefox already uses this profile (PID {}). Use Stop before launching.", account_name, pid),
-                    true,
-                );
-                return;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.set_status(format!("{}: {}", account_name, error), true);
-                return;
-            }
-        }
-
+        // The dedicated Stop worker already confirmed this profile has no
+        // living Firefox owner. A second WMI scan here would stall the UI.
+        // Firefox itself still enforces the profile lock if another program
+        // opens the same profile between cleanup and this new launch.
         let (service, url, status_suffix) = match action {
             ProfileAction::GoogleSignIn => (
                 "Google",
