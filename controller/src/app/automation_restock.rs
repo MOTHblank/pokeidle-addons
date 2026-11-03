@@ -349,6 +349,7 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
     }
     if *cfg != previous {
         app.restock_dirty[index] = true;
+        ui.ctx().request_repaint();
     }
     if let Some(error) = app.capture_save_error[index].as_deref() {
         ui.label(RichText::new(error).size(10.0).color(WARN));
@@ -362,8 +363,5 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
     }
     // The save queue is dispatched by refresh_processes, never from the
     // rendered picker. It continues after navigation or closing this panel.
-    if app.restock_dirty[index] {
-        ui.ctx().request_repaint();
-    }
 }
 
