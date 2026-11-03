@@ -198,6 +198,7 @@ pub struct NativeSession {
     history: Arc<Mutex<HistorySnapshot>>,
     forecast_tx:mpsc::SyncSender<HistoryForecast>,
     phase_wake:PhaseWake,
+    kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
 }
 impl NativeSession {
     /// Establish *both* verified WebSockets before handing ownership away
@@ -248,6 +249,8 @@ impl NativeSession {
         let worker_stop = Arc::clone(&stop);
         let phase_wake:PhaseWake=Arc::new(Mutex::new(None));
         let worker_phase_wake=Arc::clone(&phase_wake);
+        let kick_roster_publisher=Arc::new(Mutex::new(None));
+        let worker_kick_roster_publisher=Arc::clone(&kick_roster_publisher);
         thread::Builder::new().name("moth-native-game".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -256,7 +259,8 @@ impl NativeSession {
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_capture_config,
                         worker_market_rules, worker_rules_revision, worker_session_reset,
-                        Arc::clone(&worker_phase_wake), hunt_intel, worker_hunts,
+                        Arc::clone(&worker_phase_wake), worker_kick_roster_publisher,
+                        hunt_intel, worker_hunts,
                         history_recorder,forecast_rx);
                 }));
                 if result.is_err() {
@@ -272,7 +276,7 @@ impl NativeSession {
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
             capture_config, market_rules, market_rules_revision, session_reset, hunts, history, forecast_tx,
-            phase_wake
+            phase_wake, kick_roster_publisher
         })
     }
     pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
@@ -378,6 +382,22 @@ impl NativeSession {
             return None;
         }
         state.kick_official_roster.clone()
+    }
+    /// Register a changed-roster publisher without adding reads or polling.
+    /// Send the current roster once so a Kick monitor started after PokéIdle
+    /// login immediately catches up with the already-observed server state.
+    pub fn set_kick_roster_publisher(&self,publisher:crate::native_kick::KickRosterPublisher) {
+        if let Ok(mut current)=self.kick_roster_publisher.lock() {
+            *current=Some(publisher.clone());
+        }
+        if let Some(roster)=self.official_kick_roster() {
+            publisher.publish(roster);
+        }
+    }
+    pub fn clear_kick_roster_publisher(&self) {
+        if let Ok(mut current)=self.kick_roster_publisher.lock() {
+            *current=None;
+        }
     }
     /// Called after the authenticated session is adopted into its account.
     /// Both game and Twitch state changes can request immediate recovery.
@@ -497,7 +517,8 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
     observe_value(snapshot, &payload, desired);
 }
 fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
-    desired: &Arc<Mutex<Vec<String>>>) {
+    desired: &Arc<Mutex<Vec<String>>>) -> Option<Vec<crate::native_kick::OfficialKickChannel>> {
+    let mut changed_kick_roster=None;
     let state = payload.get("estado");
     let twitch_rooms_updated = state.and_then(|value|value.get("twitch"))
         .is_some_and(|twitch|
@@ -541,6 +562,9 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
                 if status.kick_official_roster.as_ref()!=Some(&roster) {
                     status.kick_official_live=Some(roster.iter().filter(|entry|entry.live)
                         .map(|entry|entry.slug.clone()).collect());
+                    // Only clone the roster when its contents actually changed.
+                    // Unchanged game frames add no new allocations.
+                    changed_kick_roster=Some(roster.clone());
                     status.kick_official_roster=Some(roster);
                     status.kick_roster_revision=status.kick_roster_revision.wrapping_add(1);
                 }
@@ -579,6 +603,17 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
             }
         }
     }
+    changed_kick_roster
+}
+
+fn publish_kick_roster(
+    publisher:&Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
+    roster:Option<Vec<crate::native_kick::OfficialKickChannel>>
+) {
+    let Some(roster)=roster else{return};
+    if let Ok(publisher)=publisher.lock() {
+        if let Some(sender)=publisher.as_ref(){sender.publish(roster);}
+    }
 }
 
 fn session_loop(profile: GameProfile, credentials: Credentials,
@@ -593,6 +628,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     market_rules_revision: Arc<AtomicU64>,
     session_reset: Arc<AtomicBool>,
     phase_wake:PhaseWake,
+    kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>,
     mut history_recorder: HistoryRecorder,
@@ -616,7 +652,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 // inspect borrowed values instead of deserializing it again.
                 let Ok(frame) = serde_json::from_str::<Value>(&welcome) else { continue };
                 let received_at = Instant::now();
-                observe_value(&snapshot, &frame, &desired);
+                publish_kick_roster(&kick_roster_publisher,
+                    observe_value(&snapshot, &frame, &desired));
                 gameplay.ingest_value(&frame, received_at);
                 restock.ingest_value(&frame, received_at);
                 let mut market_cfg=market_rules.lock()
@@ -1036,7 +1073,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                         restock.status.last_order.as_deref().unwrap_or("purchase")
                                     ));
                                 }
-                                observe_value(&snapshot, &frame, &desired);
+                                publish_kick_roster(&kick_roster_publisher,
+                                    observe_value(&snapshot, &frame, &desired));
                             }
                         },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
