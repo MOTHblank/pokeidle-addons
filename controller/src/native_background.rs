@@ -795,10 +795,16 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     let mut send_failed = false;
                     while let Ok(command) = command_rx.try_recv() {
                         if let GameCommand::BossStart {key,repeat} = &command {
-                            if let Err(error) = boss_manager.start(key, *repeat,
+                            match boss_manager.start(key, *repeat,
                                 &hunt_intel.view, &mut navigator, Instant::now()) {
-                                boss_manager.view.warning = Some(error.clone());
-                                crate::logging::warn(&format!("Boss manager: {error}"));
+                                Ok(()) => {
+                                    if hunt_intel.view.in_center { hunt_intel.cancel_hunt_intent(); }
+                                    else { hunt_intel.queue_center(); }
+                                }
+                                Err(error) => {
+                                    boss_manager.view.warning = Some(error.clone());
+                                    crate::logging::warn(&format!("Boss manager: {error}"));
+                                }
                             }
                             boss_manager.publish(&boss);
                             continue;
@@ -815,6 +821,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     break;
                                 }
                             }
+                            if !boss_manager.active() { hunt_intel.cancel_hunt_intent(); }
                             boss_manager.publish(&boss);
                             if send_failed { break; }
                             continue;
