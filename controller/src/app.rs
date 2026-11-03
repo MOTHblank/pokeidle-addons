@@ -79,6 +79,36 @@ use tray_icon::{
 
 static PT_BR: AtomicBool = AtomicBool::new(true);
 
+// OS process shutdown must outlive the eframe window. Worker registration
+// ensures that dropping the UI never silently abandons an owned Firefox Child.
+// Finished handles are pruned on registration, so frequent Stop/Start cycles
+// do not accumulate completed thread state indefinitely.
+static FIREFOX_SHUTDOWN_WORKERS:
+    std::sync::OnceLock<std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>> =
+    std::sync::OnceLock::new();
+
+fn track_firefox_shutdown(worker: std::thread::JoinHandle<()>) {
+    let registry = FIREFOX_SHUTDOWN_WORKERS
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    let mut workers = registry.lock().unwrap_or_else(|poison| poison.into_inner());
+    workers.retain(|old| !old.is_finished());
+    workers.push(worker);
+}
+
+fn finish_firefox_shutdown_after_window() {
+    if let Some(registry) = FIREFOX_SHUTDOWN_WORKERS.get() {
+        let workers = std::mem::take(
+            &mut *registry.lock().unwrap_or_else(|poison| poison.into_inner())
+        );
+        // eframe has already returned; this cannot freeze the window.
+        for worker in workers {
+            if worker.join().is_err() {
+                logging::error("Firefox shutdown worker panicked on application exit");
+            }
+        }
+    }
+}
+
 // Redraw cached information more often without triggering additional BiDi reads.
 const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
 const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
@@ -1378,17 +1408,19 @@ impl Drop for ControllerApp {
                 // the egui window teardown. Do not join or perform BiDi waits here.
                 // In-flight explicit Stop/handoff workers already own their
                 // handles and continue without this receiver.
-                let _ = std::thread::Builder::new()
+                match std::thread::Builder::new()
                     .name(format!("moth-exit-{}", slot.profile.name()))
                     .spawn(move || {
                         if let Err(error) = firefox::stop_child(&mut child, monitor.as_ref()) {
                             logging::error(&format!("{} exit shutdown failed: {}", account_name, error));
                         }
                         if let Some(monitor) = monitor { monitor.stop(); }
-                    })
-                    .map_err(|error| logging::error(&format!(
+                    }) {
+                    Ok(worker) => track_firefox_shutdown(worker),
+                    Err(error) => logging::error(&format!(
                         "could not schedule Firefox exit cleanup: {error}"
-                    )));
+                    )),
+                }
             } else if let Some(monitor) = slot.monitor.take() {
                 monitor.stop();
             }
@@ -1615,12 +1647,15 @@ pub fn run() -> Result<(), String> {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let result = eframe::run_native(
         "Moth · PokéIdle",
         options,
         Box::new(|cc| Ok(Box::new(ControllerApp::new(cc)))),
-    )
-    .map_err(|error| format!("could not start controller UI: {error}"))
+    );
+    // Window is gone, but the controller process stays alive long enough to
+    // finish each already-running browser close (including Stop mid-handoff).
+    finish_firefox_shutdown_after_window();
+    result.map_err(|error| format!("could not start controller UI: {error}"))
 }
 
 fn format_pct(value: f32) -> String {
