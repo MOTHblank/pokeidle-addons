@@ -835,12 +835,14 @@ mod lifecycle_wake_tests {
 
 struct NativeHandoffEvent {
     index: usize,
+    generation: u64,
     result: Result<serde_json::Value, String>,
     cache_warning: Option<String>,
 }
 
 struct CachedNativeEvent {
     index: usize,
+    generation: u64,
     existing_firefox: bool,
     result: Result<Option<NativeSession>, String>,
 }
@@ -849,6 +851,7 @@ struct CachedNativeEvent {
 /// the complete Firefox process may close.
 struct NativeVerifiedEvent {
     index: usize,
+    generation: u64,
     result: Result<NativeSession, String>,
     cache_warning: Option<String>,
 }
@@ -857,6 +860,7 @@ struct NativeVerifiedEvent {
 /// Returning them to the UI on error preserves ownership for retry/recovery.
 struct NativeBrowserClosedEvent {
     index: usize,
+    generation: u64,
     native: NativeSession,
     cache_warning: Option<String>,
     child: Option<Child>,
@@ -959,6 +963,9 @@ pub struct ControllerApp {
     cached_native_tx: WakeSender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
     cached_native_busy: [bool; 4],
+    // Every asynchronous login stage carries the ID of its launch attempt.
+    // Stop/restart invalidates it without waiting for blocked OS keyrings.
+    auth_generations: [Arc<AtomicU64>; 4],
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
 
@@ -1104,6 +1111,7 @@ impl ControllerApp {
             cached_native_tx,
             cached_native_rx,
             cached_native_busy: [false; 4],
+            auth_generations:std::array::from_fn(|_|Arc::new(AtomicU64::new(0))),
             require_browser_login: [false; 4],
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
@@ -1218,6 +1226,7 @@ impl ControllerApp {
     // A session transition is serialized with in-flight encrypted writes.
     // Reset old UI acknowledgements only after the vault boundary is crossed.
     fn invalidate_capture_session(&mut self,index:usize) {
+        self.auth_generations[index].fetch_add(1,Ordering::AcqRel);
         crate::native_auth::invalidate_capture_generation(&self.capture_generations[index]);
         self.capture_save_busy[index]=false;
         self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
