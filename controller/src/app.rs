@@ -906,6 +906,7 @@ enum CaptureSaveOrigin { Editor, Toggle, Restock }
 struct CaptureSavedEvent {
     index:usize,
     generation:u64,
+    request_id:u64,
     config:CatchSettings,
     origin:CaptureSaveOrigin,
     result:Result<(),String>
@@ -972,6 +973,8 @@ pub struct ControllerApp {
     restock_dirty:[bool;4],
 
     capture_save_busy:[bool;4],
+    // A separate request ID rejects stale acknowledgements within a session.
+    capture_save_ids:[u64;4],
     // A monotonically increasing token identifies the native session that
     // began each vault write. Old completions cannot mutate a new session.
     capture_generations:[Arc<std::sync::atomic::AtomicU64>;4],
@@ -1120,6 +1123,7 @@ impl ControllerApp {
             restock_dirty:[false;4],
 
             capture_save_busy:[false;4],
+            capture_save_ids:[0;4],
             capture_generations:std::array::from_fn(|_|Arc::new(std::sync::atomic::AtomicU64::new(0))),
             capture_save_error:std::array::from_fn(|_|None),
             capture_save_tx,
@@ -1184,6 +1188,9 @@ impl ControllerApp {
         // Adopted sessions have independent settings lifetimes even when the
         // user reauthenticates without explicitly stopping the old session.
         self.capture_generations[index].fetch_add(1,Ordering::AcqRel);
+        // The previous session's pending write must not block a new editor.
+        self.capture_save_busy[index]=false;
+        self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
         let ctx = self.lifecycle_ctx.clone();
         session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
         // Historical forecasts remain dormant for users who have never opened
