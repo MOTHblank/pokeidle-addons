@@ -1277,8 +1277,8 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
-        // Live native panels publish snapshots at one-second cadence.
-        // Repaint only while visible; tray/background retains the cheap timer.
+        // Native workers publish state independently of the display timer.
+        // Batch normal redraws; tray/background retains its cheaper cadence.
         let background = self.controller_in_background(ui.ctx());
         // Firefox's BiDi monitor may become ready without emitting a channel
         // reply. Give temporary sign-ins a lightweight progress heartbeat even
