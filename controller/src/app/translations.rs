@@ -745,10 +745,25 @@ mod tests {
 
     #[test]
     fn static_ui_labels_must_have_dictionary_entries() {
-        let inline = include_str!("../app.rs");
-        let additional = include_str!("translations.rs");
+        // The main UI was extracted into modules. Validate the labels used
+        // by every workspace against both static dictionaries, not just the
+        // remaining controller state module.
+        let dictionaries = [
+            include_str!("localization.rs"),
+            include_str!("translations.rs"),
+        ];
         for source in [
-            inline,
+            include_str!("../app.rs"),
+            include_str!("workspace_nav.rs"),
+            include_str!("overview_panel.rs"),
+            include_str!("automation_panel.rs"),
+            include_str!("automation_game.rs"),
+            include_str!("automation_capture.rs"),
+            include_str!("automation_restock.rs"),
+            include_str!("automation_widgets.rs"),
+            include_str!("runtime_panel.rs"),
+            include_str!("accounts_panel.rs"),
+            include_str!("status_widgets.rs"),
             include_str!("hunt_panel.rs"),
             include_str!("hunt_panel/models_panel.rs"),
             include_str!("market_panel.rs"),
@@ -765,7 +780,7 @@ mod tests {
                     if let Some(quoted) = trimmed.strip_prefix('"') {
                         if let Some((key, _)) = quoted.split_once('"') {
                             let lookup = format!(r#""{key}" =>"#);
-                            assert!(inline.contains(&lookup) || additional.contains(&lookup),
+                            assert!(dictionaries.iter().any(|dictionary| dictionary.contains(&lookup)),
                                 "missing pt-BR dictionary entry for {key}");
                         }
                     }

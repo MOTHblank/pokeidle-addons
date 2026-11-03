@@ -504,4 +504,5 @@ impl ControllerApp {
             Ok(message) => self.set_status(format!("{} · {}", self.account_name(profile), message), false),
             Err(error) => self.set_status(error, true),
         }
-    }}
+     }
+}
