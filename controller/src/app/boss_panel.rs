@@ -173,7 +173,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let result = app.runtimes[index].game.native.as_ref()
                     .expect("native still present").send_command(command);
                 match result {
-                    Ok(()) => app.set_status(tr("Boss command queued").into(), false),
+                    Ok(()) => app.set_status(tr("Boss command queued"), false),
                     Err(error) => app.set_status(error, true),
                 }
             }
