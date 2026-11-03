@@ -122,8 +122,12 @@ pub(super) struct EstimateCache {
     refreshed: Option<Instant>,
     failed_at:Option<Instant>,
     last_archived:Option<(String,Instant)>,
-    pending: Option<std::sync::mpsc::Receiver<
-        std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>>,
+    // A result receiver stays owned until its calculation exits, even when
+    // newer inputs invalidate it. This prevents overlapping simulation loops.
+    pending: Option<(u64,std::sync::mpsc::Receiver<
+        std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>)>,
+    generation:u64,
+    cancellation:Arc<std::sync::atomic::AtomicU64>,
     values: std::collections::BTreeMap<String,Option<native_atlas::Forecast>>,
 }
 impl EstimateCache {
@@ -131,24 +135,6 @@ impl EstimateCache {
         reference:Option<&Arc<AtlasReference>>,live:bool,aoe_enabled:bool,
     ){
         use std::sync::mpsc::TryRecvError;
-        // Publish only for this cache generation. Account/lead/catalog changes
-        // drop the receiver for the previous generation before accepting it.
-        let complete=self.pending.as_ref().map(|rx|rx.try_recv());
-        match complete {
-            Some(Ok(values))=>{
-                self.values=values;
-                self.refreshed=Some(Instant::now());
-                self.failed_at=None;
-                self.pending=None;
-            }
-            Some(Err(TryRecvError::Disconnected))=>{
-                self.pending=None;
-                // Only a failed worker retries after a delay. Successful
-                // forecasts never refresh just because time passed.
-                self.failed_at=Some(Instant::now());
-            }
-            _=>{}
-        }
         let catalog_ptr=Arc::as_ptr(&view.hunts) as usize;
         let reference_ptr=reference.map_or(0,|r|Arc::as_ptr(r) as usize);
         let geo_ptr=Arc::as_ptr(&view.geo_distances) as usize;
@@ -193,8 +179,31 @@ impl EstimateCache {
             self.refreshed=None;
             self.failed_at=None;
             self.last_archived=None;
-            self.pending=None; // Discard outdated asynchronous results.
+            self.generation=self.generation.wrapping_add(1);
+            self.cancellation.store(self.generation,std::sync::atomic::Ordering::Release);
+            // Keep the receiver until its worker has actually exited. The
+            // worker checks the generation between hunts and stops early.
             self.values.clear();
+        }
+        let complete=self.pending.as_ref().map(|(generation,rx)|
+            (*generation,rx.try_recv()));
+        match complete {
+            Some((generation,Ok(values)))=>{
+                self.pending=None;
+                if generation==self.generation {
+                    self.values=values;
+                    self.refreshed=Some(Instant::now());
+                    self.failed_at=None;
+                }
+            }
+            Some((generation,Err(TryRecvError::Disconnected)))=>{
+                self.pending=None;
+                // An obsolete worker was canceled, not a failed forecast.
+                if generation==self.generation {
+                    self.failed_at=Some(Instant::now());
+                }
+            }
+            _=>{}
         }
         // A completed generation remains valid until a relevant input changes.
         // Do not launch another full combat simulation on a 20-second timer.
@@ -206,15 +215,22 @@ impl EstimateCache {
         self.failed_at=None;
         let guide=Arc::clone(reference);
         let snapshot=view.clone();
+        let generation=self.generation;
+        let cancellation=Arc::clone(&self.cancellation);
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
-        self.pending=Some(rx);
+        self.pending=Some((generation,rx));
         std::thread::spawn(move ||{
             let mut values=std::collections::BTreeMap::new();
             for hunt in snapshot.hunts.iter(){
+                if cancellation.load(std::sync::atomic::Ordering::Acquire)!=generation {
+                    return;
+                }
                 values.insert(hunt.slug.clone(),
                     native_atlas::estimate_with_aoe(&snapshot,hunt,&guide,aoe_enabled));
             }
-            let _=tx.send(values);
+            if cancellation.load(std::sync::atomic::Ordering::Acquire)==generation {
+                let _=tx.send(values);
+            }
         });
     }
     fn get(&self,slug:&str)->Option<native_atlas::Forecast>{
@@ -227,6 +243,12 @@ impl EstimateCache {
     }
     fn archived(&mut self,slug:&str){
         self.last_archived=Some((slug.to_owned(),Instant::now()));
+    }
+}
+impl Drop for EstimateCache {
+    fn drop(&mut self) {
+        // Closing a panel/account invalidates the last job too.
+        self.cancellation.store(u64::MAX,std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -3463,6 +3485,33 @@ mod tests {
 
 
 
+    #[test]
+    fn obsolete_forecast_worker_is_coalesced_and_never_published() {
+        let mut view=HuntView::default();
+        let guide=Arc::new(AtlasReference::default());
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,Some(&guide),true,false);
+        // Simulate a slow in-flight worker whose receiver cannot complete.
+        let (tx,rx)=std::sync::mpsc::sync_channel(1);
+        cache.pending=Some((cache.generation,rx));
+        cache.refreshed=None;
+        let previous=cache.generation;
+        view.bonuses.vip_active=true;
+        cache.refresh(0,&view,Some(&guide),true,false);
+        assert_ne!(previous,cache.generation);
+        assert_eq!(cache.cancellation.load(std::sync::atomic::Ordering::Acquire),
+            cache.generation);
+        assert_eq!(cache.pending.as_ref().unwrap().0,previous,
+            "no second worker may launch before the old one exits");
+        let mut stale=std::collections::BTreeMap::new();
+        stale.insert("obsolete".into(),Some(simulated_forecast(10.0,false)));
+        tx.send(stale).unwrap();
+        cache.refresh(0,&view,Some(&guide),true,false);
+        assert!(!cache.values.contains_key("obsolete"),
+            "an obsolete generation must not publish its result");
+        assert_eq!(cache.pending.as_ref().unwrap().0,cache.generation,
+            "newest request starts only after the previous worker finishes");
+    }
     #[test]
     fn combat_cache_does_not_recompute_by_age_or_hunt_switch(){
         let mut view=HuntView::default();
