@@ -814,7 +814,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             let actions = if matches!(command, GameCommand::BossLeave) {
                                 boss_manager.leave(&mut navigator)
                             } else {
-                                boss_manager.stop(&mut navigator).into_iter().collect()
+                                boss_manager.stop(&mut navigator, &hunt_intel.view,
+                                    Instant::now()).into_iter().collect()
                             };
                             for action in actions {
                                 if socket.send(Message::Text(action.wire().to_string().into())).is_err() {
@@ -1300,7 +1301,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     automation_writer.on_disconnect();
                     pending_sale=None;
                     hunt_intel.on_disconnect();
-                    boss_manager.on_disconnect();
+                    boss_manager.on_disconnect(&navigator, &hunt_intel.view);
                     boss_manager.publish(&boss);
                     if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                     update(&snapshot, |s| {

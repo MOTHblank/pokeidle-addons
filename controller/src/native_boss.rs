@@ -80,7 +80,7 @@ pub struct BossView {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stage { GoingCenter, Running, Returning }
+enum Stage { GoingCenter, CancellingCenter, Running, Returning }
 struct Trip {
     key: String,
     original: Option<String>,
@@ -92,6 +92,7 @@ struct Trip {
     recovering: bool,
     dispatched_at: Option<Instant>,
     resume_stop: bool,
+    stop_requested_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -137,29 +138,53 @@ fn save_log(path: &PathBuf, entries: &[BossLoot]) -> Result<(), String> {
     fs::write(&tmp, data).map_err(|e| format!("Boss log staging: {e}"))?;
     fs::rename(&tmp, path).map_err(|e| format!("Boss log save: {e}"))
 }
+
+/// Never overwrite a journal that could not be read. Damaged JSON is moved
+/// aside before a new journal is allowed to use the original path.
+fn load_log(path: &PathBuf) -> Result<(Vec<BossLoot>, Option<String>), String> {
+    let data = match fs::read(path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
+            return Ok((Vec::new(), None)),
+        Err(error) => return Err(format!(
+            "Boss loot journal cannot be read (original preserved): {error}"
+        )),
+    };
+    match serde_json::from_slice::<Vec<BossLoot>>(&data) {
+        Ok(entries) => Ok((entries, None)),
+        Err(error) => {
+            let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+                .unwrap_or_default().as_nanos();
+            for attempt in 0..1000 {
+                let backup = path.with_extension(format!(
+                    "json.corrupt-{stamp}-{attempt}"
+                ));
+                if backup.exists() { continue; }
+                fs::rename(path, &backup).map_err(|move_error| format!(
+                    "Boss loot JSON is invalid ({error}); could not preserve it separately: {move_error}"
+                ))?;
+                let warning =
+                    "Damaged boss loot history was preserved in a backup file. New victories use a fresh journal.".to_owned();
+                crate::logging::warn(&format!("{warning} {}", backup.display()));
+                return Ok((Vec::new(), Some(warning)));
+            }
+            Err(format!(
+                "Boss loot JSON is invalid ({error}); no unused backup name available"
+            ))
+        }
+    }
+}
 struct LootWriter {
     entries: Arc<Mutex<Vec<BossLoot>>>,
     wake: mpsc::SyncSender<()>,
 }
 impl LootWriter {
-    fn start(profile: GameProfile, nick: &str) -> Result<(Self, Vec<BossLoot>), String> {
+    fn start(profile: GameProfile, nick: &str) -> Result<(Self, Vec<BossLoot>, Option<String>), String> {
         // Ownership survives a previous disconnected socket until its last
         // asynchronous write finishes; no new reader can race an old writer.
         let lease = gate(profile).acquire();
         let path = log_path(profile, nick)?;
-        let existing = match fs::read(&path) {
-            Ok(data) => serde_json::from_slice::<Vec<BossLoot>>(&data)
-                .map_err(|e| format!("Boss log ignored (invalid JSON): {e}"))
-                .unwrap_or_else(|error| {
-                    crate::logging::warn(&error);
-                    Vec::new()
-                }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => {
-                crate::logging::warn(&format!("Boss log could not be loaded: {e}"));
-                Vec::new()
-            }
-        };
+        let (existing, load_warning) = load_log(&path)?;
         let existing: Vec<BossLoot> = existing.into_iter().rev().take(MAX_LOOT)
             .collect::<Vec<_>>().into_iter().rev().collect();
         let entries = Arc::new(Mutex::new(existing.clone()));
@@ -179,7 +204,7 @@ impl LootWriter {
                 }
             }
         }).map_err(|e| format!("Could not start boss loot writer: {e}"))?;
-        Ok((Self { entries, wake }, existing))
+        Ok((Self { entries, wake }, existing, load_warning))
     }
     fn append(&self, item: BossLoot) {
         if let Ok(mut entries) = self.entries.lock() {
@@ -201,7 +226,7 @@ impl BossManager {
         // authenticated game connection from starting. Farming still works;
         // the UI explicitly explains when loot persistence is unavailable.
         let (writer, log, storage_warning) = match LootWriter::start(profile, nick) {
-            Ok((writer, log)) => (Some(writer), log, None),
+            Ok((writer, log, warning)) => (Some(writer), log, warning),
             Err(error) => {
                 crate::logging::warn(&format!("Boss loot journal unavailable: {error}"));
                 (None, Vec::new(), Some(
@@ -254,7 +279,7 @@ impl BossManager {
             key: key.to_owned(), original: original.clone(), repeat,
             stage: Stage::GoingCenter, confirmed: false, ended: false,
             stop_pending: false, recovering: false, dispatched_at: None,
-            resume_stop: false,
+            resume_stop: false, stop_requested_at: None,
         });
         self.view.original_hunt = original;
         self.view.warning = None;
@@ -263,7 +288,8 @@ impl BossManager {
         else { navigator.center(now); }
         Ok(())
     }
-    pub fn stop(&mut self, navigator: &mut HuntNavigator) -> Option<GameCommand> {
+    pub fn stop(&mut self, navigator: &mut HuntNavigator,
+                hunt: &HuntView, now: Instant) -> Option<GameCommand> {
         if self.trip.is_none() && self.view.auto {
             self.view.phase = "Stopping server boss repetition".into();
             return self.view.auto_key.clone().map(|key|
@@ -272,14 +298,24 @@ impl BossManager {
         let trip = self.trip.as_mut()?;
         trip.ended = true;
         if trip.stage == Stage::GoingCenter {
+            // The server may still complete centro.ir after Stop. Do not lose
+            // the saved hunt if Center was already dispatched or reached.
+            let in_flight = navigator.center_command_sent() || hunt.in_center;
             navigator.cancel();
-            self.trip = None;
-            self.view.original_hunt = None;
-            self.view.phase = "Boss trip cancelled before entry".into();
+            if in_flight && trip.original.is_some() {
+                trip.stage = Stage::CancellingCenter;
+                trip.dispatched_at = Some(now);
+                self.view.phase = "Cancelling boss travel; checking server location".into();
+            } else {
+                self.trip = None;
+                self.view.original_hunt = None;
+                self.view.phase = "Boss trip cancelled before entry".into();
+            }
             return None;
         }
         if !trip.repeat { return None; }
         trip.stop_pending = true;
+        trip.stop_requested_at = Some(now);
         self.view.phase = "Stopping boss repetition; waiting for the arena to clear".into();
         Some(GameCommand::BossAuto { active: false, key: trip.key.clone() })
     }
@@ -323,7 +359,9 @@ impl BossManager {
             if let Some(trip) = self.trip.as_mut() {
                 if trip.stage == Stage::Running && trip.repeat {
                     if self.view.auto { trip.confirmed = true; }
-                    if trip.confirmed && !self.view.auto {
+                    // A fresh authoritative boss state after Stop is enough
+                    // to settle the request, even if Start was never acked.
+                    if !self.view.auto && (trip.confirmed || trip.stop_pending) {
                         trip.ended = true;
                         trip.stop_pending = false;
                     }
@@ -395,6 +433,41 @@ impl BossManager {
                        navigator: &mut HuntNavigator, now: Instant) -> Option<GameCommand> {
         let trip = self.trip.as_mut()?;
         if trip.recovering { return None; }
+        if trip.stage == Stage::CancellingCenter {
+            if hunt.in_center && !self.view.auto && self.view.arena.is_none() {
+                if let Some(original) = trip.original.as_ref() {
+                    if hunt.catalog_ready &&
+                        hunt.hunts.iter().any(|entry| entry.slug == *original) {
+                        navigator.select(original.clone(), now);
+                        trip.stage = Stage::Returning;
+                        self.view.phase = "Returning to saved hunt".into();
+                    } else {
+                        self.view.warning = Some(
+                            "Original hunt is no longer available; return manually".into()
+                        );
+                        self.trip = None;
+                        self.view.original_hunt = None;
+                    }
+                } else {
+                    self.trip = None;
+                    self.view.original_hunt = None;
+                }
+            } else if !self.view.auto && self.view.arena.is_none() &&
+                trip.dispatched_at.is_some_and(|at|
+                    now.saturating_duration_since(at) >= Duration::from_secs(20)) {
+                // A rejected or lost Center request must not lock the UI.
+                // Never issue a boss command while cancelling this trip.
+                if hunt.hunt_slug.as_deref() != trip.original.as_deref() {
+                    self.view.warning = Some(
+                        "Boss travel cancellation timed out; verify the current location".into()
+                    );
+                }
+                self.trip = None;
+                self.view.original_hunt = None;
+                self.view.phase = "Boss trip cancelled before entry".into();
+            }
+            return None;
+        }
         if trip.resume_stop {
             trip.resume_stop = false;
             // Fresh command, only after the new authenticated welcome confirms
@@ -428,6 +501,17 @@ impl BossManager {
             } else {
                 GameCommand::BossEnter(trip.key.clone())
             });
+        }
+        if trip.stage == Stage::Running && trip.stop_pending &&
+            trip.stop_requested_at.is_some_and(|at|
+                now.saturating_duration_since(at) >= Duration::from_secs(20)) &&
+            !self.view.auto && self.view.arena.is_none() && hunt.in_center {
+            // A missing Stop event must not strand a trip forever when the
+            // last authoritative state reports no repetition or arena.
+            trip.stop_pending = false;
+            self.view.warning = Some(
+                "Boss Stop was not acknowledged; server currently reports no active boss".into()
+            );
         }
         if trip.stage == Stage::Running && !trip.confirmed && !trip.ended &&
             trip.dispatched_at.is_some_and(|at|
@@ -474,15 +558,20 @@ impl BossManager {
     /// A disconnected socket never replays a boss-enter/start command. Keep
     /// only an already-started trip's return target until the new welcome
     /// establishes the server's current arena, auto state and location.
-    pub fn on_disconnect(&mut self) {
+    pub fn on_disconnect(&mut self, navigator: &HuntNavigator, hunt: &HuntView) {
         if let Some(trip) = self.trip.as_mut() {
-            if trip.stage == Stage::GoingCenter {
+            if trip.stage == Stage::GoingCenter &&
+                !navigator.center_command_sent() && !hunt.in_center {
+                // No Center command left this socket; it is safe to discard
+                // the pending boss trip without a return obligation.
                 self.trip = None;
                 self.view.original_hunt = None;
                 self.view.warning = Some(
                     "Boss trip cancelled before entry because the connection dropped".into());
                 self.view.phase = "Boss trip interrupted".into();
             } else {
+                // A Center command already in flight may complete during the
+                // outage. Keep the return target but never replay boss entry.
                 trip.recovering = true;
                 self.view.warning = Some(
                     "Connection interrupted; verifying boss state before restoring saved hunt".into());
@@ -639,7 +728,7 @@ mod tests {
         manager.start("bronze", true, &state, &mut nav, now).unwrap();
         assert!(matches!(manager.next_action(&state, &mut nav, now),
             Some(GameCommand::BossAuto { active:true, .. })));
-        assert!(matches!(manager.stop(&mut nav),
+        assert!(matches!(manager.stop(&mut nav, &state, now),
             Some(GameCommand::BossAuto { active:false, .. })));
         manager.next_action(&state, &mut nav, now);
         assert!(manager.active(), "must not return before the server stops");
@@ -670,7 +759,7 @@ mod tests {
             Some(GameCommand::BossAuto {active:true,..})));
         manager.ingest(&json!({"t":"estado","estado":{"boss":{
             "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
-        manager.on_disconnect();
+        manager.on_disconnect(&nav, &view);
         assert!(manager.active());
         assert!(manager.next_action(&view, &mut nav, now).is_none());
 
@@ -700,7 +789,7 @@ mod tests {
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
         assert!(matches!(manager.next_action(&view, &mut nav, now),
             Some(GameCommand::BossAuto {active:true,..})));
-        manager.on_disconnect();
+        manager.on_disconnect(&nav, &view);
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
             "key":"bronze","nome":"Bronze Boss",
             "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
@@ -729,9 +818,9 @@ mod tests {
             Some(GameCommand::BossAuto {active:true,..})));
         manager.ingest(&json!({"t":"estado","estado":{"boss":{
             "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
-        assert!(matches!(manager.stop(&mut navigator),
+        assert!(matches!(manager.stop(&mut navigator, &view, now),
             Some(GameCommand::BossAuto {active:false,..})));
-        manager.on_disconnect();
+        manager.on_disconnect(&navigator, &view);
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
             "key":"bronze","nome":"Bronze Boss",
             "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
@@ -756,10 +845,35 @@ mod tests {
         let now = Instant::now();
         let mut view = hunt();
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
-        manager.on_disconnect();
+        manager.on_disconnect(&nav, &view);
         view.in_center = true;
         manager.recover_on_welcome(&view);
         assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn disconnect_after_center_dispatch_still_restores_saved_hunt() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(nav.next_action(&view, now), Some(GameCommand::Center)));
+        manager.on_disconnect(&nav, &view);
+        assert!(manager.active());
+        view.in_center = true;
+        manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
+            "key":"bronze","nome":"Bronze Boss",
+            "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
+        }],"estado":{"boss":{"auto":false,"arena":null}}}));
+        let mut fresh = HuntNavigator::default();
+        manager.recover_on_welcome(&view);
+        assert!(manager.next_action(&view, &mut fresh, now).is_none());
+        assert!(matches!(fresh.next_action(&view, now),
+            Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+        view.in_center = false;
+        manager.next_action(&view, &mut fresh, now);
         assert!(!manager.active());
     }
 
@@ -814,6 +928,126 @@ mod tests {
         assert!(!manager.active(), "start from center finishes safely without any ack");
         assert!(manager.view.warning.as_deref().unwrap_or("").contains("not confirmed"));
     }
+    #[test]
+    fn cancel_before_center_dispatch_does_not_leave_a_trip_running() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(manager.stop(&mut nav, &view, now).is_none());
+        assert!(!manager.active());
+        assert!(nav.next_action(&view, now).is_none());
+    }
+
+    #[test]
+    fn cancel_after_center_dispatch_restores_hunt_on_late_arrival() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(nav.next_action(&view, now), Some(GameCommand::Center)));
+        assert!(manager.stop(&mut nav, &view, now).is_none());
+        assert!(manager.active(), "in-flight travel still needs reconciliation");
+        assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(nav.next_action(&view, now).is_none());
+        view.in_center = true;
+        assert!(manager.next_action(&view, &mut nav, now).is_none());
+        assert!(matches!(nav.next_action(&view, now),
+            Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+        view.in_center = false;
+        manager.next_action(&view, &mut nav, now);
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn canceled_center_request_can_time_out_without_a_boss_start() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let view = hunt();
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(nav.next_action(&view, now), Some(GameCommand::Center)));
+        manager.stop(&mut nav, &view, now);
+        assert!(manager.active());
+        assert!(manager.next_action(&view, &mut nav,
+            now + Duration::from_secs(19)).is_none());
+        assert!(manager.active());
+        assert!(manager.next_action(&view, &mut nav,
+            now + Duration::from_secs(20)).is_none());
+        assert!(!manager.active());
+    }
+
+    #[test]
+    fn stop_state_without_start_ack_finishes_when_server_is_inactive() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::BossAuto { active: true, .. })));
+        assert!(matches!(manager.stop(&mut nav, &view, now),
+            Some(GameCommand::BossAuto { active: false, .. })));
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{"auto":false,"arena":null}}}));
+        manager.next_action(&view, &mut nav, now);
+        assert!(!manager.active(), "authoritative inactive state must settle Stop");
+    }
+
+    #[test]
+    fn stop_without_event_times_out_only_if_server_is_inactive() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        manager.next_action(&view, &mut nav, now);
+        manager.stop(&mut nav, &view, now);
+        manager.next_action(&view, &mut nav, now + Duration::from_secs(19));
+        assert!(manager.active());
+        manager.next_action(&view, &mut nav, now + Duration::from_secs(20));
+        assert!(!manager.active());
+        assert!(manager.view.warning.as_deref().unwrap_or("").contains("not acknowledged"));
+    }
+
+    #[test]
+    fn invalid_loot_json_is_quarantined_before_new_writes() {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap_or_default().as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "moth-boss-corrupt-test-{}-{stamp}", std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("loot.json");
+        let damaged = b"invalid boss journal, keep me";
+        fs::write(&path, damaged).unwrap();
+        let (loaded, warning) = load_log(&path).unwrap();
+        assert!(loaded.is_empty());
+        assert!(warning.unwrap_or_default().contains("preserved"));
+        assert!(!path.exists());
+        let quarantined = fs::read_dir(&root).unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|candidate| candidate != &path)
+            .expect("damaged journal backup");
+        assert_eq!(fs::read(&quarantined).unwrap().as_slice(), &damaged[..]);
+        let fresh = BossLoot {
+            at: 1, key: "bronze".into(), boss: "Bronze Boss".into(), drops: vec![],
+        };
+        save_log(&path, &[fresh.clone()]).unwrap();
+        assert_eq!(load_log(&path).unwrap().0, vec![fresh]);
+        assert_eq!(fs::read(&quarantined).unwrap(), damaged);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_journal_is_not_replaced_by_empty_history() {
+        // Reading a directory as a journal fails; new persistence must not start.
+        assert!(load_log(&std::env::temp_dir()).is_err());
+    }
+
     #[test]
     fn loot_uses_confirmed_boss_death_events_only() {
         let mut m = manager();

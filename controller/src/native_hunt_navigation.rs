@@ -114,6 +114,10 @@ impl HuntNavigator {
     pub fn center_pending(&self) -> bool {
         self.target == Some(Destination::Center)
     }
+    /// Indicates a Center command was dispatched before a local cancellation.
+    pub fn center_command_sent(&self) -> bool {
+        self.center_pending() && self.last_select.is_some()
+    }
     pub fn cancel(&mut self) {
         self.target = None;
         self.started = None;
@@ -203,6 +207,19 @@ mod tests {
             Some(GameCommand::GiveUp) => "giveup",
             _ => "none",
         }
+    }
+    #[test]
+    fn center_dispatch_is_distinct_from_queued_intent() {
+        let at = Instant::now();
+        let state = view();
+        let mut nav = HuntNavigator::default();
+        nav.center(at);
+        assert!(nav.center_pending());
+        assert!(!nav.center_command_sent());
+        assert!(matches!(nav.next_action(&state, at), Some(GameCommand::Center)));
+        assert!(nav.center_command_sent());
+        nav.cancel();
+        assert!(!nav.center_command_sent());
     }
     #[test]
     fn hunt_select_waits_until_server_combat_timer_expires() {

@@ -4,6 +4,14 @@
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
         "Game disconnected. Boss controls will become available after reconnection." => "Jogo desconectado. Os controles de boss voltarão após reconectar.",
+        "Cancelling boss travel; checking server location" =>
+            "Cancelando a viagem do boss; verificando a localização no servidor",
+        "Boss travel cancellation timed out; verify the current location" =>
+            "O cancelamento da viagem do boss expirou; confirme sua localização atual",
+        "Boss Stop was not acknowledged; server currently reports no active boss" =>
+            "O servidor não confirmou a parada do boss; o estado atual não mostra boss ativo",
+        "Damaged boss loot history was preserved in a backup file. New victories use a fresh journal." =>
+            "O histórico de loot danificado foi preservado em um backup. Novas vitórias usarão um arquivo novo.",
         "Boss trip cancelled before entry because the connection dropped" => "Viagem de boss cancelada antes da entrada devido à desconexão",
         "Connection interrupted; verifying boss state before restoring saved hunt" => "Conexão interrompida; verificando o boss antes de restaurar a hunt salva",
         "Verifying boss state after reconnect" => "Verificando o boss após reconectar",
