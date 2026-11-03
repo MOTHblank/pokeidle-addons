@@ -98,11 +98,12 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                         let tx=app.capture_save_tx.clone();
                         let generation_state=Arc::clone(&app.capture_generations[index]);
                         let generation=generation_state.load(Ordering::Acquire);
+                        let updater=native.capture_settings_updater();
                         std::thread::spawn(move || {
                             let result=std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(||
-                                    crate::native_auth::set_capture_settings(
-                                        profile,&next,&generation_state,generation)))
+                                    crate::native_auth::persist_and_apply_capture_settings(
+                                        profile,&next,&generation_state,generation,&updater)))
                                 .unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                             let _=tx.send(CaptureSavedEvent{
                                 index,generation,config:next,origin:CaptureSaveOrigin::Toggle,result
@@ -310,11 +311,12 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                     let tx=app.capture_save_tx.clone();
                     let generation_state=Arc::clone(&app.capture_generations[index]);
                     let generation=generation_state.load(Ordering::Acquire);
+                        let updater=native.capture_settings_updater();
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
-                                crate::native_auth::set_capture_settings(
-                                    profile,&to_save,&generation_state,generation))
+                                crate::native_auth::persist_and_apply_capture_settings(
+                                    profile,&to_save,&generation_state,generation,&updater))
                         ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                         let _=tx.send(CaptureSavedEvent{
                             index,generation,config:to_save,
