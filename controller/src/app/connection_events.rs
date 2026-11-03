@@ -343,7 +343,12 @@ impl ControllerApp {
             }
             self.cached_native_busy[event.index] = false;
             let profile = GameProfile::from_index(event.index).expect("known slot");
-            if self.games[event.index].is_running() { continue; }
+            if self.games[event.index].is_running() {
+                // A result that lost the race for this slot owns its socket
+                // until explicitly stopped; never let it linger detached.
+                if let Ok(Some(native))=event.result {native.stop();}
+                continue;
+            }
             if event.existing_firefox {
                 // A stale managed Firefox process still owns this profile.
                 // Do not create a competing native game socket from cache.
