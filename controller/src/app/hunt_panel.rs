@@ -2929,7 +2929,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .take(visible.end-visible.start).enumerate(){
                         let hunt=&hunts.hunts[result.hunt_index];
                         let row=RankedHunt{
-                            hunt,forecast:app.hunt_estimate_cache[index].get(&hunt.slug),
+                            hunt,forecast:if live {app.hunt_estimate_cache[index].get(&hunt.slug)} else {None},
                             value:result.value,source:result.source,
                         };
                         draw_hunt_row(ui,&row,visible.start+offset+1,app.workspace.hunt_filters.ranking,
