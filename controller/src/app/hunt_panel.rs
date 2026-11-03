@@ -1528,13 +1528,13 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
         tr("Current measured results and best modeled unlocked hunts, side by side. Unknown and stale values remain unavailable.")
     ).size(11.0).color(MUTED));
     let mut views=Vec::new();
-    for index in 0..app.games.len(){
-        let profile=app.games[index].profile;
+    for index in 0..app.runtimes.len(){
+        let profile=app.runtimes[index].game.profile;
         let name=app.account_name(profile);
-        if let Some(native)=app.games[index].native.as_ref(){
+        if let Some(native)=app.runtimes[index].game.native.as_ref(){
             let view=native.hunt_snapshot();
             let live=account_is_live(native);
-            app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),
+            app.runtimes[index].hunt.hunt_estimate_cache.refresh(index,&view,app.hunt_reference.as_ref(),
                 live,app.ui_options.atlas_aoe_enabled[index]);
             views.push((index,name,view,live));
         }else{
@@ -1583,7 +1583,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                                 .map(|p|p.name.as_str()).unwrap_or("—")
                         )).size(10.0).color(MUTED));
                         let current_model=view.hunt_slug.as_deref()
-                            .and_then(|slug|app.hunt_estimate_cache[*index].get(slug));
+                            .and_then(|slug|app.runtimes[*index].hunt.hunt_estimate_cache.get(slug));
                         draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current_model.as_ref(),
                             app.ui_options.atlas_aoe_enabled[*index]);
                         ui.add_space(5.0);
@@ -1614,7 +1614,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         ui.label(RichText::new(tr("TOP MODELED UNLOCKED HUNTS"))
                             .size(10.0).strong().color(DIM));
                         let mut estimates=view.hunts.iter().filter_map(|h|{
-                            app.hunt_estimate_cache[*index].get(&h.slug)
+                            app.runtimes[*index].hunt.hunt_estimate_cache.get(&h.slug)
                                 .map(|f|(h,f))
                         }).collect::<Vec<_>>();
                         estimates.sort_by(|a,b|b.1.trainer_xp_h.total_cmp(&a.1.trainer_xp_h));
@@ -1629,7 +1629,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         }
                         if estimates.is_empty(){
                             ui.label(RichText::new(if *live &&
-                                app.hunt_estimate_cache[*index].is_pending(){
+                                app.runtimes[*index].hunt.hunt_estimate_cache.is_pending(){
                                 tr("Calculating modeled rankings...")
                             }else{tr("Not enough battle data for a reliable estimate yet.")})
                                 .size(10.0).color(MUTED));
@@ -2322,7 +2322,7 @@ fn draw_atlas_explorer(
 /// the game; users tick it only when their Pokémon actually has AoE.
 fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
     let index=app.workspace.hunt_account;
-    let account_name=app.account_name(app.games[index].profile);
+    let account_name=app.account_name(app.runtimes[index].game.profile);
     let mut aoe_enabled=app.ui_options.atlas_aoe_enabled[index];
     egui::Frame::new().fill(PANEL_ALT)
         .stroke(Stroke::new(1.0,BORDER))
@@ -2345,7 +2345,7 @@ fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
         // explicit AoE preference; no additional simulation is started here.
         if app.ui_options.atlas_aoe_enabled[index]==aoe_enabled {
             if let (Some(native),Some(reference))=(
-                app.games[index].native.as_ref(),app.hunt_reference.as_ref()) {
+                app.runtimes[index].game.native.as_ref(),app.hunt_reference.as_ref()) {
                 native.enable_background_forecasts(Arc::clone(reference),aoe_enabled);
             }
         }
@@ -2407,7 +2407,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     let index=app.workspace.hunt_account;
-    let Some(native)=app.games[index].native.as_ref() else {
+    let Some(native)=app.runtimes[index].game.native.as_ref() else {
         egui::Frame::new().fill(PANEL)
             .stroke(Stroke::new(1.0,BORDER))
             .corner_radius(9.0).inner_margin(egui::Margin::same(14))
@@ -2418,17 +2418,17 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     tr("Start this account to load unlocked hunts, battle measurements and Pokémon.")
                 ).size(11.0).color(MUTED));
                 ui.horizontal_wrapped(|ui|{
-                    let starting=app.games[index].child.is_some()
-                        || app.games[index].orphaned_pid.is_some()
-                        || app.cached_native_busy[index]
-                        || app.native_verifying[index]
-                        || app.native_handoff_busy[index];
+                    let starting=app.runtimes[index].game.child.is_some()
+                        || app.runtimes[index].game.orphaned_pid.is_some()
+                        || app.runtimes[index].session.cached_native_busy
+                        || app.runtimes[index].session.native_verifying
+                        || app.runtimes[index].session.native_handoff_busy;
                     if starting {
                         ui.label(RichText::new(tr("Account starting or waiting for sign-in"))
                             .size(11.0).color(WARN));
                     } else if app.accounts[index].enabled {
                         if ui.button(tr("Start account")).clicked(){
-                            app.launch_one(app.games[index].profile);
+                            app.launch_one(app.runtimes[index].game.profile);
                         }
                     } else if ui.button(tr("Enable account")).clicked(){
                         app.workspace.panel_tab=PanelTab::Accounts;
@@ -2465,11 +2465,11 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .color(WARN));
         return;
     }
-    app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),
+    app.runtimes[index].hunt.hunt_estimate_cache.refresh(index,&view,app.hunt_reference.as_ref(),
         live,app.ui_options.atlas_aoe_enabled[index]);
     if live {
         if let Some(slug)=view.hunt_slug.as_deref() {
-            let cache=&mut app.hunt_estimate_cache[index];
+            let cache=&mut app.runtimes[index].hunt.hunt_estimate_cache;
             if cache.archive_due(slug) {
                 if let Some(model)=cache.get(slug){
                     if native.archive_hunt_forecast(slug,model.trainer_xp_h,
@@ -2490,10 +2490,10 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(RichText::new(tr("Waiting for a safe opening to reach the Pokémon Center…"))
             .color(WARN).size(11.0));
     }
-    if let Some(error)=app.hunt_action_error[index].clone(){
+    if let Some(error)=app.runtimes[index].hunt.hunt_action_error.clone(){
         ui.horizontal_wrapped(|ui|{
             ui.label(RichText::new(tr_dynamic(format!("Command: {error}"))).color(BAD));
-            if ui.small_button(tr("Dismiss")).clicked(){app.hunt_action_error[index]=None;}
+            if ui.small_button(tr("Dismiss")).clicked(){app.runtimes[index].hunt.hunt_action_error=None;}
         });
     }
     ui.add_space(6.0);
@@ -2502,21 +2502,21 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         app.workspace.hunt_subtab=HuntSubtab::Current;
     }
     ui.add_space(6.0);
-    draw_atlas_combat_profile(ui,&view,&app.hunt_estimate_cache[index],
+    draw_atlas_combat_profile(ui,&view,&app.runtimes[index].hunt.hunt_estimate_cache,
         app.ui_options.atlas_aoe_enabled[index]);
     ui.add_space(6.0);
     draw_atlas_outland_tier(ui,&view,native,index,live,
-        &mut app.hunt_action_error[index]);
+        &mut app.runtimes[index].hunt.hunt_action_error);
     ui.add_space(6.0);
     // Explorer uses one full-page ScrollArea; its result panes now size to
     // their contents rather than relying on available_height().
     if app.workspace.hunt_subtab==HuntSubtab::Explorer{
         draw_atlas_explorer(ui,&view,native,live,index,
             app.ui_options.atlas_aoe_enabled[index],
-            app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
-            &mut app.workspace.hunt_filters.atlas_page[index],&app.hunt_estimate_cache[index],
-            &app.atlas_scenarios[index],&mut app.atlas_results[index],
-            &mut app.hunt_action_error[index]);
+            app.hunt_reference.as_deref(),&mut app.runtimes[index].hunt.atlas_filters,
+            &mut app.workspace.hunt_filters.atlas_page[index],&app.runtimes[index].hunt.hunt_estimate_cache,
+            &app.runtimes[index].hunt.atlas_scenarios,&mut app.runtimes[index].hunt.atlas_results,
+            &mut app.runtimes[index].hunt.hunt_action_error);
         return;
     }
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.workspace.hunt_subtab as u8))
@@ -2528,8 +2528,8 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let history=native.history_snapshot();
                     models_panel::draw_atlas_models(ui,&view,
                         app.hunt_reference.as_deref(),
-                        &app.hunt_estimate_cache[index],
-                        &mut app.atlas_scenarios[index],&history,live);
+                        &app.runtimes[index].hunt.hunt_estimate_cache,
+                        &mut app.runtimes[index].hunt.atlas_scenarios,&history,live);
                 }
                 HuntSubtab::Current => {
                     let hunts=&view;
@@ -2720,7 +2720,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(tr("Current hunt · estimated results"))
                 .size(12.0).strong().color(TEXT));
             if let Some(forecast)=hunts.hunt_slug.as_deref()
-                .and_then(|slug|app.hunt_estimate_cache[index].get(slug)) {
+                .and_then(|slug|app.runtimes[index].hunt.hunt_estimate_cache.get(slug)) {
                 draw_atlas_combat_cues(ui,hunts.active_pokemon.as_ref(),Some(&forecast),
                     app.ui_options.atlas_aoe_enabled[index]);
                 ui.add_space(6.0);
@@ -2769,7 +2769,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     tr("These trainer/Pokémon streams must not be added together. Modeled gross gold excludes spending.")
                 ).size(10.0).color(MUTED));
             } else {
-                ui.label(RichText::new(if app.hunt_estimate_cache[index].is_pending(){
+                ui.label(RichText::new(if app.runtimes[index].hunt.hunt_estimate_cache.is_pending(){
                     tr("Calculating your forecast…")
                 }else{
                     tr("Combat estimate unavailable for current Pokémon.")
@@ -2995,8 +2995,8 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         }
                     });
                     let reference=app.hunt_reference.as_deref();
-                    let ranked=app.hunt_rankings[index].update(hunts,app.hunt_reference.as_ref(),
-                        &app.hunt_estimate_cache[index],app.workspace.hunt_filters.ranking,live,
+                    let ranked=app.runtimes[index].hunt.hunt_rankings.update(hunts,app.hunt_reference.as_ref(),
+                        &app.runtimes[index].hunt.hunt_estimate_cache,app.workspace.hunt_filters.ranking,live,
                         &app.workspace.hunt_filters.query,&app.workspace.hunt_filters.region,
                         &app.workspace.hunt_filters.pokemon_type);
                     ui.label(RichText::new(format!(
@@ -3010,11 +3010,11 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .take(visible.end-visible.start).enumerate(){
                         let hunt=&hunts.hunts[result.hunt_index];
                         let row=RankedHunt{
-                            hunt,forecast:if live {app.hunt_estimate_cache[index].get(&hunt.slug)} else {None},
+                            hunt,forecast:if live {app.runtimes[index].hunt.hunt_estimate_cache.get(&hunt.slug)} else {None},
                             value:result.value,source:result.source,
                         };
                         draw_hunt_row(ui,&row,visible.start+offset+1,app.workspace.hunt_filters.ranking,
-                            hunts,reference,live,native,&mut app.hunt_action_error[index],
+                            hunts,reference,live,native,&mut app.runtimes[index].hunt.hunt_action_error,
                             app.ui_options.atlas_aoe_enabled[index]);
                         ui.add_space(5.0);
                     }
