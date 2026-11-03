@@ -175,20 +175,40 @@ fn preserve_native_capture_preferences(fresh: &Value, prior: Option<&Value>) -> 
     merged
 }
 
+// Cached launches never read while an old write for their profile is
+// unfinished, and a superseded launch cannot read the protected vault.
+pub fn load_for_auth(profile:GameProfile,
+    generation:&std::sync::atomic::AtomicU64,expected:u64
+)->Result<Option<Value>,String> {
+    let _guard=preference_write(profile).lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Cached login canceled: launch changed".into());
+    }
+    load(profile)
+}
+
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
 /// same write lock as native UI edits. Return the merged bootstrap for the
 /// imminent game connection as well as for future cached starts.
-pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
+pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value,
+    generation:&std::sync::atomic::AtomicU64,expected:u64)
     -> (Value, Option<String>) {
-    let _guard=match PREFERENCE_WRITE.lock() {
+    let _guard=match preference_write(profile).lock() {
         Ok(guard)=>guard,
         Err(_)=>return (fresh.clone(), Some("Native settings writer unavailable".into()))
     };
+    if !capture_generation_is_current(generation,expected) {
+        return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
+    }
     let (prior,read_error)=match load(profile) {
         Ok(prior)=>(prior,None),
         Err(error)=>(None,Some(error))
     };
     let merged=preserve_native_capture_preferences(fresh,prior.as_ref());
+    if !capture_generation_is_current(generation,expected) {
+        return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
+    }
     let saved=save(profile,&merged);
     let warning=match saved {
         Err(error)=>Some(error),
