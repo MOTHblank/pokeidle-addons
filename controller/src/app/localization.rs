@@ -1,5 +1,5 @@
 //! Core English and Brazilian Portuguese labels and live status translations.
-use super::*;
+use super::{translations, Ordering, PT_BR};
 
 pub(super) fn pt_br() -> bool {
     PT_BR.load(Ordering::Relaxed)
@@ -12,7 +12,7 @@ pub(super) fn localize_status(message: String) -> String {
     localize_status_pt(message)
 }
 
-pub(super) fn localize_status_pt(message: String) -> String {
+fn localize_status_pt(message: String) -> String {
     // Kick transport/login errors share the status bar with ordinary UI text.
     let mut value = translations::kick_error(message);
     for (en, pt) in [

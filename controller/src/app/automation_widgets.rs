@@ -1,5 +1,6 @@
 //! Reusable automation labels, badges, statistics and resource chips.
-use super::*;
+use super::{compact_text, egui, tr, Align, FontId, Layout, Margin, RichText, Stroke,
+    ACCENT, BORDER, DIM, GOOD, MUTED, PANEL, PANEL_ALT, TEXT};
 
 // Detailed view uses close label/value pairs instead of pushing numbers to the
 // far edge of large columns. Preserve full values in the hover tooltip.

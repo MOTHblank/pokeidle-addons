@@ -1,5 +1,6 @@
 //! Native capture, restock and game automation controls; worker ownership stays in ControllerApp.
-use super::*;
+use super::{draw_game_automation_contents, draw_native_automation, draw_native_missing_panel,
+    egui, market_panel, tr, workspace_tab_button, AutomationSection, ControllerApp};
 
 pub(super) fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Keep section navigation above the only vertical scroll region. Market
@@ -28,7 +29,7 @@ pub(super) fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
         });
 }
 
-pub(super) fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
+fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.automation_account;
     match app.automation_section {
         AutomationSection::Capture => {

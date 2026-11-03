@@ -1,5 +1,6 @@
 //! Reusable compact runtime and connection status widgets.
-use super::*;
+use super::{egui, tr, Align, Color32, Health, Layout, Margin, RichText, Stroke,
+    ACCENT, BAD, BORDER, DIM, GOOD, MUTED, PANEL_ALT, TEXT, WARN};
 
 pub(super) fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {
     let waiting = [
