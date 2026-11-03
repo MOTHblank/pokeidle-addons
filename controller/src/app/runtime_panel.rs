@@ -1,5 +1,9 @@
 //! Runtime information and controller credits presentation.
-use super::*;
+use super::{egui, localize_status, runtime_chip, tr, update, Align, Color32,
+    ControllerApp, FontId, Layout, Margin, PanelTab, RichText, SharedUpdateStatus,
+    Stroke, BAD, BORDER, DIM, GOOD, MONITOR_HEARTBEAT_INTERVAL,
+    MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL, MUTED, PANEL, PANEL_ALT,
+    TEXT, UI_REPAINT_INTERVAL, WARN};
 
 pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {

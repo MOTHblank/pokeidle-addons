@@ -1,5 +1,8 @@
 //! Account profile management cards and profile/Kick workspace routing.
-use super::*;
+use super::{egui, kick_panel, localize_status, pt_br, status_chip, tr, tr_dynamic,
+    AccountsSection, Align, Color32, ControllerApp, Duration, FontId, GameProfile,
+    Layout, ProfileAction, RichText, Stroke, BAD, BORDER, DIM, GOOD, MUTED,
+    PANEL, PANEL_ALT, TEXT, WARN};
 
 /// Show all four account slots at once; a card never switches or stops another
 /// account. All indicators come from the current game and Twitch connection.
@@ -54,7 +57,7 @@ pub(super) fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
 }
 
-pub(super) fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
+fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
     profile: GameProfile, width: f32)
 {
     let index = profile.index();
