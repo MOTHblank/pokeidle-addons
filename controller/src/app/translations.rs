@@ -23,6 +23,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss run complete; return destination unavailable" => "Sequência concluída; hunt de retorno indisponível",
         "Finish or cancel the boss trip before choosing another destination" => "Conclua ou cancele o boss antes de escolher outra hunt",
         "Boss command failed to send" => "Falha ao enviar o comando de boss",
+        "Boss loot journal is unavailable; new drops will not survive restart" =>
+            "O histórico de loot não está disponível; os próximos drops não serão salvos ao reiniciar.",
         "Boss Manager" => "Gerenciador de Bosses",
         "Server-native Boss Manager" => "Gerenciador de Bosses (servidor)",
         "Start this account to manage server-native boss farming" =>
