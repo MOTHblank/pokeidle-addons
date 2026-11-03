@@ -229,9 +229,9 @@ fn capture_generation_is_current(
 // The session boundary and the entire encrypted read/modify/write transaction
 // share the same lock. A UI invalidation cannot overtake a blocked keyring
 // write, then allow that old write to finish against the replacement session.
-pub fn invalidate_capture_generation(profile:GameProfile,
-    generation:&std::sync::atomic::AtomicU64) {
-    let _guard=preference_write(profile).lock().unwrap_or_else(|error|error.into_inner());
+pub fn invalidate_capture_generation(generation:&std::sync::atomic::AtomicU64) {
+    // Only mutate the atomic here: the UI must never wait for a vault service.
+    // An in-flight writer is responsible for rolling back after cancellation.
     generation.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
 }
 fn capture_write_transaction<T>(
@@ -247,7 +247,11 @@ fn capture_write_transaction<T>(
     if !capture_generation_is_current(generation,expected) {
         return Err("Capture settings save canceled: session changed".into());
     }
-    write()
+    let result=write()?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Capture settings save canceled: session changed".into());
+    }
+    Ok(result)
 }
 pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
