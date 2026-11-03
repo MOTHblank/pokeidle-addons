@@ -1,7 +1,7 @@
 //! Kick's website viewer session protocol (separate from Twitch IRC and
 //! Kick's public Developer API). This is an undocumented upstream interface;
 //! any endpoint can change without notice. Credentials remain memory-only.
-use crate::native_kick_hls::{MediaRunner, MediaStatus};
+use crate::native_kick_hls::{AccountBandwidth, MediaRunner, MediaStatus};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -291,7 +291,7 @@ fn watch_event(meta: &ChannelMeta) -> Value {
 pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                   status: &Arc<Mutex<WatchTelemetry>>,
                   stop: Arc<AtomicBool>, bearer: &str,
-                  auth: &AuthGate) -> Result<(), String> {
+                  auth: &AuthGate, bandwidth: Arc<AccountBandwidth>) -> Result<(), String> {
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
@@ -299,7 +299,7 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
     let mut socket = ws_connect(&token)?;
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
-    let media = MediaRunner::start(meta.playback_url.clone(), Arc::clone(&stop))?;
+    let media = MediaRunner::start(meta.playback_url.clone(), Arc::clone(&stop), bandwidth)?;
     let started = Instant::now();
     let mut last_handshake = started;
     let mut last_event = started;
