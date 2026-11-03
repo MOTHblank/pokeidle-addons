@@ -237,6 +237,9 @@ impl ControllerApp {
 
     pub(super) fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
+        // Cancel the authority of any asynchronous Capture/Restock write
+        // from the previous login before closing or replacing its socket.
+        self.capture_generations[index].fetch_add(1,Ordering::AcqRel);
         // A stopped account must not keep an independent Kick worker alive.
         self.stop_kick_account(index);
         let account_name = self.account_name(profile);
