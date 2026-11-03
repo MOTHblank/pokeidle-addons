@@ -261,8 +261,18 @@ pub fn set_capture_settings(profile: GameProfile,
         let Some(mut saved)=load(profile)? else {
             return Err("Native credential cache unavailable; authenticate again to save preferences".into());
         };
+        let original=saved.clone();
         saved["autocatch"]=config.as_value();
-        save(profile,&saved)
+        if !capture_generation_is_current(generation,expected) {
+            return Err("Capture settings save canceled: session changed".into());
+        }
+        save(profile,&saved)?;
+        if !capture_generation_is_current(generation,expected) {
+            save(profile,&original)
+                .map_err(|error|format!("Canceled capture save rollback failed: {error}"))?;
+            return Err("Capture settings save canceled: session changed".into());
+        }
+        Ok(())
     })
 }
 
