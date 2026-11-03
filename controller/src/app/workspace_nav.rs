@@ -83,6 +83,8 @@ pub(super) fn draw_account_switcher(
                         }
                     } else if slot.stopping {
                         (tr("Stopping"), WARN)
+                    } else if slot.shutdown_failed {
+                        (tr("Stop failed"), BAD)
                     } else if app.cached_native_busy[index] || app.native_verifying[index]
                         || app.native_handoff_busy[index] || slot.handoff_closing {
                         (tr("Starting"), WARN)
