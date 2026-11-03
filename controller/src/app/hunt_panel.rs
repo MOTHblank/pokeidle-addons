@@ -193,7 +193,12 @@ impl EstimateCache {
             self.live=live;
             self.refreshed=None;
             self.failed_at=None;
-            self.last_archived=None;
+            // Keep the current-hunt archival throttle when only an unrelated
+            // destination learned new geometry.
+            if full_changed || self.last_archived.as_ref()
+                .is_some_and(|(slug,_)|changed_geometry.contains(slug)) {
+                self.last_archived=None;
+            }
             self.generation=self.generation.wrapping_add(1);
             self.cancellation.store(self.generation,std::sync::atomic::Ordering::Release);
             if full_changed {
