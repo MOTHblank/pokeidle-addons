@@ -903,6 +903,37 @@ enum HuntRanking { TrainerXp, PokemonXp, Gold }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CaptureSaveOrigin { Editor, Toggle, Restock }
 
+// Failed Restock writes remain unsaved without spinning on invalid settings.
+// Transient vault errors retry at 1, 2, 4 and 8 seconds; then pause until
+// the user edits the selection or begins a new session.
+#[derive(Clone,Copy,Default,Debug)]
+struct RestockSaveRetry {
+    failures:u8,
+    next:Option<Instant>,
+    blocked:bool,
+}
+impl RestockSaveRetry {
+    fn ready(self,now:Instant)->bool {
+        !self.blocked && self.next.is_none_or(|at|now>=at)
+    }
+    fn failed(&mut self,error:&str,now:Instant)->Option<Duration> {
+        self.failures=self.failures.saturating_add(1);
+        self.next=None;
+        // Validation errors and revoked credentials must not be retried.
+        let transient=error.contains("keyring") ||
+            error.contains("DPAPI") ||
+            error.contains("native credential directory") ||
+            error.contains("Native settings writer unavailable");
+        if !transient || self.failures>=5 {
+            self.blocked=true;
+            return None;
+        }
+        let delay=Duration::from_secs(1u64 << (self.failures-1));
+        self.next=Some(now+delay);
+        Some(delay)
+    }
+}
+
 struct CaptureSavedEvent {
     index:usize,
     generation:u64,
@@ -971,6 +1002,7 @@ pub struct ControllerApp {
     // picker from the last confirmed worker snapshot while a save is in flight.
     restock_drafts:[Option<CatchSettings>;4],
     restock_dirty:[bool;4],
+    restock_retries:[RestockSaveRetry;4],
 
     capture_save_busy:[bool;4],
     // A separate request ID rejects stale acknowledgements within a session.
@@ -1121,6 +1153,7 @@ impl ControllerApp {
             capture_drafts:std::array::from_fn(|_|None),
             restock_drafts:std::array::from_fn(|_|None),
             restock_dirty:[false;4],
+            restock_retries:[RestockSaveRetry::default();4],
 
             capture_save_busy:[false;4],
             capture_save_ids:[0;4],
@@ -1188,6 +1221,11 @@ impl ControllerApp {
         crate::native_auth::invalidate_capture_generation(&self.capture_generations[index]);
         self.capture_save_busy[index]=false;
         self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
+        self.capture_drafts[index]=None;
+        self.restock_drafts[index]=None;
+        self.restock_dirty[index]=false;
+        self.restock_retries[index]=RestockSaveRetry::default();
+        self.capture_save_error[index]=None;
     }
 
     // Native and Twitch recovery signals wake the control-plane pump directly.
