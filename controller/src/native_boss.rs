@@ -87,6 +87,7 @@ struct Trip {
     confirmed: bool,
     ended: bool,
     stop_pending: bool,
+    recovering: bool,
 }
 
 #[derive(Default)]
@@ -201,7 +202,7 @@ impl BossManager {
             *state = self.view.clone();
             state.busy = self.trip.is_some();
             state.can_stop = self.view.auto || self.trip.as_ref().is_some_and(|trip|
-                trip.repeat || trip.stage == Stage::GoingCenter);
+                !trip.recovering && (trip.repeat || trip.stage == Stage::GoingCenter));
         }
     }
     pub fn start(&mut self, key: &str, repeat: bool, hunt: &HuntView,
@@ -233,7 +234,7 @@ impl BossManager {
         self.trip = Some(Trip {
             key: key.to_owned(), original: original.clone(), repeat,
             stage: Stage::GoingCenter, confirmed: false, ended: false,
-            stop_pending: false,
+            stop_pending: false, recovering: false,
         });
         self.view.original_hunt = original;
         self.view.warning = None;
@@ -370,6 +371,7 @@ impl BossManager {
     pub fn next_action(&mut self, hunt: &HuntView,
                        navigator: &mut HuntNavigator, now: Instant) -> Option<GameCommand> {
         let trip = self.trip.as_mut()?;
+        if trip.recovering { return None; }
         if trip.stage == Stage::GoingCenter && hunt.in_center {
             trip.stage = Stage::Running;
             self.view.phase = if trip.repeat {
@@ -413,18 +415,84 @@ impl BossManager {
         None
     }
     pub fn active(&self) -> bool { self.trip.is_some() }
+
+    /// A disconnected socket never replays a boss-enter/start command. Keep
+    /// only an already-started trip's return target until the new welcome
+    /// establishes the server's current arena, auto state and location.
     pub fn on_disconnect(&mut self) {
-        if self.trip.take().is_some() {
-            self.view.warning = Some(
-                "Connection interrupted during boss trip. Automatic return was cancelled to avoid stale commands.".into());
-            self.view.phase = "Boss trip interrupted".into();
+        if let Some(trip) = self.trip.as_mut() {
+            if trip.stage == Stage::GoingCenter {
+                self.trip = None;
+                self.view.original_hunt = None;
+                self.view.warning = Some(
+                    "Boss trip cancelled before entry because the connection dropped".into());
+                self.view.phase = "Boss trip interrupted".into();
+            } else {
+                trip.recovering = true;
+                self.view.warning = Some(
+                    "Connection interrupted; verifying boss state before restoring saved hunt".into());
+                self.view.phase = "Verifying boss state after reconnect".into();
+            }
         }
-        self.view.original_hunt = None;
         self.view.catalog_ready = false;
         self.view.catalog.clear();
         self.view.auto = false;
         self.view.auto_key = None;
         self.view.arena = None;
+    }
+
+    /// Called ONLY after a fresh, authenticated welcome from the same socket
+    /// owner. Resume passive monitoring or the final hunt return; never restart
+    /// a battle or enable repetition on an unconfirmed network reconnection.
+    pub fn recover_on_welcome(&mut self, hunt: &HuntView) {
+        let Some(trip) = self.trip.as_mut() else { return; };
+        if !trip.recovering { return; }
+        trip.recovering = false;
+        if self.view.auto {
+            if self.view.auto_key.as_deref() != Some(trip.key.as_str()) {
+                self.view.warning = Some(
+                    "Another boss repetition is active; saved hunt return was cancelled".into());
+                self.trip = None;
+                self.view.original_hunt = None;
+                self.view.phase = "Boss trip interrupted".into();
+                return;
+            }
+            trip.stage = Stage::Running;
+            trip.confirmed = true;
+            trip.ended = false;
+            trip.stop_pending = false;
+            self.view.phase = "Server boss repetition resumed after reconnect".into();
+        } else if let Some(arena) = self.view.arena.as_deref() {
+            if arena != trip.key {
+                self.view.warning = Some(
+                    "Another boss encounter is active; saved hunt return was cancelled".into());
+                self.trip = None;
+                self.view.original_hunt = None;
+                self.view.phase = "Boss trip interrupted".into();
+                return;
+            }
+            trip.stage = Stage::Running;
+            trip.confirmed = true;
+            trip.ended = false;
+            trip.stop_pending = false;
+            self.view.phase = "Waiting for boss encounter after reconnect".into();
+        } else if hunt.in_center {
+            trip.stage = Stage::Running;
+            trip.ended = true;
+            trip.stop_pending = false;
+            self.view.phase = "Restoring saved hunt after reconnect".into();
+        } else if trip.original.as_deref() == hunt.hunt_slug.as_deref()
+            && trip.original.is_some() {
+            self.trip = None;
+            self.view.original_hunt = None;
+            self.view.phase = "Original hunt already restored after reconnect".into();
+        } else {
+            self.trip = None;
+            self.view.original_hunt = None;
+            self.view.warning = Some(
+                "Game location changed during reconnection; automatic return cancelled".into());
+            self.view.phase = "Boss trip interrupted".into();
+        }
     }
 }
 
