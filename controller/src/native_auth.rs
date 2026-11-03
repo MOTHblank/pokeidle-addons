@@ -210,6 +210,18 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value,
         return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
     }
     let saved=save(profile,&merged);
+    // Stop may overtake a slow vault operation. Do not leave credentials
+    // from the canceled attempt visible to a later cached native launch.
+    if saved.is_ok() && !capture_generation_is_current(generation,expected) {
+        let restored=match prior.as_ref() {
+            Some(previous)=>save(profile,previous),
+            None=>clear(profile),
+        };
+        return (fresh.clone(),Some(match restored {
+            Ok(())=>"Firefox login cache canceled: launch changed".into(),
+            Err(error)=>format!("Canceled login cache rollback failed: {error}"),
+        }));
+    }
     let warning=match saved {
         Err(error)=>Some(error),
         Ok(())=>read_error,
