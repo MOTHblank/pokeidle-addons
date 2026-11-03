@@ -101,6 +101,10 @@ mod capture_handoff_tests {
             capture_write_transaction(GameProfile::Game1,&writer_generation,3,|| {
                 inside_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
+                if !capture_generation_is_current(&writer_generation,3) {
+                    return Err(CaptureSaveFailure::permanent(
+                        "Capture settings save canceled: session changed"));
+                }
                 Ok(())
             })
         });
@@ -117,6 +121,49 @@ mod capture_handoff_tests {
         assert!(capture_write_transaction::<()>(GameProfile::Game1,&generation,3,||
             panic!("superseded session must not enter a vault write")).is_err());
     }
+    #[test]
+    fn canceled_inflight_capture_write_restores_previous_vault_contents() {
+        use std::sync::atomic::{AtomicU64,Ordering};
+        let generation=AtomicU64::new(10);
+        let original=json!({"autocatch":{"enabled":false}});
+        let updated=json!({"autocatch":{"enabled":true}});
+        let mut stored=original.clone();
+        let outcome=capture_write_transaction(GameProfile::Game1,&generation,10,||{
+            commit_capture_update(&generation,10,&original,&updated,|value|{
+                stored=value.clone();
+                if value==&updated {
+                    // Stop happens after the encrypted write, before commit.
+                    generation.fetch_add(1,Ordering::AcqRel);
+                }
+                Ok(())
+            })
+        });
+        assert!(outcome.is_err());
+        assert_eq!(stored,original,
+            "an invalidated write must restore the old settings");
+    }
+
+    #[test]
+    fn committed_capture_write_is_not_reclassified_as_canceled() {
+        use std::sync::atomic::{AtomicU64,Ordering};
+        let generation=AtomicU64::new(10);
+        let original=json!({"autocatch":{"enabled":false}});
+        let updated=json!({"autocatch":{"enabled":true}});
+        let mut stored=original.clone();
+        let outcome=capture_write_transaction(GameProfile::Game1,&generation,10,||{
+            commit_capture_update(&generation,10,&original,&updated,|value|{
+                stored=value.clone();
+                Ok(())
+            })?;
+            // Stop immediately after the last rollback opportunity.
+            generation.fetch_add(1,Ordering::AcqRel);
+            Ok(())
+        });
+        assert!(outcome.is_ok(),
+            "a committed write cannot be falsely rejected without rollback");
+        assert_eq!(stored,updated);
+    }
+
     #[test]
     fn first_login_imports_the_browser_settings() {
         let firefox=json!({"autocatch":{"enabled":true,"ballPriority":["ultra"]}});
@@ -291,13 +338,12 @@ fn capture_write_transaction<T>(
         return Err(CaptureSaveFailure::permanent(
             "Capture settings save canceled: session changed"));
     }
-    let result=write()?;
-    if !capture_generation_is_current(generation,expected) {
-        return Err(CaptureSaveFailure::permanent(
-            "Capture settings save canceled: session changed"));
-    }
-    Ok(result)
-}
+    // The write closure owns the final post-write cancellation check and
+    // rollback. Once that check succeeds, the save has committed. Checking
+    // again outside the closure could falsely report a completed vault
+    // write as canceled, without having rolled it back.
+    write()
+
 fn load_capture_vault(profile:GameProfile)->Result<Option<Value>,CaptureSaveFailure>{
     platform::load(profile).map_err(CaptureSaveFailure::vault)?
         .map(|bytes|deserialize(&bytes).map_err(CaptureSaveFailure::permanent))
@@ -306,6 +352,29 @@ fn load_capture_vault(profile:GameProfile)->Result<Option<Value>,CaptureSaveFail
 fn save_capture_vault(profile:GameProfile,value:&Value)->Result<(),CaptureSaveFailure>{
     let bytes=serialize(value).map_err(CaptureSaveFailure::permanent)?;
     platform::save(profile,&bytes).map_err(CaptureSaveFailure::vault)
+}
+// Called while holding this profile's preference_write lock. An invalidation
+// observed after the vault write must restore the original encrypted value
+// before a replacement session is allowed to read it. Once the post-write
+// check succeeds, the write is committed even if Stop happens immediately
+// afterward: a successful commit must not be reclassified as a failed save.
+fn commit_capture_update(
+    generation:&std::sync::atomic::AtomicU64,expected:u64,
+    original:&Value,updated:&Value,
+    mut save:impl FnMut(&Value)->Result<(),CaptureSaveFailure>,
+)->Result<(),CaptureSaveFailure>{
+    if !capture_generation_is_current(generation,expected) {
+        return Err(CaptureSaveFailure::permanent(
+            "Capture settings save canceled: session changed"));
+    }
+    save(updated)?;
+    if !capture_generation_is_current(generation,expected) {
+        save(original).map_err(|error|CaptureSaveFailure::vault(format!(
+            "Canceled capture save rollback failed: {error}")))?;
+        return Err(CaptureSaveFailure::permanent(
+            "Capture settings save canceled: session changed"));
+    }
+    Ok(())
 }
 pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
@@ -319,19 +388,8 @@ pub fn set_capture_settings(profile: GameProfile,
         };
         let original=saved.clone();
         saved["autocatch"]=config.as_value();
-        if !capture_generation_is_current(generation,expected) {
-            return Err(CaptureSaveFailure::permanent(
-                "Capture settings save canceled: session changed"));
-        }
-        save_capture_vault(profile,&saved)?;
-        if !capture_generation_is_current(generation,expected) {
-            save_capture_vault(profile,&original)
-                .map_err(|error|CaptureSaveFailure::vault(format!(
-                    "Canceled capture save rollback failed: {error}")))?;
-            return Err(CaptureSaveFailure::permanent(
-                "Capture settings save canceled: session changed"));
-        }
-        Ok(())
+        commit_capture_update(generation,expected,&original,&saved,
+            |value|save_capture_vault(profile,value))
     })
 }
 
@@ -347,8 +405,9 @@ pub fn persist_and_apply_capture_settings(
 ) -> Result<(), CaptureSaveFailure> {
     set_capture_settings(profile,config,generation,expected)?;
     if !capture_generation_is_current(generation,expected) {
-        return Err(CaptureSaveFailure::permanent(
-            "Capture settings save canceled: session changed"));
+        // The vault committed before Stop. The old updater is no longer
+        // authoritative, but persistence must not be reported as canceled.
+        return Ok(());
     }
     updater.apply(config.clone()).map_err(CaptureSaveFailure::permanent)
 }
