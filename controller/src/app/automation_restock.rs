@@ -140,7 +140,7 @@ fn capture_restock_threshold(
 /// Live restock picker ported from Auto Catch+. Each account card edits only its
 /// own authenticated native settings, with no item-ID input or explicit save step.
 pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
-    if !app.restock_open[index] { return; }
+    if !app.workspace.restock_open[index] { return; }
     request_item_catalog(app);
     app.visuals.poll(ui.ctx());
     let Some(native) = app.games[index].native.as_ref() else {
