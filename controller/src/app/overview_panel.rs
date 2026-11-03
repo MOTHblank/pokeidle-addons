@@ -1,6 +1,24 @@
 //! Native account overview, live summaries and session history presentation.
 use super::*;
 
+// One coherent per-account sample is shared by the overview totals, status
+// projection and card widgets. Without this, a four-account dashboard clones
+// each potentially large HuntView several times per redraw.
+pub(super) struct OverviewAccountSample {
+    pub(super) health: Health,
+    pub(super) view: Option<HuntView>,
+    pub(super) native: Option<crate::native_background::NativeSnapshot>,
+}
+
+impl OverviewAccountSample {
+    pub(super) fn capture(slot: &GameSlot) -> Self {
+        let native = slot.native.as_ref().map(|session| session.snapshot());
+        let view = slot.native.as_ref().map(|session| session.hunt_snapshot());
+        let health = slot.health_with_native(native.as_ref().zip(view.as_ref()));
+        Self { health, view, native }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct OverviewTotals {
     online: usize,
@@ -16,19 +34,22 @@ pub(super) struct OverviewTotals {
 
 // Only confirmed live snapshots contribute. Offline accounts are not assumed
 // to have zero balances; these totals explicitly describe online balances.
-pub(super) fn collect_overview_totals(app: &mut ControllerApp, profiles: &[usize]) -> OverviewTotals {
+pub(super) fn collect_overview_totals(
+    app: &mut ControllerApp,
+    profiles: &[usize],
+    samples: &[Option<OverviewAccountSample>; 4],
+) -> OverviewTotals {
     let mut result = OverviewTotals::default();
     for &index in profiles {
-        let health = app.games[index].health();
+        let sample = samples[index].as_ref().expect("enabled account sampled");
+        let health = &sample.health;
         let running = app.games[index].is_running();
         if !running || !health.logged_in || !health.bridge_snapshot_ok ||
             (app.games[index].native.is_none() && !health.telemetry_is_fresh()) {
             continue;
         }
         result.online += 1;
-        if let Some(native) = app.games[index].native.as_ref() {
-            let view = native.hunt_snapshot();
-            let snapshot = native.snapshot();
+        if let (Some(view), Some(snapshot)) = (sample.view.as_ref(), sample.native.as_ref()) {
             if view.measurements.valid_trainer {
                 result.xp_h += view.measurements.trainer_xp_h;
                 result.xp_samples += 1;
@@ -46,7 +67,7 @@ pub(super) fn collect_overview_totals(app: &mut ControllerApp, profiles: &[usize
                 result.gem_balances += 1;
             }
         } else {
-            if let Some(rate) = app.xp_rates[index].observe(&health) {
+            if let Some(rate) = app.xp_rates[index].observe(health) {
                 result.xp_h += rate;
                 result.xp_samples += 1;
             }
@@ -185,21 +206,24 @@ pub(super) fn format_hunt_amount(value: f64) -> String {
 // rendering primitives without pulling browser JavaScript into the controller.
 /// At-a-glance card: keep the operational summary visible for every enabled
 /// account, independently of the much longer optional diagnostics panel.
-pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32) {
+pub(super) fn draw_overview_card(
+    app: &mut ControllerApp, ui: &mut egui::Ui, index: usize, width: f32,
+    sample: &OverviewAccountSample,
+) {
     ui.set_width(width);
     let profile = app.games[index].profile;
-    let health = app.games[index].health();
+    let health = &sample.health;
     let running = app.games[index].is_running();
-    let native_view = app.games[index].native.as_ref().map(|native| native.hunt_snapshot());
-    let account_name = native_view.as_ref()
+    let native_view = sample.view.as_ref();
+    let account_name = native_view
         .and_then(|view| view.account_nick.as_deref())
         .filter(|name| !name.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| app.account_name(profile));
-    let xp_per_hour = if let Some(view) = native_view.as_ref() {
+    let xp_per_hour = if let Some(view) = native_view {
         if view.measurements.valid_trainer { Some(view.measurements.trainer_xp_h) } else { None }
     } else if running {
-        app.xp_rates[index].observe(&health)
+        app.xp_rates[index].observe(health)
     } else {
         app.xp_rates[index] = XpRateTracker::default();
         None
@@ -209,7 +233,7 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
     let idle_warning = if app.games[index].native.is_some() {
         app.idle_progress[index] = IdleProgressTracker::default();
         false
-    } else { app.idle_warning_for(index, &health) };
+    } else { app.idle_warning_for(index, health) };
     // Only authentication/setup issues belong on the dashboard.
     // Only actual account sign-in problems appear here.
     let needs_setup = !app.account_setup[index].setup_complete
@@ -217,10 +241,9 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
     // The authenticated game socket supplies the data directly. Browser
     // sampling intervals must not hide its last confirmed snapshot.
     let fresh = running && (health.telemetry_is_fresh()
-        || app.games[index].native.as_ref().is_some_and(|session| {
-            let state = session.snapshot();
+        || sample.native.as_ref().is_some_and(|state|
             state.phase == "Online" && state.last_received.is_some()
-        }));
+        ));
     let repair_available = monitor_repair_available(
         running,
         health.last_error.as_deref(),
@@ -249,13 +272,13 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
             });
             ui.add_space(3.0);
             ui.horizontal_wrapped(|ui| {
-                status_badge(ui, &health, running);
+                status_badge(ui, health, running);
                 ui.label(RichText::new(if app.games[index].native.is_some() {
                     tr("PokéIdle")
                 } else if running { "Firefox" } else { tr("Offline") })
                     .size(10.0).color(DIM));
                 if fresh {
-                    if let Some(view) = native_view.as_ref() {
+                    if let Some(view) = native_view {
                         if view.bonuses.vip_active {
                             ui.label(RichText::new("VIP").size(10.0).strong().color(WARN));
                         }
@@ -283,13 +306,13 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
                 ui.label(RichText::new(tr("Last confirmed data; reconnecting"))
                     .size(10.0).color(WARN));
             }
-            draw_overview_matchup(app, ui, &health, fresh, native_view.as_ref());
+            draw_overview_matchup(app, ui, health, fresh, native_view);
             ui.add_space(6.0);
             if app.workspace.dashboard_session_view {
-                draw_overview_session(ui, native_view.as_ref());
+                draw_overview_session(ui, native_view);
             } else {
                 draw_overview_account_summary(app, ui, index, fresh,
-                    xp_per_hour, native_view.as_ref());
+                    xp_per_hour, native_view);
             }
             draw_overview_restock(app, ui, index);
             ui.add_space(7.0);
@@ -309,14 +332,13 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
                 // Native fields are Option-valued; an unreceived balance
                 // must not masquerade as a legitimate zero.
                 let verified = fresh && health.bridge_snapshot_ok;
-                let balances = app.games[index].native.as_ref()
-                    .map(|native| native.snapshot());
+                let balances = sample.native.as_ref();
                 let cached_native = running && native_view.is_some()
                     && balances.as_ref().is_some_and(|s| s.last_received.is_some());
-                let gold = if let Some(view) = native_view.as_ref().filter(|_| verified || cached_native) {
+                let gold = if let Some(view) = native_view.filter(|_| verified || cached_native) {
                     view.gold.or_else(|| balances.as_ref().and_then(|s| s.gold))
                 } else if verified { Some(health.gold) } else { None };
-                let gems = if let Some(view) = native_view.as_ref().filter(|_| verified || cached_native) {
+                let gems = if let Some(view) = native_view.filter(|_| verified || cached_native) {
                     view.orbs.or_else(|| balances.as_ref().and_then(|s| s.orbs))
                 } else if verified { Some(health.orbs) } else { None };
                 let suffix = if cached_native && !verified {
@@ -427,8 +449,8 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
                 }
                 // Keep diagnostics in the account details; show only a compact status.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if let Some(native) = app.games[index].native.as_ref() {
-                        let game = native.snapshot();
+                    if let (Some(native), Some(game)) =
+                        (app.games[index].native.as_ref(), sample.native.as_ref()) {
                         let twitch = native.twitch_snapshot();
                         let online = game.phase == "Online" && twitch.phase == "Online";
                         let summary = if online {
