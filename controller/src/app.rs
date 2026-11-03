@@ -854,6 +854,7 @@ enum CaptureSaveOrigin { Editor, Toggle, Restock }
 
 struct CaptureSavedEvent {
     index:usize,
+    generation:u64,
     config:CatchSettings,
     origin:CaptureSaveOrigin,
     result:Result<(),String>
@@ -919,6 +920,9 @@ pub struct ControllerApp {
     restock_dirty:[bool;4],
 
     capture_save_busy:[bool;4],
+    // A monotonically increasing token identifies the native session that
+    // began each vault write. Old completions cannot mutate a new session.
+    capture_generations:[Arc<std::sync::atomic::AtomicU64>;4],
     capture_save_error:[Option<String>;4],
     capture_save_tx:WakeSender<CaptureSavedEvent>,
     capture_save_rx:Receiver<CaptureSavedEvent>,
@@ -1063,6 +1067,7 @@ impl ControllerApp {
             restock_dirty:[false;4],
 
             capture_save_busy:[false;4],
+            capture_generations:std::array::from_fn(|_|Arc::new(std::sync::atomic::AtomicU64::new(0))),
             capture_save_error:std::array::from_fn(|_|None),
             capture_save_tx,
             capture_save_rx,
@@ -1123,6 +1128,9 @@ impl ControllerApp {
     // Native and Twitch recovery signals wake the control-plane pump directly.
     // Display refresh throttling never blocks an expired-login transition.
     fn adopt_native_session(&mut self, index: usize, session: NativeSession) {
+        // Adopted sessions have independent settings lifetimes even when the
+        // user reauthenticates without explicitly stopping the old session.
+        self.capture_generations[index].fetch_add(1,Ordering::AcqRel);
         let ctx = self.lifecycle_ctx.clone();
         session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
         // Historical forecasts remain dormant for users who have never opened
