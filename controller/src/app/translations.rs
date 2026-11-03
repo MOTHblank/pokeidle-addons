@@ -25,6 +25,10 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss command failed to send" => "Falha ao enviar o comando de boss",
         "Boss loot journal is unavailable; new drops will not survive restart" =>
             "O histórico de loot não está disponível; os próximos drops não serão salvos ao reiniciar.",
+        "Waiting for authoritative server boss state." =>
+            "Aguardando o estado dos bosses confirmado pelo servidor.",
+        "Server boss state unavailable after reconnect; return requires manual review" =>
+            "Estado do boss indisponível após reconectar; retorno precisa de verificação manual.",
         "Boss Manager" => "Gerenciador de Bosses",
         "Server-native Boss Manager" => "Gerenciador de Bosses (servidor)",
         "Start this account to manage server-native boss farming" =>
