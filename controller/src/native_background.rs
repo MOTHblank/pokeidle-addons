@@ -737,9 +737,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 }
                 hunt_intel.ingest_value(&frame, received_at);
                 boss_manager.ingest(&frame);
-                boss_manager.publish(&boss);
                 let mut navigator = HuntNavigator::default();
                 navigator.observe(&frame, &hunt_intel.view, received_at);
+                boss_manager.recover_on_welcome(&hunt_intel.view);
+                boss_manager.publish(&boss);
                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
