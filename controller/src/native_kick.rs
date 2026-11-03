@@ -312,6 +312,7 @@ impl KickRosterPublisher {
 pub struct KickSupervisor {
     monitor:Arc<Mutex<KickMonitor>>,
     sender:mpsc::Sender<KickReconcileEvent>,
+    stop:Arc<AtomicBool>,
     identity:Instant,
 }
 impl KickSupervisor {
@@ -325,6 +326,8 @@ impl KickSupervisor {
             normalize_channels(input).unwrap_or_default()
         };
         let (sender,receiver)=mpsc::channel();
+        let stop=Arc::new(AtomicBool::new(false));
+        let worker_stop=Arc::clone(&stop);
         thread::Builder::new().name("moth-kick-roster".into())
             .stack_size(256*1024)
             .spawn(move || {
@@ -336,6 +339,7 @@ impl KickSupervisor {
                 let mut last_selected=initial_selected;
                 let mut last_official=Vec::<String>::new();
                 while let Ok(event)=receiver.recv() {
+                    if worker_stop.load(Ordering::Acquire){break}
                     match event {
                         KickReconcileEvent::Roster(roster) => authoritative=Some(roster),
                         KickReconcileEvent::Preferences{
@@ -359,6 +363,7 @@ impl KickSupervisor {
                     let official_changed=official!=last_official;
                     if !selected_changed && !official_changed {continue}
                     let Ok(mut monitor)=monitor.lock() else {break};
+                    if worker_stop.load(Ordering::Acquire){break}
                     // Reconcile only changed streams. Unchanged viewers retain
                     // their HLS, WebSocket, and point-balance baselines.
                     let outcome=(if selected_changed {
@@ -380,7 +385,7 @@ impl KickSupervisor {
                 }
             })
             .map_err(|error|format!("Could not start Kick roster coordinator: {error}"))?;
-        Ok(Self { monitor,sender,identity })
+        Ok(Self { monitor,sender,stop,identity })
     }
     pub fn roster_publisher(&self)->KickRosterPublisher {
         KickRosterPublisher{sender:self.sender.clone()}
@@ -390,14 +395,6 @@ impl KickSupervisor {
         let _=self.sender.send(KickReconcileEvent::Preferences{
             manual,fallback_live,prefs
         });
-    }
-    pub fn sync_channels(&self,channels:&[String])->Result<(),String> {
-        self.monitor.lock().map_err(|_|"Kick monitor unavailable".to_owned())?
-            .sync_channels(channels)
-    }
-    pub fn sync_offline_officials(&self,names:&[String])->Result<(),String> {
-        self.monitor.lock().map_err(|_|"Kick monitor unavailable".to_owned())?
-            .sync_offline_officials(names)
     }
     pub fn identity(&self)->Instant {self.identity}
     pub fn snapshot(&self)->KickSnapshot {
@@ -410,6 +407,7 @@ impl KickSupervisor {
 }
 impl Drop for KickSupervisor {
     fn drop(&mut self) {
+        self.stop.store(true,Ordering::Release);
         let _=self.sender.send(KickReconcileEvent::Stop);
         if let Ok(monitor)=self.monitor.lock() {monitor.stop();}
     }
