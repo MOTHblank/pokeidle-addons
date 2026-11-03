@@ -177,7 +177,11 @@ pub fn load_for_auth(profile:GameProfile,
     if !capture_generation_is_current(generation,expected) {
         return Err("Cached login canceled: launch changed".into());
     }
-    load(profile)
+    let cached=load(profile)?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Cached login canceled: launch changed".into());
+    }
+    Ok(cached)
 }
 
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
