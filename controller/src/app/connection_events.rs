@@ -210,7 +210,14 @@ impl ControllerApp {
         // stays alive until both native sockets have received real welcome.
         while let Ok(event) = self.native_verified_rx.try_recv() {
             let index = event.index;
-            if !self.native_verifying[index] { continue; }
+            if event.generation!=self.auth_generations[index].load(Ordering::Acquire) {
+                if let Ok(native)=event.result {native.stop();}
+                continue;
+            }
+            if !self.native_verifying[index] {
+                if let Ok(native)=event.result {native.stop();}
+                continue;
+            }
             self.native_verifying[index] = false;
             let profile = GameProfile::from_index(index).expect("known slot");
             let native = match event.result {
@@ -255,7 +262,8 @@ impl ControllerApp {
                     if let Some(monitor) = monitor.as_ref() { monitor.stop(); }
                 }
                 let _ = tx.send(NativeBrowserClosedEvent {
-                    index, native, cache_warning: event.cache_warning,
+                    index, generation:event.generation,
+                    native, cache_warning: event.cache_warning,
                     child, orphaned_pid, monitor, result
                 });
             });
@@ -267,6 +275,17 @@ impl ControllerApp {
             let profile = GameProfile::from_index(index).expect("known slot");
             self.games[index].handoff_closing = false;
             let cancelled = std::mem::replace(&mut self.native_close_cancelled[index], false);
+            if event.generation!=self.auth_generations[index].load(Ordering::Acquire) {
+                event.native.stop();
+                // Failed Firefox cleanup still belongs to this slot: retain
+                // handles for an explicit Stop instead of orphaning a process.
+                if event.result.is_err() {
+                    self.games[index].child=event.child;
+                    self.games[index].orphaned_pid=event.orphaned_pid;
+                    self.games[index].monitor=event.monitor;
+                }
+                continue;
+            }
             match event.result {
                 Ok(()) => {
                     self.native_error[index] = None;
@@ -276,6 +295,7 @@ impl ControllerApp {
                         "{} Firefox exited after authenticated handoff",
                         self.account_name(profile)));
                     if cancelled {
+                        event.native.stop();
                         self.set_status(format!(
                             "{}: sign-in canceled", self.account_name(profile)), false);
                         continue;
@@ -316,10 +336,19 @@ impl ControllerApp {
         // Try the protected native credential vault BEFORE constructing any
         // Firefox process. OS keyring requests run off the UI thread.
         while let Ok(event) = self.cached_native_rx.try_recv() {
-            if !self.cached_native_busy[event.index] { continue; }
+            if event.generation!=self.auth_generations[event.index].load(Ordering::Acquire)
+                || !self.cached_native_busy[event.index] {
+                if let Ok(Some(native))=event.result {native.stop();}
+                continue;
+            }
             self.cached_native_busy[event.index] = false;
             let profile = GameProfile::from_index(event.index).expect("known slot");
-            if self.games[event.index].is_running() { continue; }
+            if self.games[event.index].is_running() {
+                // A result that lost the race for this slot owns its socket
+                // until explicitly stopped; never let it linger detached.
+                if let Ok(Some(native))=event.result {native.stop();}
+                continue;
+            }
             if event.existing_firefox {
                 // A stale managed Firefox process still owns this profile.
                 // Do not create a competing native game socket from cache.
@@ -360,7 +389,8 @@ impl ControllerApp {
         // Finish BiDi capture on the UI thread. The authenticated bootstrap
         // is never logged or written to a file.
         while let Ok(event) = self.native_handoff_rx.try_recv() {
-            if !self.native_handoff_busy[event.index] { continue; }
+            if event.generation!=self.auth_generations[event.index].load(Ordering::Acquire)
+                || !self.native_handoff_busy[event.index] {continue;}
             self.native_handoff_busy[event.index] = false;
             let profile = GameProfile::from_index(event.index).expect("known slot");
             match event.result {
@@ -410,6 +440,8 @@ impl ControllerApp {
                     self.native_error[event.index] = None;
                     let tx = self.native_verified_tx.clone();
                     let index = event.index;
+                    let generation=event.generation;
+                    let generation_state=Arc::clone(&self.auth_generations[index]);
                     let cache_warning = event.cache_warning;
                     logging::info(&format!(
                         "{}: checking PokéIdle and Twitch connections before closing Firefox",
@@ -423,17 +455,31 @@ impl ControllerApp {
                             // could invalidate the just-captured hello/token.
                             let result = std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(|| {
+                                    if generation_state.load(Ordering::Acquire)!=generation {
+                                        return Err("Login verification canceled: launch changed".into());
+                                    }
                                     crate::native_tls::ensure()?;
                                     let native = NativeSession::start_verified(profile, bootstrap)?;
+                                    if generation_state.load(Ordering::Acquire)!=generation {
+                                        native.stop();
+                                        return Err("Login verification canceled: launch changed".into());
+                                    }
                                     attempted_game_close = true;
-                                    monitor.close_game_for_handoff(Duration::from_secs(18))?;
+                                    if let Err(error)=monitor.close_game_for_handoff(Duration::from_secs(18)) {
+                                        native.stop();
+                                        return Err(error);
+                                    }
+                                    if generation_state.load(Ordering::Acquire)!=generation {
+                                        native.stop();
+                                        return Err("Login verification canceled: launch changed".into());
+                                    }
                                     Ok(native)
                                 })
                             ).unwrap_or_else(|_| {
                                 Err("Login check failed unexpectedly. See the controller log.".to_owned())
                             });
                             let result = match (result, attempted_game_close) {
-                                (Err(error), true) => {
+                                (Err(error), true) if generation_state.load(Ordering::Acquire)==generation => {
                                     match monitor.restore_game_after_failed_handoff(
                                         Duration::from_secs(20)
                                     ) {
@@ -449,7 +495,7 @@ impl ControllerApp {
                                 (other, _) => other,
                             };
                             let _ = tx.send(NativeVerifiedEvent {
-                                index, result, cache_warning
+                                index, generation, result, cache_warning
                             });
                         });
                     if let Err(error) = spawned {

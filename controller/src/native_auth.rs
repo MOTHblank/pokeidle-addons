@@ -81,7 +81,7 @@ mod capture_handoff_tests {
     }
 
     #[test]
-    fn session_replacement_waits_for_inflight_vault_transaction() {
+    fn session_invalidation_is_nonblocking_and_cancels_stalled_saves() {
         use std::sync::{mpsc,Arc};
         use std::sync::atomic::{AtomicU64,Ordering};
         use std::time::Duration;
@@ -90,32 +90,24 @@ mod capture_handoff_tests {
         let (release_tx,release_rx)=mpsc::sync_channel(0);
         let writer_generation=Arc::clone(&generation);
         let writer=std::thread::spawn(move || {
-            capture_write_transaction(&writer_generation,3,|| {
+            capture_write_transaction(GameProfile::Game1,&writer_generation,3,|| {
                 inside_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(())
             })
         });
-        inside_rx.recv().unwrap();
-        let (starting_tx,starting_rx)=mpsc::sync_channel(0);
-        let (done_tx,done_rx)=mpsc::sync_channel(1);
-        let stop_generation=Arc::clone(&generation);
-        let stopping=std::thread::spawn(move || {
-            starting_tx.send(()).unwrap();
-            invalidate_capture_generation(&stop_generation);
-            done_tx.send(()).unwrap();
-        });
-        starting_rx.recv().unwrap();
-        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "session replacement must not finish while a vault write is blocked");
-        assert_eq!(generation.load(Ordering::Acquire),3);
+        inside_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        invalidate_capture_generation(&generation);
+        assert_eq!(generation.load(Ordering::Acquire),4,
+            "Stop must invalidate immediately, without waiting for a vault write");
+        let another=AtomicU64::new(9);
+        assert!(capture_write_transaction(GameProfile::Game2,&another,9,
+            ||Ok::<(),String>(())).is_ok(),
+            "Game2 must not wait on a stalled Game1 preference save");
         release_tx.send(()).unwrap();
-        writer.join().unwrap().unwrap();
-        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        stopping.join().unwrap();
-        assert_eq!(generation.load(Ordering::Acquire),4);
-        assert!(capture_write_transaction::<()>(&generation,3,||
-            panic!("an old session must never enter the vault writer")).is_err());
+        assert!(writer.join().unwrap().is_err());
+        assert!(capture_write_transaction::<()>(GameProfile::Game1,&generation,3,||
+            panic!("superseded session must not enter a vault write")).is_err());
     }
     #[test]
     fn first_login_imports_the_browser_settings() {
@@ -157,7 +149,11 @@ pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
 // UI events may toggle Auto Catch and native Restock in rapid succession.
 // Serialize the read-modify-encrypt-write cycle so one toggle never silently
 // overwrites the other; no credentials are exposed outside OS vault storage.
-static PREFERENCE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static PREFERENCE_WRITE: [std::sync::Mutex<()>;4] =
+    [const {std::sync::Mutex::new(())};4];
+fn preference_write(profile:GameProfile)->&'static std::sync::Mutex<()> {
+    &PREFERENCE_WRITE[profile.index()]
+}
 
 /// Keep each profile's controller-edited capture settings authoritative when
 /// Firefox is used again to refresh an expired or missing game login. A fresh
@@ -171,21 +167,57 @@ fn preserve_native_capture_preferences(fresh: &Value, prior: Option<&Value>) -> 
     merged
 }
 
+// Cached launches never read while an old write for their profile is
+// unfinished, and a superseded launch cannot read the protected vault.
+pub fn load_for_auth(profile:GameProfile,
+    generation:&std::sync::atomic::AtomicU64,expected:u64
+)->Result<Option<Value>,String> {
+    let _guard=preference_write(profile).lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Cached login canceled: launch changed".into());
+    }
+    let cached=load(profile)?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Cached login canceled: launch changed".into());
+    }
+    Ok(cached)
+}
+
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
 /// same write lock as native UI edits. Return the merged bootstrap for the
 /// imminent game connection as well as for future cached starts.
-pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
+pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value,
+    generation:&std::sync::atomic::AtomicU64,expected:u64)
     -> (Value, Option<String>) {
-    let _guard=match PREFERENCE_WRITE.lock() {
+    let _guard=match preference_write(profile).lock() {
         Ok(guard)=>guard,
         Err(_)=>return (fresh.clone(), Some("Native settings writer unavailable".into()))
     };
+    if !capture_generation_is_current(generation,expected) {
+        return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
+    }
     let (prior,read_error)=match load(profile) {
         Ok(prior)=>(prior,None),
         Err(error)=>(None,Some(error))
     };
     let merged=preserve_native_capture_preferences(fresh,prior.as_ref());
+    if !capture_generation_is_current(generation,expected) {
+        return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
+    }
     let saved=save(profile,&merged);
+    // Stop may overtake a slow vault operation. Do not leave credentials
+    // from the canceled attempt visible to a later cached native launch.
+    if saved.is_ok() && !capture_generation_is_current(generation,expected) {
+        let restored=match prior.as_ref() {
+            Some(previous)=>save(profile,previous),
+            None=>clear(profile),
+        };
+        return (fresh.clone(),Some(match restored {
+            Ok(())=>"Firefox login cache canceled: launch changed".into(),
+            Err(error)=>format!("Canceled login cache rollback failed: {error}"),
+        }));
+    }
     let warning=match saved {
         Err(error)=>Some(error),
         Ok(())=>read_error,
@@ -206,33 +238,49 @@ fn capture_generation_is_current(
 // share the same lock. A UI invalidation cannot overtake a blocked keyring
 // write, then allow that old write to finish against the replacement session.
 pub fn invalidate_capture_generation(generation:&std::sync::atomic::AtomicU64) {
-    let _guard=PREFERENCE_WRITE.lock().unwrap_or_else(|error|error.into_inner());
+    // Only mutate the atomic here: the UI must never wait for a vault service.
+    // An in-flight writer is responsible for rolling back after cancellation.
     generation.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
 }
 fn capture_write_transaction<T>(
+    profile:GameProfile,
     generation:&std::sync::atomic::AtomicU64, expected:u64,
     write:impl FnOnce()->Result<T,String>
 )->Result<T,String> {
     if !capture_generation_is_current(generation,expected) {
         return Err("Capture settings save canceled: session changed".into());
     }
-    let _guard=PREFERENCE_WRITE.lock()
+    let _guard=preference_write(profile).lock()
         .map_err(|_|"Native settings writer unavailable".to_owned())?;
     if !capture_generation_is_current(generation,expected) {
         return Err("Capture settings save canceled: session changed".into());
     }
-    write()
+    let result=write()?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Capture settings save canceled: session changed".into());
+    }
+    Ok(result)
 }
 pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
     generation:&std::sync::atomic::AtomicU64, expected:u64) -> Result<(),String> {
     config.validate()?;
-    capture_write_transaction(generation,expected,|| {
+    capture_write_transaction(profile,generation,expected,|| {
         let Some(mut saved)=load(profile)? else {
             return Err("Native credential cache unavailable; authenticate again to save preferences".into());
         };
+        let original=saved.clone();
         saved["autocatch"]=config.as_value();
-        save(profile,&saved)
+        if !capture_generation_is_current(generation,expected) {
+            return Err("Capture settings save canceled: session changed".into());
+        }
+        save(profile,&saved)?;
+        if !capture_generation_is_current(generation,expected) {
+            save(profile,&original)
+                .map_err(|error|format!("Canceled capture save rollback failed: {error}"))?;
+            return Err("Capture settings save canceled: session changed".into());
+        }
+        Ok(())
     })
 }
 
@@ -359,8 +407,9 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::*;
-    use std::io::Write;
+    use std::io::{Read,Write};
     use std::process::{Command, Stdio};
+    use std::time::{Duration,Instant};
     const APP: &str = "moth-pokeidle-native";
     const KICK_APP: &str = "moth-kick-native";
     // User profile number is used only as an OS keyring attribute.
@@ -378,35 +427,83 @@ mod platform {
         code == Some(1) && stdout.is_empty() && stderr.is_empty()
     }
 
+    // Do not leave a locked Secret Service request holding a profile forever.
+    // Concurrent pipe draining also prevents large lookup results or writes
+    // from deadlocking before the timeout can be enforced.
     fn secret_tool(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
-        let mut child = Command::new("secret-tool")
+        const LIMIT:Duration=Duration::from_secs(12);
+        let mut child=Command::new("secret-tool")
             .args(args)
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdin(if input.is_some() {Stdio::piped()} else {Stdio::null()})
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|_| "Desktop keyring unavailable: install libsecret-tools and unlock a Secret Service keyring".to_owned())?;
-        if let Some(data) = input {
-            let mut stdin = child.stdin.take()
-                .ok_or_else(|| "Could not reach desktop keyring input".to_owned())?;
-            stdin.write_all(data)
-                .map_err(|_| "Desktop keyring refused credential input".to_owned())?;
-            drop(stdin);
+            .map_err(|_|"Desktop keyring unavailable: install libsecret-tools and unlock a Secret Service keyring".to_owned())?;
+        let stdout=child.stdout.take()
+            .ok_or_else(||"Desktop keyring output unavailable".to_owned())?;
+        let stderr=child.stderr.take()
+            .ok_or_else(||"Desktop keyring diagnostics unavailable".to_owned())?;
+        let stdout_reader=std::thread::spawn(move ||{
+            let mut bytes=Vec::new();
+            let mut stream=stdout.take((MAX_BOOTSTRAP_BYTES+5) as u64);
+            let _=stream.read_to_end(&mut bytes);
+            bytes
+        });
+        let stderr_reader=std::thread::spawn(move ||{
+            let mut bytes=Vec::new();
+            let mut stream=stderr.take(4096);
+            let _=stream.read_to_end(&mut bytes);
+            bytes
+        });
+        let input_writer=input.map(|data|{
+            let writer=child.stdin.take();
+            let data=data.to_vec();
+            std::thread::spawn(move ||{
+                let Some(mut writer)=writer else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,"keyring stdin unavailable"));
+                };
+                writer.write_all(&data)
+            })
+        });
+        let started=Instant::now();
+        let status=loop {
+            match child.try_wait() {
+                Ok(Some(status))=>break status,
+                Ok(None)=>{},
+                Err(_)=>{
+                    let _=child.kill();
+                    let _=child.wait();
+                    return Err("Desktop keyring request failed".into());
+                }
+            }
+            if started.elapsed()>=LIMIT {
+                let _=child.kill();
+                let _=child.wait();
+                return Err("Desktop keyring request timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let output=stdout_reader.join()
+            .map_err(|_|"Desktop keyring output reader failed".to_owned())?;
+        let diagnostics=stderr_reader.join()
+            .map_err(|_|"Desktop keyring diagnostics reader failed".to_owned())?;
+        if input_writer.is_some_and(|writer|
+            writer.join().map_or(true,|result|result.is_err())) {
+            return Err("Desktop keyring refused credential input".into());
         }
-        let output = child.wait_with_output()
-            .map_err(|_| "Desktop keyring request failed".to_owned())?;
-        if !output.status.success() {
-            if args.first() == Some(&"lookup")
-                && missing_lookup(output.status.code(), &output.stdout, &output.stderr)
+        if !status.success() {
+            if args.first()==Some(&"lookup")
+                && missing_lookup(status.code(),&output,&diagnostics)
             {
                 return Ok(Vec::new());
             }
             return Err("Desktop keyring request failed: ensure Secret Service is running and unlocked".into());
         }
-        if output.stdout.len() > MAX_BOOTSTRAP_BYTES + 4 {
+        if output.len()>MAX_BOOTSTRAP_BYTES+4 {
             return Err("Desktop keyring credential response too large".into());
         }
-        Ok(output.stdout)
+        Ok(output)
     }
     pub fn load_kick(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let args = kick_args(profile);
