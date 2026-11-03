@@ -489,6 +489,35 @@ mod tests {
         assert!(!m.active());
     }
     #[test]
+    fn stop_waits_for_server_confirmation_before_returning() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut state = hunt();
+        state.in_center = true;
+        manager.start("bronze", true, &state, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&state, &mut nav, now),
+            Some(GameCommand::BossAuto { active:true, .. })));
+        assert!(matches!(manager.stop(&mut nav),
+            Some(GameCommand::BossAuto { active:false, .. })));
+        manager.next_action(&state, &mut nav, now);
+        assert!(manager.active(), "must not return before the server stops");
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossAuto","ativo":false}]}));
+        manager.next_action(&state, &mut nav, now);
+        assert!(!manager.active(), "center-started farm should finish after server ack");
+    }
+    #[test]
+    fn leaving_external_server_repeat_disables_it_before_exit() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
+        let commands = manager.leave(&mut nav);
+        assert!(matches!(commands.first(),
+            Some(GameCommand::BossAuto { active:false, .. })));
+        assert!(matches!(commands.last(),Some(GameCommand::BossExit)));
+    }
+    #[test]
     fn loot_uses_confirmed_boss_death_events_only() {
         let mut m = manager();
         m.ingest(&json!({"t":"batalha","ev":[{"k":"morte","drops":[{"itemId":3,"qtd":1}]}]}));
