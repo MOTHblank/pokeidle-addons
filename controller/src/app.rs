@@ -42,7 +42,7 @@ mod session_actions;
 use localization::{pt_br, localize_status, tr_dynamic, tr};
 use workspace_nav::{draw_header_actions, draw_account_switcher, draw_options_panel, draw_sidebar, draw_instance_section};
 use workspace_state::WorkspaceState;
-use overview_panel::{OverviewTotals, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
+use overview_panel::{collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
 use automation_panel::draw_automation_panel;
 use automation_game::draw_game_automation_contents;
 use automation_details::draw_game_details;
@@ -1144,7 +1144,7 @@ impl Drop for ControllerApp {
 
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.refresh_processes();
+        self.refresh_processes(ui.ctx());
         self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
         // resetting the current frame's Pokémon sprite usage.
