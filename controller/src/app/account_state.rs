@@ -33,7 +33,7 @@ impl ControllerApp {
     pub(super) fn sync_monitor_paces(&self, background: bool) {
         // Exactly one account may be expanded when focused. Background mode
         // overrides that selection without clearing the open details panel.
-        for (index, slot) in self.games.iter().enumerate() {
+        for (index, slot) in self.runtimes.iter().map(|runtime| &runtime.game).enumerate() {
             let display_pace = monitor_pace_for_slot(
                 self.workspace.selected_details, index, self.accounts[index].enabled, background
             );
@@ -55,7 +55,7 @@ impl ControllerApp {
 
     /// Switching accounts changes the workspace selection, not a live session.
     pub(super) fn select_workspace_account(&mut self, index: usize) {
-        if index >= self.games.len() || self.workspace.account_selection_matches(index) { return; }
+        if index >= self.runtimes.len() || self.workspace.account_selection_matches(index) { return; }
         self.save_dirty_account_names();
         self.workspace.select_account(index);
     }
@@ -103,7 +103,7 @@ impl ControllerApp {
             let config = match Config::for_profile(profile) {
                 Ok(config) => config,
                 Err(error) => {
-                    self.account_setup[index] = AccountSetup {
+                    self.runtimes[index].telemetry.account_setup = AccountSetup {
                         check_error: Some(error),
                         ..AccountSetup::default()
                     };
@@ -114,7 +114,7 @@ impl ControllerApp {
             // The setup marker is earned only after both PokéIdle and Twitch
             // report authenticated connections.
             let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
-            let verified = self.games[index].native.as_ref().is_some_and(|session| {
+            let verified = self.runtimes[index].game.native.as_ref().is_some_and(|session| {
                 session.snapshot().phase == "Online"
                     && session.twitch_snapshot().phase == "Online"
             });
@@ -124,7 +124,7 @@ impl ControllerApp {
                     Err(error) => logging::warn(&error),
                 }
             }
-            self.account_setup[index] = AccountSetup {
+            self.runtimes[index].telemetry.account_setup = AccountSetup {
                 profile_ready: config.profile_dir.exists(),
                 setup_complete,
                 check_error: None,
