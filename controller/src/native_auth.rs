@@ -71,6 +71,14 @@ mod capture_handoff_tests {
     }
 
     #[test]
+    fn classified_capture_failures_do_not_guess_from_message_text() {
+        let storage=CaptureSaveFailure::vault("Windows user credential protection failed");
+        assert!(storage.retryable);
+        let canceled=CaptureSaveFailure::permanent("Session changed");
+        assert!(!canceled.retryable);
+        assert_eq!(storage.message,"Windows user credential protection failed");
+    }
+    #[test]
     fn capture_vault_save_rejects_a_superseded_session() {
         use std::sync::atomic::{AtomicU64,Ordering};
         let generation=AtomicU64::new(4);
@@ -102,7 +110,7 @@ mod capture_handoff_tests {
             "Stop must invalidate immediately, without waiting for a vault write");
         let another=AtomicU64::new(9);
         assert!(capture_write_transaction(GameProfile::Game2,&another,9,
-            ||Ok::<(),String>(())).is_ok(),
+            ||Ok::<(),CaptureSaveFailure>(())).is_ok(),
             "Game2 must not wait on a stalled Game1 preference save");
         release_tx.send(()).unwrap();
         assert!(writer.join().unwrap().is_err());
@@ -242,43 +250,86 @@ pub fn invalidate_capture_generation(generation:&std::sync::atomic::AtomicU64) {
     // An in-flight writer is responsible for rolling back after cancellation.
     generation.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
 }
+/// Save failures are categorized at the vault boundary, never inferred from
+/// localized/user-facing error text. Only OS storage failures get retries.
+#[derive(Clone,Debug)]
+pub struct CaptureSaveFailure {
+    pub message:String,
+    pub retryable:bool,
+}
+impl CaptureSaveFailure {
+    fn permanent(message:impl Into<String>)->Self {
+        Self{message:message.into(),retryable:false}
+    }
+    fn vault(message:impl Into<String>)->Self {
+        Self{message:message.into(),retryable:true}
+    }
+}
+impl std::fmt::Display for CaptureSaveFailure {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl From<&str> for CaptureSaveFailure {
+    fn from(message:&str)->Self {Self::permanent(message)}
+}
+impl From<String> for CaptureSaveFailure {
+    fn from(message:String)->Self {Self::permanent(message)}
+}
 fn capture_write_transaction<T>(
     profile:GameProfile,
     generation:&std::sync::atomic::AtomicU64, expected:u64,
-    write:impl FnOnce()->Result<T,String>
-)->Result<T,String> {
+    write:impl FnOnce()->Result<T,CaptureSaveFailure>
+)->Result<T,CaptureSaveFailure> {
     if !capture_generation_is_current(generation,expected) {
-        return Err("Capture settings save canceled: session changed".into());
+        return Err(CaptureSaveFailure::permanent(
+            "Capture settings save canceled: session changed"));
     }
     let _guard=preference_write(profile).lock()
-        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+        .map_err(|_|CaptureSaveFailure::vault("Native settings writer unavailable"))?;
     if !capture_generation_is_current(generation,expected) {
-        return Err("Capture settings save canceled: session changed".into());
+        return Err(CaptureSaveFailure::permanent(
+            "Capture settings save canceled: session changed"));
     }
     let result=write()?;
     if !capture_generation_is_current(generation,expected) {
-        return Err("Capture settings save canceled: session changed".into());
+        return Err(CaptureSaveFailure::permanent(
+            "Capture settings save canceled: session changed"));
     }
     Ok(result)
 }
+fn load_capture_vault(profile:GameProfile)->Result<Option<Value>,CaptureSaveFailure>{
+    platform::load(profile).map_err(CaptureSaveFailure::vault)?
+        .map(|bytes|deserialize(&bytes).map_err(CaptureSaveFailure::permanent))
+        .transpose()
+}
+fn save_capture_vault(profile:GameProfile,value:&Value)->Result<(),CaptureSaveFailure>{
+    let bytes=serialize(value).map_err(CaptureSaveFailure::permanent)?;
+    platform::save(profile,&bytes).map_err(CaptureSaveFailure::vault)
+}
 pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
-    generation:&std::sync::atomic::AtomicU64, expected:u64) -> Result<(),String> {
-    config.validate()?;
+    generation:&std::sync::atomic::AtomicU64, expected:u64
+) -> Result<(),CaptureSaveFailure> {
+    config.validate().map_err(CaptureSaveFailure::permanent)?;
     capture_write_transaction(profile,generation,expected,|| {
-        let Some(mut saved)=load(profile)? else {
-            return Err("Native credential cache unavailable; authenticate again to save preferences".into());
+        let Some(mut saved)=load_capture_vault(profile)? else {
+            return Err(CaptureSaveFailure::permanent(
+                "Native credential cache unavailable; authenticate again to save preferences"));
         };
         let original=saved.clone();
         saved["autocatch"]=config.as_value();
         if !capture_generation_is_current(generation,expected) {
-            return Err("Capture settings save canceled: session changed".into());
+            return Err(CaptureSaveFailure::permanent(
+                "Capture settings save canceled: session changed"));
         }
-        save(profile,&saved)?;
+        save_capture_vault(profile,&saved)?;
         if !capture_generation_is_current(generation,expected) {
-            save(profile,&original)
-                .map_err(|error|format!("Canceled capture save rollback failed: {error}"))?;
-            return Err("Capture settings save canceled: session changed".into());
+            save_capture_vault(profile,&original)
+                .map_err(|error|CaptureSaveFailure::vault(format!(
+                    "Canceled capture save rollback failed: {error}")))?;
+            return Err(CaptureSaveFailure::permanent(
+                "Capture settings save canceled: session changed"));
         }
         Ok(())
     })
@@ -293,12 +344,13 @@ pub fn persist_and_apply_capture_settings(
     generation: &std::sync::atomic::AtomicU64,
     expected: u64,
     updater: &crate::native_background::CaptureSettingsUpdater,
-) -> Result<(), String> {
+) -> Result<(), CaptureSaveFailure> {
     set_capture_settings(profile,config,generation,expected)?;
     if !capture_generation_is_current(generation,expected) {
-        return Err("Capture settings save canceled: session changed".into());
+        return Err(CaptureSaveFailure::permanent(
+            "Capture settings save canceled: session changed"));
     }
-    updater.apply(config.clone())
+    updater.apply(config.clone()).map_err(CaptureSaveFailure::permanent)
 }
 
 #[cfg(windows)]
@@ -355,6 +407,40 @@ mod platform {
         Ok(config::data_root()?.join("native-credentials")
             .join(format!("{}.kick.dpapi", profile.name())))
     }
+    // Write encrypted data beside its destination and rename it into place.
+    // An interrupted write must never truncate the previous valid login.
+    fn atomic_replace(path:&std::path::Path,bytes:&[u8])->Result<(),String>{
+        use std::io::Write;
+        static TEMP_ID:std::sync::atomic::AtomicU64=
+            std::sync::atomic::AtomicU64::new(0);
+        let parent=path.parent().ok_or("Protected credential path has no directory")?;
+        fs::create_dir_all(parent)
+            .map_err(|_|"Could not prepare protected credential directory".to_owned())?;
+        let name=path.file_name().ok_or("Protected credential path has no filename")?;
+        for _ in 0..16 {
+            let mut temporary=std::ffi::OsString::from(".");
+            temporary.push(name);
+            temporary.push(format!(".{}.{}.tmp",std::process::id(),
+                TEMP_ID.fetch_add(1,std::sync::atomic::Ordering::Relaxed)));
+            let pending=parent.join(temporary);
+            let mut output=match fs::OpenOptions::new().write(true).create_new(true).open(&pending) {
+                Ok(output)=>output,
+                Err(error) if error.kind()==std::io::ErrorKind::AlreadyExists=>continue,
+                Err(_)=>return Err("Could not create temporary protected credential".into()),
+            };
+            let prepared=output.write_all(bytes).and_then(|_|output.sync_all());
+            drop(output);
+            // On Windows, same-volume rename replaces the old destination.
+            // If it fails (e.g. access denied), the original remains intact.
+            let result=prepared.and_then(|_|fs::rename(&pending,path));
+            if result.is_err() {
+                let _=fs::remove_file(&pending);
+                return Err("Could not atomically save protected credential".into());
+            }
+            return Ok(());
+        }
+        Err("Could not allocate temporary protected credential file".into())
+    }
     pub fn load_kick(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let bytes = match fs::read(kick_location(profile)?) {
             Ok(value) => value,
@@ -365,10 +451,7 @@ mod platform {
     }
     pub fn save_kick(profile: GameProfile, token: &[u8]) -> Result<(), String> {
         let cipher = crypt(token, true)?;
-        let path = kick_location(profile)?;
-        fs::create_dir_all(path.parent().expect("credential directory"))
-            .map_err(|_| "Could not prepare Kick credential directory".to_owned())?;
-        fs::write(path, cipher).map_err(|_| "Could not save protected Kick login".to_owned())
+        atomic_replace(&kick_location(profile)?,&cipher)
     }
     pub fn clear_kick(profile: GameProfile) -> Result<(), String> {
         match fs::remove_file(kick_location(profile)?) {
@@ -388,11 +471,27 @@ mod platform {
     }
     pub fn save(profile: GameProfile, bytes: &[u8]) -> Result<(), String> {
         let cipher = crypt(bytes, true)?;
-        let path = location(profile)?;
-        fs::create_dir_all(path.parent().expect("credential directory"))
-            .map_err(|_| "Could not create protected native credential directory".to_owned())?;
-        fs::write(path, cipher)
-            .map_err(|_| "Could not save DPAPI-protected native session".to_owned())
+        atomic_replace(&location(profile)?,&cipher)
+    }
+    #[cfg(test)]
+    mod atomic_write_tests {
+        use super::*;
+        #[test]
+        fn replacing_a_protected_file_preserves_the_latest_complete_bytes() {
+            let id=std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let directory=std::env::temp_dir().join(format!(
+                "moth-dpapi-atomic-{}-{id}",std::process::id()));
+            let path=directory.join("account.dpapi");
+            atomic_replace(&path,b"encrypted-before").unwrap();
+            assert_eq!(fs::read(&path).unwrap(),b"encrypted-before");
+            atomic_replace(&path,b"encrypted-after").unwrap();
+            assert_eq!(fs::read(&path).unwrap(),b"encrypted-after");
+            let pending=fs::read_dir(&directory).unwrap().count();
+            assert_eq!(pending,1,"no temporary credentials left behind");
+            fs::remove_file(path).unwrap();
+            fs::remove_dir(directory).unwrap();
+        }
     }
     #[allow(dead_code)]
     pub fn clear(profile: GameProfile) -> Result<(), String> {
