@@ -96,6 +96,7 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                         app.capture_save_error[index]=None;
                         app.capture_save_busy[index]=true;
                         let tx=app.capture_save_tx.clone();
+                        let ctx=ui.ctx().clone();
                         std::thread::spawn(move || {
                             let result=std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(||
@@ -104,6 +105,8 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                             let _=tx.send(CaptureSavedEvent{
                                 index,config:next,origin:CaptureSaveOrigin::Toggle,result
                             });
+                            // Wake the UI even when the tray/background timer is 30 s.
+                            ctx.request_repaint();
                         });
                     }
                 }
@@ -304,12 +307,14 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                     app.capture_save_error[index]=None;
                     app.capture_save_busy[index]=true;
                     let tx=app.capture_save_tx.clone();
+                    let ctx=ui.ctx().clone();
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
                                 crate::native_auth::set_capture_settings(profile,&to_save))
                         ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                         let _=tx.send(CaptureSavedEvent{index,config:to_save,origin:CaptureSaveOrigin::Editor,result});
+                        ctx.request_repaint();
                     });
                 }
             }
