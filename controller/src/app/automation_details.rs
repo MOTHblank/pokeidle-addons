@@ -12,15 +12,15 @@ pub(super) fn draw_game_details(
     width: f32,
 ) {
     ui.set_width(width);
-    if app.games[index].native.is_some() {
+    if app.runtimes[index].game.native.is_some() {
         draw_native_manager_details(app, ui, index);
         return;
     }
 
-    let profile = app.games[index].profile;
+    let profile = app.runtimes[index].game.profile;
     let account_name = app.account_name(profile);
-    let health = app.games[index].health();
-    let running = app.games[index].is_running();
+    let health = app.runtimes[index].game.health();
+    let running = app.runtimes[index].game.is_running();
 
     egui::Frame::new()
         .fill(PANEL)
@@ -239,7 +239,7 @@ pub(super) fn draw_game_details(
             );
             ui.add_space(6.0);
 
-            if app.games[index].native.is_some() {
+            if app.runtimes[index].game.native.is_some() {
                 draw_native_automation(app, ui, index);
             } else {
                 ui.label(RichText::new(tr(
