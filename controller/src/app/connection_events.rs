@@ -690,7 +690,7 @@ impl ControllerApp {
                self.native_handoff_busy[index] || self.games[index].native.is_some() ||
                self.native_verifying[index] ||
                self.games[index].handoff_closing || self.games[index].stopping ||
-               self.games[index].monitor.is_none() {
+               self.games[index].shutdown_failed || self.games[index].monitor.is_none() {
                 continue;
             }
             let health = self.games[index].health();
