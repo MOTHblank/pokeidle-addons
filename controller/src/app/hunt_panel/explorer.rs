@@ -7,7 +7,7 @@ pub(super) enum AtlasSort {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct AtlasFilters {
+pub(in crate::app) struct AtlasFilters {
     pub(super) search: String,
     pub(super) region: String,
     pub(super) kind: String,
@@ -153,7 +153,7 @@ pub(super) fn atlas_value_label(sort:AtlasSort,value:Option<f64>)->String {
 /// Cache completed Explorer rankings across redraws. Live forecasts and
 /// reference/catalog changes invalidate it; UI selection and disclosure do not.
 #[derive(Default)]
-pub(super) struct ExplorerCache {
+pub(in crate::app) struct ExplorerCache {
     pub(super) rows:Vec<AtlasSpeciesRow>,
     pub(super) filters:Option<AtlasFilters>,
     pub(super) scenario:Option<AtlasScenario>,
@@ -172,7 +172,7 @@ pub(super) struct ExplorerCache {
     pub(super) rebuilds:usize,
 }
 impl ExplorerCache {
-    pub(super) fn release(&mut self) {
+    pub(in crate::app) fn release(&mut self) {
         // Release cached forecasts, destination labels and Arc source handles
         // when Explorer is not the active workspace. Only one account needs
         // rankings resident at a time.
