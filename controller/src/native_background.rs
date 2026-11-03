@@ -1037,7 +1037,35 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     if last_hunt_publish.elapsed() >= Duration::from_secs(1) {
                         if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                         last_hunt_publish = Instant::now();
-                        // Not part of market/capture dispatch: only check the                        // schedule when due. A single current-hunt simulation                        // runs off-thread and submits through the history queue.                        // Until Atlas has been opened there are no extra worker                        // threads, reference downloads or combat calculations.                        if Instant::now()>=next_background_forecast {                            next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;                            let reference=background_forecast_reference.lock().ok()                                .and_then(|current|current.clone());                            if let Some((reference,aoe))=reference {                                let view=&hunt_intel.view;                                if let Some(hunt)=current_background_hunt(view) {                                        let view=view.clone();                                        let tx=background_forecast_tx.clone();                                        let _=thread::Builder::new()                                            .name("moth-current-hunt-forecast".into())                                            .spawn(move||{                                                let Some(model)=native_atlas::estimate_with_aoe(                                                    &view,&hunt,&reference,aoe) else {return};                                                let Some(record)=HistoryForecast::now(                                                    &hunt.slug,model.trainer_xp_h,                                                    model.pokemon_xp_h,model.kills_h,                                                    model.calibrated) else {return};                                                // No blocking, and dropping a full queue is                                                // safer than delaying gameplay or market buys.                                                let _=tx.try_send(record);                                            });                                }                            }                        }                    }
+                        // Run the optional history sampler within the
+                        // already existing one-second hunt refresh, not the
+                        // 60 ms purchase/capture dispatch hot path.
+                        if Instant::now() >= next_background_forecast {
+                            next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;
+                            let reference=background_forecast_reference.lock().ok()
+                                .and_then(|current|current.clone());
+                            if let Some((reference,aoe))=reference {
+                                let view=&hunt_intel.view;
+                                if let Some(hunt)=current_background_hunt(view) {
+                                    let view=view.clone();
+                                    let tx=background_forecast_tx.clone();
+                                    let _=thread::Builder::new()
+                                        .name("moth-current-hunt-forecast".into())
+                                        .spawn(move||{
+                                            let Some(model)=native_atlas::estimate_with_aoe(
+                                                &view,&hunt,&reference,aoe) else {return};
+                                            let Some(record)=HistoryForecast::now(
+                                                &hunt.slug,model.trainer_xp_h,
+                                                model.pokemon_xp_h,model.kills_h,
+                                                model.calibrated) else {return};
+                                            // Drop a full queue rather than
+                                            // blocking gameplay or market buys.
+                                            let _=tx.try_send(record);
+                                        });
+                                }
+                            }
+                        }
+                    }
                     // These snapshots are for egui, not for purchasing or capturing.
                     // Do not rebuild rule rows and clone market state 16 times/sec.
                     if last_status_publish.elapsed() >= Duration::from_secs(1) {
