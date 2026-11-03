@@ -303,6 +303,9 @@ impl ControllerApp {
             return true;
         }
         self.invalidate_capture_session(index);
+        // An explicit retry is the only path that can release a failed Stop.
+        // Keep Start blocked while the new cleanup worker is active.
+        self.games[index].shutdown_failed = false;
         self.stop_kick_account(index);
         self.cached_native_busy[index] = false;
         self.native_handoff_busy[index] = false;
@@ -373,6 +376,7 @@ impl ControllerApp {
                 self.games[index].orphaned_pid = ownership.orphaned_pid.take();
                 self.games[index].monitor = ownership.monitor.take();
                 self.games[index].stopping = false;
+                self.games[index].shutdown_failed = true;
                 self.set_status(format!(
                     "{}: could not schedule Firefox shutdown: {}", account_name, error
                 ), true);
