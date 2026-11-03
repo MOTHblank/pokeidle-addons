@@ -74,6 +74,7 @@ pub struct BossView {
     pub phase: String,
     pub original_hunt: Option<String>,
     pub warning: Option<String>,
+    pub storage_warning: Option<String>,
     pub log: Arc<Vec<BossLoot>>,
 }
 
@@ -194,10 +195,21 @@ pub struct BossManager {
     writer: Option<LootWriter>,
 }
 impl BossManager {
-    pub fn new(profile: GameProfile, nick: &str) -> Result<Self, String> {
-        let (writer, log) = LootWriter::start(profile, nick)?;
-        Ok(Self { view: BossView { log: Arc::new(log), ..Default::default() },
-            trip: None, writer: Some(writer) })
+    pub fn new(profile: GameProfile, nick: &str) -> Self {
+        // A read-only or damaged data directory must never prevent an
+        // authenticated game connection from starting. Farming still works;
+        // the UI explicitly explains when loot persistence is unavailable.
+        let (writer, log, storage_warning) = match LootWriter::start(profile, nick) {
+            Ok((writer, log)) => (Some(writer), log, None),
+            Err(error) => {
+                crate::logging::warn(&format!("Boss loot journal unavailable: {error}"));
+                (None, Vec::new(), Some(
+                    "Boss loot journal is unavailable; new drops will not survive restart".into()))
+            }
+        };
+        Self { view: BossView {
+            log: Arc::new(log), storage_warning, ..Default::default()
+        }, trip: None, writer }
     }
     pub fn publish(&self, shared: &Arc<Mutex<BossView>>) {
         if let Ok(mut state) = shared.lock() {
