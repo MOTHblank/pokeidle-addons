@@ -814,7 +814,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             let actions = if matches!(command, GameCommand::BossLeave) {
                                 boss_manager.leave(&mut navigator)
                             } else {
-                                boss_manager.stop(&mut navigator).into_iter().collect()
+                                boss_manager.stop(&mut navigator, &hunt_intel.view,
+                                    Instant::now()).into_iter().collect()
                             };
                             for action in actions {
                                 if socket.send(Message::Text(action.wire().to_string().into())).is_err() {
