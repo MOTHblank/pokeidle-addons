@@ -48,40 +48,41 @@ impl ControllerApp {
     // its acknowledgement, even if the picker has since been closed.
     fn flush_queued_restock_saves(&mut self) {
         for index in 0..self.runtimes.len() {
-            if !self.runtimes[index].capture.restock_dirty || self.runtimes[index].capture.capture_save_busy ||
-                !self.runtimes[index].capture.restock_retries.ready(Instant::now()) { continue; }
-            let Some(native)=self.runtimes[index].game.native.as_ref() else {continue};
+            let runtime = &mut self.runtimes[index];
+            if !runtime.capture.restock_dirty || runtime.capture.capture_save_busy ||
+                !runtime.capture.restock_retries.ready(Instant::now()) { continue; }
+            let Some(native)=runtime.game.native.as_ref() else {continue};
             let current=native.capture_settings();
-            let Some(staged)=self.runtimes[index].capture.restock_draft.as_ref() else {
-                self.runtimes[index].capture.restock_dirty=false;
-                self.runtimes[index].capture.restock_retries=RestockSaveRetry::default();
-                self.runtimes[index].capture.restock_save_error=None;
+            let Some(staged)=runtime.capture.restock_draft.as_ref() else {
+                runtime.capture.restock_dirty=false;
+                runtime.capture.restock_retries=RestockSaveRetry::default();
+                runtime.capture.restock_save_error=None;
                 continue;
             };
             let next=automation_restock::prepare_restock_save(&current,staged);
             match next {
                 Ok(None) => {
-                    if let Some(draft)=self.runtimes[index].capture.restock_draft.as_mut() {
+                    if let Some(draft)=runtime.capture.restock_draft.as_mut() {
                         automation_restock::copy_restock_fields(draft,&current);
                     }
-                    self.runtimes[index].capture.restock_dirty=false;
-                    self.runtimes[index].capture.restock_retries=RestockSaveRetry::default();
-                    self.runtimes[index].capture.restock_save_error=None;
+                    runtime.capture.restock_dirty=false;
+                    runtime.capture.restock_retries=RestockSaveRetry::default();
+                    runtime.capture.restock_save_error=None;
                 }
                 Err(error) => {
                     // Preserve the unsaved draft and surface a validation error
                     // without repeatedly spawning a doomed persistence worker.
-                    self.runtimes[index].capture.restock_save_error=Some(error);
-                    self.runtimes[index].capture.restock_retries.blocked=true;
+                    runtime.capture.restock_save_error=Some(error);
+                    runtime.capture.restock_retries.blocked=true;
                 }
                 Ok(Some(next)) => {
-                    self.runtimes[index].capture.restock_save_error=None;
-                    self.runtimes[index].capture.capture_save_busy=true;
-                    self.runtimes[index].capture.capture_save_id=self.runtimes[index].capture.capture_save_id.wrapping_add(1);
-                    let request_id=self.runtimes[index].capture.capture_save_id;
-                    let profile=self.runtimes[index].game.profile;
+                    runtime.capture.restock_save_error=None;
+                    runtime.capture.capture_save_busy=true;
+                    runtime.capture.capture_save_id=runtime.capture.capture_save_id.wrapping_add(1);
+                    let request_id=runtime.capture.capture_save_id;
+                    let profile=runtime.game.profile;
                     let tx=self.capture_save_tx.clone();
-                    let generation_state=Arc::clone(&self.runtimes[index].capture.capture_generation);
+                    let generation_state=Arc::clone(&runtime.capture.capture_generation);
                     let generation=generation_state.load(Ordering::Acquire);
                     let updater=native.capture_settings_updater();
                     // Keep restock_dirty set until a successful, current
