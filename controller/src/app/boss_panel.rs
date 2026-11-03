@@ -11,9 +11,10 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         return;
     }
     request_item_catalog(app);
-    let (view, hunt) = {
+    let (view, hunt, live) = {
         let native = app.runtimes[index].game.native.as_ref().expect("checked above");
-        (native.boss_snapshot(), native.hunt_snapshot())
+        (native.boss_snapshot(), native.hunt_snapshot(),
+            native.snapshot().phase == "Online")
     };
     let now = SystemTime::now().duration_since(UNIX_EPOCH)
         .unwrap_or_default().as_secs();
@@ -24,6 +25,10 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.set_min_width(ui.available_width());
             ui.heading(tr("Server-native Boss Manager"));
             ui.label(tr("The game server repeats the chosen boss, heals and spends its entry tokens. Moth travels to the Pokémon Center and restores your original hunt when the run ends. It never uses Give Up automatically."));
+            if !live {
+                ui.colored_label(super::WARN,tr(
+                    "Game disconnected. Boss controls will become available after reconnection."));
+            }
             ui.add_space(10.0);
             if !view.catalog_ready {
                 ui.label(tr("Waiting for the server's playable boss catalog."));
@@ -58,7 +63,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(format!("{}: {} · {}: {}",
                     tr("Required level"), entry.min_level,
                     tr("Possible entries"), attempts));
-                let ready = !view.busy && !view.auto && view.arena.is_none()
+                let ready = live && !view.busy && !view.auto && view.arena.is_none()
                     && hunt.trainer_level.unwrap_or(0) >= entry.min_level
                     && tokens >= entry.tokens_per_entry;
                 ui.horizontal_wrapped(|ui| {
@@ -96,11 +101,11 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.colored_label(super::WARN,tr(error));
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(view.can_stop,
+                if ui.add_enabled(live && view.can_stop,
                     egui::Button::new(tr("Stop repetition and return"))).clicked() {
                     action = Some(GameCommand::BossStop);
                 }
-                if ui.add_enabled(view.arena.is_some(),
+                if ui.add_enabled(live && view.arena.is_some(),
                     egui::Button::new(tr("Leave boss encounter"))).clicked() {
                     app.workspace.boss_leave_confirm[index] = true;
                 }
