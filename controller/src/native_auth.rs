@@ -242,9 +242,9 @@ fn capture_generation_is_current(
     generation.load(std::sync::atomic::Ordering::Acquire)==expected
 }
 
-// The session boundary and the entire encrypted read/modify/write transaction
-// share the same lock. A UI invalidation cannot overtake a blocked keyring
-// write, then allow that old write to finish against the replacement session.
+// Invalidating a session is nonblocking; each profile's vault transaction
+// serializes with later cached-login reads. An obsolete write detects its
+// generation change and rolls back before releasing the profile lock.
 pub fn invalidate_capture_generation(generation:&std::sync::atomic::AtomicU64) {
     // Only mutate the atomic here: the UI must never wait for a vault service.
     // An in-flight writer is responsible for rolling back after cancellation.
