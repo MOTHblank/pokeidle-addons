@@ -33,7 +33,7 @@ fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.workspace.automation_account;
     match app.workspace.automation_section {
         AutomationSection::Capture => {
-            if app.games[index].native.is_some() {
+            if app.runtimes[index].game.native.is_some() {
                 draw_native_automation(app, ui, index);
             } else {
                 draw_native_missing_panel(app, ui, Some(index),

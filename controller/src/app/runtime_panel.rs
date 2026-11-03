@@ -39,19 +39,19 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .inner_margin(14.0)
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                let running = app.games.iter()
+                let running = app.runtimes.iter().map(|runtime| &runtime.game)
                     .filter(|game| game.child.is_some() || game.orphaned_pid.is_some())
                     .count();
-                let headless = app.games.iter()
+                let headless = app.runtimes.iter().map(|runtime| &runtime.game)
                     .filter(|game| (game.child.is_some() || game.orphaned_pid.is_some()) && game.headless)
                     .count();
-                let bidi_connected = app.games.iter()
+                let bidi_connected = app.runtimes.iter().map(|runtime| &runtime.game)
                     .filter(|game| game.monitor.as_ref().is_some_and(|monitor| monitor.health().heartbeat_is_fresh()))
                     .count();
-                let native_online = app.games.iter().filter(|game|
+                let native_online = app.runtimes.iter().map(|runtime| &runtime.game).filter(|game|
                     game.native.as_ref().is_some_and(|native| native.snapshot().phase == "Online")
                 ).count();
-                let native_twitch_online = app.games.iter().filter(|game|
+                let native_twitch_online = app.runtimes.iter().map(|runtime| &runtime.game).filter(|game|
                     game.native.as_ref().is_some_and(|native| native.twitch_snapshot().phase == "Online")
                 ).count();
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Hidden Firefox"));

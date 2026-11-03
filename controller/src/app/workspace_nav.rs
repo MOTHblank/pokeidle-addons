@@ -66,8 +66,8 @@ pub(super) fn draw_account_switcher(
                         next = None;
                     }
                 }
-                for index in 0..app.games.len() {
-                    let slot = &app.games[index];
+                for index in 0..app.runtimes.len() {
+                    let slot = &app.runtimes[index].game;
                     let profile = slot.profile;
                     let (state, color) = if let Some(native) = slot.native.as_ref() {
                         let snapshot = native.snapshot();
@@ -85,8 +85,8 @@ pub(super) fn draw_account_switcher(
                         (tr("Stopping"), WARN)
                     } else if slot.shutdown_failed {
                         (tr("Stop failed"), BAD)
-                    } else if app.cached_native_busy[index] || app.native_verifying[index]
-                        || app.native_handoff_busy[index] || slot.handoff_closing {
+                    } else if app.runtimes[index].session.cached_native_busy || app.runtimes[index].session.native_verifying
+                        || app.runtimes[index].session.native_handoff_busy || slot.handoff_closing {
                         (tr("Starting"), WARN)
                     } else if slot.child.is_some() || slot.orphaned_pid.is_some() {
                         (tr("Firefox"), WARN)
@@ -320,10 +320,10 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .color(DIM),
                     );
                     ui.add_space(7.0);
-                    let active: Vec<_> = app.games.iter()
+                    let active: Vec<_> = app.runtimes.iter().map(|runtime| &runtime.game)
                         .filter(|game| game.child.is_some() || game.orphaned_pid.is_some())
                         .collect();
-                    let native_online = app.games.iter().filter(|game|
+                    let native_online = app.runtimes.iter().map(|runtime| &runtime.game).filter(|game|
                         game.native.as_ref().is_some_and(|native|
                             native.snapshot().phase == "Online")).count();
                     let mode = if active.is_empty() {
@@ -400,7 +400,7 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     let samples: [Option<OverviewAccountSample>; 4] =
                         std::array::from_fn(|index| {
                             app.accounts[index].enabled.then(||
-                                OverviewAccountSample::capture(&app.games[index]))
+                                OverviewAccountSample::capture(&app.runtimes[index].game))
                         });
                     let totals = collect_overview_totals(app, &profiles, &samples);
                     draw_overview_totals(ui, &totals);
@@ -433,7 +433,7 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(format!(
                             "{} {}", tr("Details for"),
-                            app.account_name(app.games[index].profile)
+                            app.account_name(app.runtimes[index].game.profile)
                         )).size(15.0).strong().color(TEXT));
                         ui.add_space(8.0);
                         if ui.selectable_label(!app.workspace.dashboard_show_history, tr("Live details")).clicked() {

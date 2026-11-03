@@ -14,10 +14,10 @@ pub(super) fn draw_browser_controls(
 ) {
             // The extracted browser-only panel still uses the managed
             // Firefox process state to distinguish closed from stale tabs.
-            let running=app.games[index].is_running();
+            let running=app.runtimes[index].game.is_running();
             // Browser-only controls are irrelevant after successful native
             // takeover. The runtime and saved session now own game + IRC.
-            if app.games[index].native.is_none() {
+            if app.runtimes[index].game.native.is_none() {
                 ui.add_space(12.0);
                 ui.label(
                     RichText::new(tr("KICK MULTISTREAM"))
@@ -179,7 +179,7 @@ pub(super) fn draw_browser_controls(
                                             && !host.contains(char::is_whitespace);
 
                                         if valid_url {
-                                            if let Some(monitor) = app.games[index].monitor.as_ref() {
+                                            if let Some(monitor) = app.runtimes[index].game.monitor.as_ref() {
                                                 match monitor.send(json!({
                                                     "t": "browser.openTab",
                                                     "url": candidate

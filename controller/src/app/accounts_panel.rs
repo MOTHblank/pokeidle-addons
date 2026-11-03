@@ -62,16 +62,16 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
 {
     let index = profile.index();
     let enabled = app.accounts[index].enabled;
-    let setup = app.account_setup[index].clone();
-    let health = app.games[index].health();
-    let running = app.games[index].is_running();
-    let game_phase = app.games[index].native.as_ref().map(|session| session.snapshot().phase);
-    let twitch_phase = app.games[index].native.as_ref().map(|session| session.twitch_snapshot());
+    let setup = app.runtimes[index].telemetry.account_setup.clone();
+    let health = app.runtimes[index].game.health();
+    let running = app.runtimes[index].game.is_running();
+    let game_phase = app.runtimes[index].game.native.as_ref().map(|session| session.snapshot().phase);
+    let twitch_phase = app.runtimes[index].game.native.as_ref().map(|session| session.twitch_snapshot());
     let game_online = game_phase.as_deref() == Some("Online")
         || (running && health.telemetry_is_fresh() && health.logged_in);
     let twitch_online = twitch_phase.as_ref().is_some_and(|state| state.phase == "Online");
-    let connecting = app.native_verifying[index] || app.native_handoff_busy[index]
-        || app.cached_native_busy[index] || app.games[index].handoff_closing;
+    let connecting = app.runtimes[index].session.native_verifying || app.runtimes[index].session.native_handoff_busy
+        || app.runtimes[index].session.cached_native_busy || app.runtimes[index].game.handoff_closing;
 
     ui.set_width(width);
     egui::Frame::new().fill(PANEL_ALT)
@@ -150,7 +150,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
             }
         }
-        if let Some(error) = app.native_error[index].as_deref() {
+        if let Some(error) = app.runtimes[index].session.native_error.as_deref() {
             ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
         }
         if let Some(error) = setup.check_error.as_deref() {
@@ -179,7 +179,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         // Keep game/Twitch profile cards compact; Kick has its own workspace.
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            let kick_running = app.kick_monitors[index].is_some();
+            let kick_running = app.runtimes[index].kick.kick_monitor.is_some();
             let kick_channels = kick_panel::desired_kick_channels(app, index).len();
             ui.label(RichText::new(format!("Kick · {} {}",
                 kick_channels, if pt_br() { "canais" } else { "channels" }))
