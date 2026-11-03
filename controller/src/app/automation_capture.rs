@@ -311,7 +311,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                     let tx=app.capture_save_tx.clone();
                     let generation_state=Arc::clone(&app.capture_generations[index]);
                     let generation=generation_state.load(Ordering::Acquire);
-                        let updater=native.capture_settings_updater();
+                    let updater=native.capture_settings_updater();
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
