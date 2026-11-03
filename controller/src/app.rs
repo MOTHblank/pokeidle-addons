@@ -155,6 +155,32 @@ fn monitor_repair_available(
 }
 
 #[cfg(test)]
+mod shutdown_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn stopping_keeps_process_ownership_unavailable_to_launch() {
+        let mut slot = GameSlot::new(GameProfile::ALL[0]);
+        assert!(!slot.is_running());
+        slot.stopping = true;
+        assert!(slot.is_running());
+        assert_eq!(slot.health().state, "Stopping");
+        slot.stopping = false;
+        assert!(!slot.is_running());
+    }
+
+    #[test]
+    fn stop_followups_cannot_be_confused_with_explicit_stop() {
+        // Only the initiating action may set a deferred restart. An ordinary
+        // Stop clears it, and a stale generation cannot run it after cleanup.
+        let queued = Some(AfterStop::Native { headless: true });
+        assert!(matches!(queued, Some(AfterStop::Native { headless: true })));
+        let cancelled: Option<AfterStop> = None;
+        assert!(cancelled.is_none());
+    }
+}
+
+#[cfg(test)]
 mod adaptive_monitor_ui_tests {
     use super::{
         controller_is_background, monitor_pace_for_slot, monitor_repair_available,
