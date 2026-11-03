@@ -308,7 +308,7 @@ impl ControllerApp {
             logging::info(&format!(
                 "{} native game welcome + Twitch IRC 001 confirmed; closing Firefox",
                 self.account_name(profile)));
-            std::thread::spawn(move || {
+            let worker = std::thread::spawn(move || {
                 let mut result = if let Some(child) = child.as_mut() {
                     firefox::stop_child(child, monitor.as_ref())
                 } else {
@@ -327,6 +327,7 @@ impl ControllerApp {
                     child, orphaned_pid, monitor, result
                 });
             });
+            track_firefox_shutdown(worker);
         }
         // Browser shutdown is asynchronous: the UI never blocks for BiDi
         // browser.close, process reaping or a force-kill fallback.
@@ -335,6 +336,17 @@ impl ControllerApp {
             let profile = GameProfile::from_index(index).expect("known slot");
             self.games[index].handoff_closing = false;
             let cancelled = std::mem::replace(&mut self.native_close_cancelled[index], false);
+            if cancelled && self.games[index].stopping {
+                // Explicit Stop takes precedence over either handoff outcome,
+                // even if a future path cancels without changing generation.
+                event.native.stop();
+                let current=self.auth_generations[index].load(Ordering::Acquire);
+                self.finish_firefox_stop(index, current, FirefoxStopOwnership {
+                    child:event.child, orphaned_pid:event.orphaned_pid,
+                    monitor:event.monitor
+                }, event.result);
+                continue;
+            }
             if event.generation!=self.auth_generations[index].load(Ordering::Acquire) {
                 event.native.stop();
                 if self.games[index].stopping {
