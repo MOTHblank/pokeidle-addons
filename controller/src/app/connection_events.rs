@@ -55,6 +55,7 @@ impl ControllerApp {
             let Some(staged)=self.restock_drafts[index].as_ref() else {
                 self.restock_dirty[index]=false;
                 self.restock_retries[index]=RestockSaveRetry::default();
+                self.restock_save_error[index]=None;
                 continue;
             };
             let next=automation_restock::prepare_restock_save(&current,staged);
@@ -65,16 +66,16 @@ impl ControllerApp {
                     }
                     self.restock_dirty[index]=false;
                     self.restock_retries[index]=RestockSaveRetry::default();
-                    self.capture_save_error[index]=None;
+                    self.restock_save_error[index]=None;
                 }
                 Err(error) => {
                     // Preserve the unsaved draft and surface a validation error
                     // without repeatedly spawning a doomed persistence worker.
-                    self.capture_save_error[index]=Some(error);
+                    self.restock_save_error[index]=Some(error);
                     self.restock_retries[index].blocked=true;
                 }
                 Ok(Some(next)) => {
-                    self.capture_save_error[index]=None;
+                    self.restock_save_error[index]=None;
                     self.capture_save_busy[index]=true;
                     self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
                     let request_id=self.capture_save_ids[index];
@@ -130,13 +131,17 @@ impl ControllerApp {
                         self.restock_drafts[event.index]=Some(event.config);
                         self.restock_dirty[event.index]=false;
                         self.restock_retries[event.index]=RestockSaveRetry::default();
+                        self.restock_save_error[event.index]=None;
                     } else if event.origin==CaptureSaveOrigin::Restock &&
                         self.restock_drafts[event.index].is_some() {
                         // A newer local selection must still be persisted.
                         self.restock_dirty[event.index]=true;
                         self.restock_retries[event.index]=RestockSaveRetry::default();
+                        self.restock_save_error[event.index]=None;
                     }
-                    self.capture_save_error[event.index]=None;
+                    if event.origin!=CaptureSaveOrigin::Restock {
+                        self.capture_save_error[event.index]=None;
+                    }
                     self.set_status(tr("Auto Catch settings saved"),false);
                 }
                 Err(error) => {
@@ -147,16 +152,19 @@ impl ControllerApp {
                             .is_some_and(|draft|restock_fields_equal(draft,&event.config)) {
                             // Retry transient vault failures with a bounded
                             // backoff, but not validation/auth/session errors.
+                            self.restock_save_error[event.index]=Some(error.message.clone());
                             if let Some(delay)=self.restock_retries[event.index]
-                                .failed(&error,Instant::now()) {
+                                .failed(error.retryable,Instant::now()) {
                                 self.lifecycle_ctx.request_repaint_after(delay);
                             }
                         } else {
                             // A newer edit superseded the failed submission.
                             self.restock_retries[event.index]=RestockSaveRetry::default();
+                            self.restock_save_error[event.index]=None;
                         }
+                    } else if event.origin!=CaptureSaveOrigin::Restock {
+                        self.capture_save_error[event.index]=Some(error.message.clone());
                     }
-                    self.capture_save_error[event.index]=Some(error.clone());
                     self.set_status(format!("Could not save capture settings: {error}"),true);
                 }
             }
@@ -632,19 +640,23 @@ mod capture_save_reconciliation_tests {
         let now=Instant::now();
         let mut retry=RestockSaveRetry::default();
         for attempt in 1..5 {
-            assert_eq!(retry.failed("Desktop keyring request failed",now),
+            assert_eq!(retry.failed(true,now),
                 Some(Duration::from_secs(1u64<<(attempt-1))));
             assert!(!retry.ready(now));
             assert!(!retry.blocked);
         }
-        assert_eq!(retry.failed("Desktop keyring request failed",now),None);
+        assert_eq!(retry.failed(true,now),None);
         assert!(retry.blocked);
         assert!(!retry.ready(now+Duration::from_secs(60)));
         // A new edit creates a fresh retry budget.
         retry=RestockSaveRetry::default();
         assert!(retry.ready(now));
-        assert_eq!(retry.failed("Invalid restock threshold",now),None);
+        assert_eq!(retry.failed(false,now),None);
         assert!(retry.blocked);
+        // Transient Windows DPAPI failures are categorized by the storage
+        // layer, even when their message never mentions DPAPI.
+        retry=RestockSaveRetry::default();
+        assert_eq!(retry.failed(true,now),Some(Duration::from_secs(1)));
     }
     #[test]
     fn old_session_or_request_acknowledgement_cannot_clear_current_save() {
