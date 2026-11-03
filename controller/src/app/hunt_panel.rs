@@ -385,14 +385,17 @@ impl RankingsCache {
             let indices=view.hunts.iter().enumerate()
                 .map(|(index,hunt)|(hunt.slug.as_str(),index))
                 .collect::<std::collections::BTreeMap<_,_>>();
-            self.rows=ranked_hunts(view,reference.map(Arc::as_ref),ranking,live,
-                query,region,species_type,estimates).into_iter()
+            let ranked=ranked_hunts(view,reference.map(Arc::as_ref),ranking,live,
+                query,region,species_type,estimates);
+            // Only measured or same-pace rows in the *visible filter set*
+            // can be reordered by incoming battle measurements.
+            self.needs_fallback=live && ranked.iter().any(|row|
+                row.source!=RateSource::Experimental);
+            self.rows=ranked.into_iter()
                 .filter_map(|row|indices.get(row.hunt.slug.as_str())
                     .map(|&hunt_index|CachedRankingRow{
                         hunt_index,value:row.value,source:row.source,
                     })).collect();
-            self.needs_fallback=live && view.hunts.iter().any(|hunt|
-                estimates.values.get(&hunt.slug).is_none_or(Option::is_none));
             self.fallback=self.needs_fallback.then(||
                 Self::fallback_signature(view,ranking,live));
             self.catalog=Some(Arc::clone(&view.hunts));
