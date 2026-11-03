@@ -15,6 +15,7 @@ use crate::native_atlas::{self, Reference as AtlasReference};
 // Views borrow cached state; only ControllerApp owns sessions, monitors,
 // worker channels and their scheduling. Rendering must not add polling loops.
 mod hunt_panel;
+mod boss_panel;
 mod market_panel;
 mod kick_panel;
 mod translations;
@@ -46,6 +47,7 @@ use workspace_state::WorkspaceState;
 use account_runtime::AccountRuntime;
 use overview_panel::{OverviewAccountSample, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
 use automation_panel::draw_automation_panel;
+use boss_panel::draw_boss_panel;
 use automation_game::draw_game_automation_contents;
 use automation_details::draw_game_details;
 use automation_browser::draw_browser_controls;
@@ -967,7 +969,7 @@ enum AfterStop {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
+enum PanelTab { Overview, Hunts, Boss, Accounts, Automation, Options }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AccountsSection { Profiles, Kick }
@@ -1307,7 +1309,7 @@ impl eframe::App for ControllerApp {
             self.accounts[i].enabled && slot.monitor.is_some() &&
             slot.native.is_none() && !slot.browser_only);
         let native_detail = self.runtimes.iter().map(|runtime| &runtime.game).any(|game| game.native.is_some())
-            && (matches!(self.workspace.panel_tab, PanelTab::Hunts | PanelTab::Automation)
+            && (matches!(self.workspace.panel_tab, PanelTab::Hunts | PanelTab::Boss | PanelTab::Automation)
                 || self.workspace.panel_tab == PanelTab::Overview);
         // Multiple overview cards are costly to rebuild; one batched sample
         // every four seconds is enough while their native workers run normally.
@@ -1332,6 +1334,7 @@ impl eframe::App for ControllerApp {
                         RichText::new(tr(match self.workspace.panel_tab {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
+                            PanelTab::Boss => "Boss Manager",
                             PanelTab::Accounts => "Accounts",
                             PanelTab::Automation => "Automation",
                             PanelTab::Options => "Options",
@@ -1385,6 +1388,7 @@ impl eframe::App for ControllerApp {
                     PanelTab::Overview => Some(self.workspace.selected_details),
                     PanelTab::Hunts if self.workspace.hunt_subtab == HuntSubtab::Compare => None,
                     PanelTab::Hunts => Some(Some(self.workspace.hunt_account)),
+                    PanelTab::Boss => Some(Some(self.workspace.automation_account)),
                     PanelTab::Automation => Some(Some(self.workspace.automation_account)),
                     _ => None,
                 };
@@ -1407,6 +1411,7 @@ impl eframe::App for ControllerApp {
                 match self.workspace.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
+                    PanelTab::Boss => draw_boss_panel(self, ui),
                     PanelTab::Accounts => draw_accounts_panel(self, ui),
                     PanelTab::Automation => draw_automation_panel(self, ui),
                     PanelTab::Options => draw_options_panel(self, ui),
