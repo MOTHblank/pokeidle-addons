@@ -100,7 +100,7 @@ pub(super) struct CachedRankingRow {
 /// Keep only indices and sortable rates, not copies of the hunt catalog or
 /// forecasts. Completed rankings survive egui repaints and live socket polls.
 #[derive(Default)]
-pub(super) struct RankingsCache {
+pub(in crate::app) struct RankingsCache {
     pub(super) rows:Vec<CachedRankingRow>,
     pub(super) catalog:Option<Arc<Vec<native_hunts::HuntEntry>>>,
     pub(super) reference:Option<Arc<AtlasReference>>,
@@ -117,7 +117,7 @@ pub(super) struct RankingsCache {
     pub(super) rebuilds:usize,
 }
 impl RankingsCache {
-    pub(super) fn release(&mut self){
+    pub(in crate::app) fn release(&mut self){
         if self.initialized {*self=Self::default();}
     }
     pub(super) fn fallback_signature(view:&HuntView,ranking:HuntRanking,live:bool)
