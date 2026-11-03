@@ -1301,7 +1301,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     automation_writer.on_disconnect();
                     pending_sale=None;
                     hunt_intel.on_disconnect();
-                    boss_manager.on_disconnect();
+                    boss_manager.on_disconnect(&navigator, &hunt_intel.view);
                     boss_manager.publish(&boss);
                     if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                     update(&snapshot, |s| {
