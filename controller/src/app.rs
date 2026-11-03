@@ -920,15 +920,13 @@ impl RestockSaveRetry {
     fn ready(self,now:Instant)->bool {
         !self.blocked && self.next.is_none_or(|at|now>=at)
     }
-    fn failed(&mut self,error:&str,now:Instant)->Option<Duration> {
+    fn failed(&mut self,retryable:bool,now:Instant)->Option<Duration> {
         self.failures=self.failures.saturating_add(1);
         self.next=None;
-        // Validation errors and revoked credentials must not be retried.
-        let transient=error.contains("keyring") ||
-            error.contains("DPAPI") ||
-            error.contains("native credential directory") ||
-            error.contains("Native settings writer unavailable");
-        if !transient || self.failures>=5 {
+        // The persistence layer categorizes OS vault failures explicitly.
+        // Never interpret error text to decide whether an operation is safe
+        // to retry (especially across platforms and languages).
+        if !retryable || self.failures>=5 {
             self.blocked=true;
             return None;
         }
@@ -944,7 +942,7 @@ struct CaptureSavedEvent {
     request_id:u64,
     config:CatchSettings,
     origin:CaptureSaveOrigin,
-    result:Result<(),String>
+    result:Result<(),crate::native_auth::CaptureSaveFailure>
 }
 pub struct ControllerApp {
     workspace: WorkspaceState,
@@ -1010,6 +1008,8 @@ pub struct ControllerApp {
     restock_drafts:[Option<CatchSettings>;4],
     restock_dirty:[bool;4],
     restock_retries:[RestockSaveRetry;4],
+    // Restock failures must not be hidden by an unrelated Auto Catch save.
+    restock_save_error:[Option<String>;4],
 
     capture_save_busy:[bool;4],
     // A separate request ID rejects stale acknowledgements within a session.
@@ -1162,6 +1162,7 @@ impl ControllerApp {
             restock_drafts:std::array::from_fn(|_|None),
             restock_dirty:[false;4],
             restock_retries:[RestockSaveRetry::default();4],
+            restock_save_error:std::array::from_fn(|_|None),
 
             capture_save_busy:[false;4],
             capture_save_ids:[0;4],
@@ -1234,6 +1235,7 @@ impl ControllerApp {
         self.restock_drafts[index]=None;
         self.restock_dirty[index]=false;
         self.restock_retries[index]=RestockSaveRetry::default();
+        self.restock_save_error[index]=None;
         self.capture_save_error[index]=None;
     }
 

@@ -351,11 +351,16 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
         app.restock_dirty[index] = true;
         // An explicit new edit unblocks an exhausted/permanent save error.
         app.restock_retries[index] = RestockSaveRetry::default();
-        app.capture_save_error[index] = None;
+        app.restock_save_error[index] = None;
         ui.ctx().request_repaint();
     }
-    if let Some(error) = app.capture_save_error[index].as_deref() {
+    if let Some(error) = app.restock_save_error[index].as_deref() {
         ui.label(RichText::new(error).size(10.0).color(WARN));
+    }
+    if app.restock_dirty[index] && app.restock_retries[index].blocked {
+        ui.label(RichText::new(tr(
+            "Restock selection not saved. Change a setting to try again."
+        )).size(10.0).color(WARN));
     }
     if app.capture_save_busy[index] {
         ui.label(RichText::new(if app.restock_dirty[index] {

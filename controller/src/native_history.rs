@@ -29,6 +29,8 @@ struct WriteSignal {
     state:Mutex<WriteState>,
     wake:Condvar,
     handle:Mutex<Option<thread::JoinHandle<()>>>,
+    // Keep the history file owned until the detached writer exits.
+    lease:Mutex<Option<Arc<HistoryLease>>>,
 }
 impl WriteSignal {
     fn request(&self)->Result<u64,String> {
@@ -69,6 +71,7 @@ impl WriteSignal {
     }
     // A stopped socket worker must not release its profile to a replacement
     // recorder while its previous writer can still rename the same file.
+    #[cfg(test)]
     fn stop_and_join(&self) {
         self.stop();
         if let Ok(mut worker)=self.handle.lock() {
@@ -511,11 +514,11 @@ pub struct HistoryRecorder {
     // background writer spent cloning. Throttle warnings per session.
     last_lock_warning:Option<Instant>,
     writer:Option<Arc<WriteSignal>>,
-    _lease:HistoryLease,
+    _lease:Arc<HistoryLease>,
 }
 impl HistoryRecorder {
     pub fn new(profile:GameProfile,nick:String)->Self {
-        let lease=profile_history_gate(profile).acquire();
+        let lease=Arc::new(profile_history_gate(profile).acquire());
         let path=history_path(profile,&nick);
         let mut snapshot=HistorySnapshot::default();
         let path=match path {
@@ -542,7 +545,11 @@ impl HistoryRecorder {
         let shared=Arc::new(Mutex::new(snapshot));
         let writer=path.and_then(|path| {
             match start_history_writer(Arc::clone(&shared),path,nick.clone()) {
-                Ok(writer)=>Some(writer),
+                Ok(writer)=>{
+                    *writer.lease.lock().unwrap_or_else(|e|e.into_inner())=
+                        Some(Arc::clone(&lease));
+                    Some(writer)
+                },
                 Err(error)=>{
                     if let Ok(mut snapshot)=shared.lock() {
                         snapshot.save_error=Some(error);
@@ -696,7 +703,7 @@ impl HistoryRecorder {
                 if let Some(writer)=self.writer.as_ref() {
                     if let Some(sequence)=writer.in_flight() {
                         if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
-                            if let Ok(mut snapshot)=self.shared.lock() {
+                            if let Ok(mut snapshot)=self.shared.try_lock() {
                                 snapshot.save_error=Some(error);
                             }
                         }
@@ -712,14 +719,14 @@ impl HistoryRecorder {
                     self.dirty=false;
                     if force {
                         if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
-                            if let Ok(mut snapshot)=self.shared.lock() {
+                            if let Ok(mut snapshot)=self.shared.try_lock() {
                                 snapshot.save_error=Some(error);
                             }
                         }
                     }
                 }
                 Err(error)=>{
-                    if let Ok(mut snapshot)=self.shared.lock() {
+                    if let Ok(mut snapshot)=self.shared.try_lock() {
                         snapshot.save_error=Some(error);
                     }
                 }
@@ -731,7 +738,9 @@ impl HistoryRecorder {
 impl Drop for HistoryRecorder {
     fn drop(&mut self){
         self.maybe_flush(true);
-        if let Some(writer)=self.writer.as_ref(){writer.stop_and_join();}
+        // Do not join on the time-sensitive game socket worker. The writer
+        // keeps a separate profile lease until its final I/O has finished.
+        if let Some(writer)=self.writer.as_ref(){writer.stop();}
     }
 }
 #[cfg(test)]
@@ -745,7 +754,7 @@ mod tests {
             shared:Arc::new(Mutex::new(HistorySnapshot::default())),
             last_hunt:None,last_kill:None,last_pruned_day:unix_day(),dirty:false,
             last_flush:Instant::now(),last_lock_warning:None,writer:None,
-            _lease:Arc::new(HistoryGate::default()).acquire()
+            _lease:Arc::new(Arc::new(HistoryGate::default()).acquire())
         };
         history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
         history.ingest(r#"{"t":"batalha","ev":[
@@ -817,6 +826,55 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
     #[test]
+    fn dropping_a_recorder_is_bounded_without_releasing_the_writer_lease() {
+        use std::sync::mpsc;
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path=std::env::temp_dir().join(format!(
+            "moth-history-detached-writer-{}-{id}.json",std::process::id()));
+        let gate=Arc::new(HistoryGate::default());
+        let lease=Arc::new(gate.acquire());
+        let shared=Arc::new(Mutex::new(HistorySnapshot {
+            owner:"Test".into(),..Default::default()
+        }));
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .unwrap();
+        *writer.lease.lock().unwrap()=Some(Arc::clone(&lease));
+        let mut locked=shared.lock().unwrap();
+        locked.lifetime.kills=23;
+        writer.request().unwrap();
+        let recorder=HistoryRecorder {
+            shared:Arc::clone(&shared),last_hunt:None,last_kill:None,
+            last_pruned_day:unix_day(),dirty:false,last_flush:Instant::now(),
+            last_lock_warning:None,writer:Some(Arc::clone(&writer)),_lease:lease,
+        };
+        let (dropped_tx,dropped_rx)=mpsc::channel();
+        let dropping=thread::spawn(move || {
+            drop(recorder);
+            dropped_tx.send(()).unwrap();
+        });
+        dropped_rx.recv_timeout(Duration::from_secs(3))
+            .expect("recorder Drop must honor its bounded final-write wait");
+        dropping.join().unwrap();
+        let (acquired_tx,acquired_rx)=mpsc::channel();
+        let next_gate=Arc::clone(&gate);
+        let next=thread::spawn(move || {
+            let _lease=next_gate.acquire();
+            acquired_tx.send(()).unwrap();
+        });
+        drop(writer);
+        assert!(acquired_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "an unfinished writer must continue to own the history file");
+        drop(locked);
+        acquired_rx.recv_timeout(Duration::from_secs(2))
+            .expect("replacement must resume after the writer finishes");
+        next.join().unwrap();
+        let raw=fs::read_to_string(&path).unwrap();
+        let saved=HistorySnapshot::from_value(
+            &serde_json::from_str::<Value>(&raw).unwrap(),"Test").unwrap();
+        assert_eq!(saved.lifetime.kills,23);
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn pending_history_saves_coalesce_without_queuing_full_snapshots() {
         let signal=WriteSignal::default();
         for _ in 0..1_000 {signal.request().unwrap();}
@@ -869,7 +927,7 @@ mod tests {
             shared,last_hunt:None,last_kill:None,last_pruned_day:unix_day(),
             dirty:false,last_flush:Instant::now()-SAVE_INTERVAL,
             last_lock_warning:None,writer:Some(Arc::clone(&writer)),
-            _lease:Arc::new(HistoryGate::default()).acquire(),
+            _lease:Arc::new(Arc::new(HistoryGate::default()).acquire()),
         };
         recorder.maybe_flush(true);
         assert_eq!(writer.state.lock().unwrap().requested,0,
@@ -900,7 +958,7 @@ mod tests {
             shared,last_hunt:None,last_kill:None,last_pruned_day:unix_day(),
             dirty:true,last_flush:Instant::now()-SAVE_INTERVAL,
             last_lock_warning:None,writer:Some(Arc::clone(&writer)),
-            _lease:Arc::new(HistoryGate::default()).acquire()
+            _lease:Arc::new(Arc::new(HistoryGate::default()).acquire())
         };
         recorder.maybe_flush(false);
         let initial=writer.state.lock().unwrap().requested;

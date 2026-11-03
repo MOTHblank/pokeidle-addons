@@ -3,6 +3,8 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Restock selection not saved. Change a setting to try again." =>
+            "Seleção de reposição não salva. Altere uma configuração para tentar novamente.",
         "Loading Pokémon data..." => "Carregando dados dos Pokémon...",
         "Pokémon data unavailable" => "Dados dos Pokémon indisponíveis",
         "Pokémon data is still loading; some estimates may be unavailable." => "Os dados dos Pokémon ainda estão carregando; algumas estimativas podem não estar disponíveis.",
