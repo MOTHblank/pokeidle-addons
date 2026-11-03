@@ -67,6 +67,7 @@ impl ControllerApp {
                 self.games[index].child = None;
                 self.games[index].orphaned_pid = None;
                 self.games[index].monitor = None;
+                self.games[index].shutdown_failed = false;
                 if let Some(action) = self.after_stop[index].take() {
                     self.run_after_stop(profile, action);
                 } else {
@@ -77,6 +78,7 @@ impl ControllerApp {
             }
             Err(error) => {
                 self.after_stop[index] = None;
+                self.games[index].shutdown_failed = true;
                 self.games[index].child = ownership.child;
                 self.games[index].orphaned_pid = ownership.orphaned_pid;
                 self.games[index].monitor = ownership.monitor;
