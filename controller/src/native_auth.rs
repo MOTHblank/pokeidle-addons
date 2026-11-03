@@ -81,6 +81,43 @@ mod capture_handoff_tests {
     }
 
     #[test]
+    fn session_replacement_waits_for_inflight_vault_transaction() {
+        use std::sync::{mpsc,Arc};
+        use std::sync::atomic::{AtomicU64,Ordering};
+        use std::time::Duration;
+        let generation=Arc::new(AtomicU64::new(3));
+        let (inside_tx,inside_rx)=mpsc::sync_channel(0);
+        let (release_tx,release_rx)=mpsc::sync_channel(0);
+        let writer_generation=Arc::clone(&generation);
+        let writer=std::thread::spawn(move || {
+            capture_write_transaction(&writer_generation,3,|| {
+                inside_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        inside_rx.recv().unwrap();
+        let (starting_tx,starting_rx)=mpsc::sync_channel(0);
+        let (done_tx,done_rx)=mpsc::sync_channel(1);
+        let stop_generation=Arc::clone(&generation);
+        let stopping=std::thread::spawn(move || {
+            starting_tx.send(()).unwrap();
+            invalidate_capture_generation(&stop_generation);
+            done_tx.send(()).unwrap();
+        });
+        starting_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "session replacement must not finish while a vault write is blocked");
+        assert_eq!(generation.load(Ordering::Acquire),3);
+        release_tx.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        stopping.join().unwrap();
+        assert_eq!(generation.load(Ordering::Acquire),4);
+        assert!(capture_write_transaction(&generation,3,||
+            panic!("an old session must never enter the vault writer")).is_err());
+    }
+    #[test]
     fn first_login_imports_the_browser_settings() {
         let firefox=json!({"autocatch":{"enabled":true,"ballPriority":["ultra"]}});
         assert_eq!(preserve_native_capture_preferences(&firefox,None),firefox);
@@ -165,26 +202,38 @@ fn capture_generation_is_current(
     generation.load(std::sync::atomic::Ordering::Acquire)==expected
 }
 
-// A session change cancels any uncommitted old-session settings save.
-// Validate again *under the vault writer mutex*, not just when the UI
-// schedules the job, so slow keyring operations cannot accidentally commit
-// outdated preferences after a restart/relogin.
+// The session boundary and the entire encrypted read/modify/write transaction
+// share the same lock. A UI invalidation cannot overtake a blocked keyring
+// write, then allow that old write to finish against the replacement session.
+pub fn invalidate_capture_generation(generation:&std::sync::atomic::AtomicU64) {
+    let _guard=PREFERENCE_WRITE.lock().unwrap_or_else(|error|error.into_inner());
+    generation.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
+}
+fn capture_write_transaction<T>(
+    generation:&std::sync::atomic::AtomicU64, expected:u64,
+    write:impl FnOnce()->Result<T,String>
+)->Result<T,String> {
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Capture settings save canceled: session changed".into());
+    }
+    let _guard=PREFERENCE_WRITE.lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    if !capture_generation_is_current(generation,expected) {
+        return Err("Capture settings save canceled: session changed".into());
+    }
+    write()
+}
 pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
     generation:&std::sync::atomic::AtomicU64, expected:u64) -> Result<(),String> {
-    let valid=||capture_generation_is_current(generation,expected);
     config.validate()?;
-    if !valid(){return Err("Capture settings save canceled: session changed".into())}
-    let _guard=PREFERENCE_WRITE.lock()
-        .map_err(|_|"Native settings writer unavailable".to_owned())?;
-    if !valid(){return Err("Capture settings save canceled: session changed".into())}
-    let Some(mut saved)=load(profile)? else {
-        return Err("Native credential cache unavailable; authenticate again to save preferences".into());
-    };
-    if !valid(){return Err("Capture settings save canceled: session changed".into())}
-    saved["autocatch"]=config.as_value();
-    if !valid(){return Err("Capture settings save canceled: session changed".into())}
-    save(profile,&saved)
+    capture_write_transaction(generation,expected,|| {
+        let Some(mut saved)=load(profile)? else {
+            return Err("Native credential cache unavailable; authenticate again to save preferences".into());
+        };
+        saved["autocatch"]=config.as_value();
+        save(profile,&saved)
+    })
 }
 
 /// Persist to the OS vault, then apply the confirmed preferences to the live
