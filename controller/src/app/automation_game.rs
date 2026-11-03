@@ -1,5 +1,7 @@
 //! Game-side automation settings editor using existing native worker snapshots.
-use super::*;
+use super::{automation_badge, draw_native_missing_panel, egui, format_number,
+    localize_status, tr, tr_dynamic, AutomationDraft, ControllerApp, GameCommand,
+    PanelTab, RichText, DIM, MUTED, PANEL, PANEL_ALT, TEXT, WARN};
 
 pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.automation_account;

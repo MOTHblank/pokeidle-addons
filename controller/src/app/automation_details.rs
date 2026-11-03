@@ -1,5 +1,8 @@
 //! Expanded browser/account details; native diagnostics route to automation_manager.
-use super::*;
+use super::{compact_text, detail_stat_line, draw_browser_controls,
+    draw_native_automation, draw_stream_bonus_details, egui, format_number,
+    localize_status, resource_chip, tr, ControllerApp, Margin, RichText, Stroke,
+    BORDER, DIM, MUTED, PANEL, PANEL_ALT, TEXT};
 use super::automation_manager::draw_native_manager_details;
 
 pub(super) fn draw_game_details(

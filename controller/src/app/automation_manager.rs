@@ -1,5 +1,8 @@
 //! Read-only account, hunt and roster diagnostics built from cached native snapshots.
-use super::*;
+use super::{automation_badge, detail_stat_line, egui, format_hunt_amount,
+    format_number, localize_status, request_item_catalog, tr, tr_dynamic,
+    ControllerApp, PanelTab, RichText, SpriteKind, DIM, GOOD, MUTED, PANEL,
+    PANEL_ALT, TEXT, WARN};
 
 pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     // Take one read-only snapshot for the entire render. All network parsing
