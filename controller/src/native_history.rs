@@ -903,6 +903,40 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
     #[test]
+    fn forced_dirty_flush_hands_off_without_waiting_for_the_writer() {
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path=std::env::temp_dir().join(format!(
+            "moth-history-nonblocking-flush-{}-{id}.json",std::process::id()));
+        let shared=Arc::new(Mutex::new(HistorySnapshot{
+            owner:"Test".into(),..Default::default()
+        }));
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .unwrap();
+        let mut held=shared.lock().unwrap();
+        held.lifetime.kills=31;
+        let mut recorder=HistoryRecorder {
+            shared:Arc::clone(&shared),last_hunt:None,last_kill:None,
+            last_pruned_day:unix_day(),dirty:true,
+            last_flush:Instant::now()-SAVE_INTERVAL,
+            last_lock_warning:None,writer:Some(Arc::clone(&writer)),
+            _lease:Arc::new(Arc::new(HistoryGate::default()).acquire()),
+        };
+        let started=Instant::now();
+        recorder.maybe_flush(true);
+        assert!(started.elapsed()<Duration::from_millis(250),
+            "force must only signal the writer, not wait for the locked snapshot");
+        assert_eq!(writer.in_flight(),Some(1));
+        drop(held);
+        writer.wait_written(1,FINAL_WRITE_TIMEOUT).unwrap();
+        drop(recorder);
+        writer.stop_and_join();
+        let raw=fs::read_to_string(&path).unwrap();
+        let recovered=HistorySnapshot::from_value(
+            &serde_json::from_str::<Value>(&raw).unwrap(),"Test").unwrap();
+        assert_eq!(recovered.lifetime.kills,31);
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn forced_clean_flush_does_not_queue_duplicate_history_snapshots() {
         let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let path=std::env::temp_dir().join(
