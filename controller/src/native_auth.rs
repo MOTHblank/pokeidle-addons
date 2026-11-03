@@ -467,7 +467,7 @@ mod platform {
         let diagnostics=stderr_reader.join()
             .map_err(|_|"Desktop keyring diagnostics reader failed".to_owned())?;
         if input_writer.is_some_and(|writer|
-            writer.join().is_err_or(|result|result.is_err())) {
+            writer.join().map_or(true,|result|result.is_err())) {
             return Err("Desktop keyring refused credential input".into());
         }
         if !status.success() {
