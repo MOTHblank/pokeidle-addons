@@ -50,14 +50,17 @@ impl ControllerApp {
                     self.capture_save_busy[index]=true;
                     let profile=self.games[index].profile;
                     let tx=self.capture_save_tx.clone();
+                    let generation_state=Arc::clone(&self.capture_generations[index]);
+                    let generation=generation_state.load(Ordering::Acquire);
                     std::thread::spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
-                                crate::native_auth::set_capture_settings(profile,&next)))
+                                crate::native_auth::set_capture_settings(
+                                    profile,&next,&generation_state,generation)))
                             .unwrap_or_else(|_|
                                 Err("Encrypted restock save panicked".into()));
                         let _=tx.send(CaptureSavedEvent {
-                            index,config:next,origin:CaptureSaveOrigin::Restock,result
+                            index,generation,config:next,origin:CaptureSaveOrigin::Restock,result
                         });
                     });
                 }
@@ -68,6 +71,17 @@ impl ControllerApp {
     pub(super) fn refresh_processes(&mut self) {
         while let Ok(event)=self.capture_save_rx.try_recv() {
             self.capture_save_busy[event.index]=false;
+            // Do not apply an old save to a newly adopted native socket or
+            // acknowledge it by clearing a newer editor's pending changes.
+            if event.generation!=self.capture_generations[event.index].load(Ordering::Acquire) {
+                // A pending restock selection can be rebased on the new
+                // session's confirmed preferences by the regular save queue.
+                if event.origin==CaptureSaveOrigin::Restock &&
+                    self.restock_drafts[event.index].is_some() {
+                    self.restock_dirty[event.index]=true;
+                }
+                continue;
+            }
             match event.result {
                 Ok(()) => {
                     if let Some(native)=self.games[event.index].native.as_ref() {
