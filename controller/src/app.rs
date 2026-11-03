@@ -947,8 +947,8 @@ struct CaptureSavedEvent {
     result:Result<(),crate::native_auth::CaptureSaveFailure>
 }
 pub struct ControllerApp {
+    // Only shared coordination, channels, caches and UI preferences live here.
     workspace: WorkspaceState,
-    // Exactly four independently owned profiles; no parallel session arrays.
     runtimes: [AccountRuntime; 4],
     lifecycle_ctx: egui::Context,
     native_handoff_tx: WakeSender<NativeHandoffEvent>,
@@ -959,62 +959,26 @@ pub struct ControllerApp {
     native_closed_rx: Receiver<NativeBrowserClosedEvent>,
     cached_native_tx: WakeSender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
-    // Every asynchronous login stage carries the ID of its launch attempt.
-    // Stop/restart invalidates it before another launch may be adopted.
-
-
-
-
 
     ui_options: UiOptions,
-
-
-
-
-
-
-
-
-
-
-
-
-
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
     hunt_reference_tx: WakeSender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
-    // Restock has optimistic per-account editing state. Never rebuild the
-    // picker from the last confirmed worker snapshot while a save is in flight.
-    // Restock failures must not be hidden by an unrelated Auto Catch save.
-
-    // A separate request ID rejects stale acknowledgements within a session.
-    // A monotonically increasing token identifies the native session that
-    // began each vault write. Old completions cannot mutate a new session.
-    capture_save_tx:WakeSender<CaptureSavedEvent>,
-    capture_save_rx:Receiver<CaptureSavedEvent>,
-
-    inventory_catalog:Option<Arc<ItemCatalog>>,
-    visuals:VisualCache,
-    inventory_catalog_error:Option<String>,
-    inventory_catalog_busy:bool,
-    inventory_catalog_tx:WakeSender<Result<ItemCatalog,String>>,
-    inventory_catalog_rx:Receiver<Result<ItemCatalog,String>>,
+    capture_save_tx: WakeSender<CaptureSavedEvent>,
+    capture_save_rx: Receiver<CaptureSavedEvent>,
+    inventory_catalog: Option<Arc<ItemCatalog>>,
+    visuals: VisualCache,
+    inventory_catalog_error: Option<String>,
+    inventory_catalog_busy: bool,
+    inventory_catalog_tx: WakeSender<Result<ItemCatalog,String>>,
+    inventory_catalog_rx: Receiver<Result<ItemCatalog,String>>,
     accounts: [AccountConfig; 4],
-    /// Kick website sessions run independently per account. Bearer tokens
-    /// are entered in masked fields and optionally stored in the OS vault.
-    // Live official channels are discovered from the native PokéIdle socket,
-    // not copied into the user's saved manual preferences.
-    // Only changes in the native official roster trigger Kick worker reconciliation.
-
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
     account_setup_checked_at: Option<Instant>,
-
-
-
     update_status: SharedUpdateStatus,
     #[cfg(windows)]
     tray: Option<TrayRuntime>,
@@ -1064,6 +1028,7 @@ impl ControllerApp {
             });
 
         Self {
+            workspace: WorkspaceState::default(),
             runtimes: std::array::from_fn(|index| AccountRuntime::new(
                 index,
                 std::mem::take(&mut kick_channels[index]),
@@ -1072,40 +1037,44 @@ impl ControllerApp {
             lifecycle_ctx: cc.egui_ctx.clone(),
             native_handoff_tx,
             native_handoff_rx,
-            workspace: WorkspaceState::default(),
-
-
-
-
-
+            native_verified_tx,
+            native_verified_rx,
+            native_closed_tx,
+            native_closed_rx,
+            cached_native_tx,
+            cached_native_rx,
             ui_options: Config::load_ui_options().unwrap_or_else(|error| {
                 logging::warn(&format!("controller options load failed: {error}"));
                 UiOptions::default()
             }),
-
-
-
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
             hunt_reference_tx,
             hunt_reference_rx,
-            inventory_catalog:None,
-            visuals:VisualCache::default(),
-            inventory_catalog_error:None,
-            inventory_catalog_busy:false,
+            capture_save_tx,
+            capture_save_rx,
+            inventory_catalog: None,
+            visuals: VisualCache::default(),
+            inventory_catalog_error: None,
+            inventory_catalog_busy: false,
             inventory_catalog_tx,
             inventory_catalog_rx,
+            accounts: Config::load_accounts().unwrap_or_else(|error| {
+                logging::warn(&format!("account configuration load failed: {error}"));
+                std::array::from_fn(|i| AccountConfig::default_for(
+                    GameProfile::from_index(i).expect("valid account slot")
+                ))
+            }),
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
             account_setup_checked_at: None,
-
-
-            accounts: Config::load_accounts().unwrap_or_else(|error| {
-                logging::warn(&format!("account configuration load failed: {error}"));
-                std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
-            }),
+            update_status,
+            #[cfg(windows)]
+            tray,
+            #[cfg(windows)]
+            tray_hidden,
         }
     }
 
