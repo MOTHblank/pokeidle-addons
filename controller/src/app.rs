@@ -20,6 +20,7 @@ mod kick_panel;
 mod translations;
 mod localization;
 mod workspace_nav;
+mod workspace_state;
 mod overview_panel;
 mod automation_panel;
 mod automation_game;
@@ -40,6 +41,7 @@ mod session_actions;
 // Each shared symbol is intentional: no wildcard panel imports.
 use localization::{pt_br, localize_status, tr_dynamic, tr};
 use workspace_nav::{draw_header_actions, draw_account_switcher, draw_options_panel, draw_sidebar, draw_instance_section};
+use workspace_state::WorkspaceState;
 use overview_panel::{OverviewTotals, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
 use automation_panel::draw_automation_panel;
 use automation_game::draw_game_automation_contents;
@@ -817,6 +819,7 @@ struct CaptureSavedEvent {
     result:Result<(),String>
 }
 pub struct ControllerApp {
+    workspace: WorkspaceState,
     native_handoff_tx: Sender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
     native_handoff_busy: [bool; 4],
@@ -833,15 +836,15 @@ pub struct ControllerApp {
     cached_native_busy: [bool; 4],
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
-    panel_tab: PanelTab,
-    accounts_section: AccountsSection,
-    kick_selected_account: usize,
-    dashboard_show_history: bool,
-    dashboard_session_view: bool,
+
+
+
+
+
     ui_options: UiOptions,
-    hunt_account: usize,
-    automation_account: usize,
-    automation_section: AutomationSection,
+
+
+
     automation_drafts: [AutomationDraft;4],
     market_drafts: [Option<crate::native_market::MarketRules>;4],
     market_snatch_drafts: [crate::native_market::SnatchTarget;4],
@@ -849,14 +852,14 @@ pub struct ControllerApp {
     market_notices: [String;4],
     market_copy_targets: [bool;4],
     market_copy_activation: bool,
-    history_rows_limit: usize,
+
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
     hunt_region: String,
     hunt_type: String,
     hunt_ranking: HuntRanking,
-    hunt_subtab: HuntSubtab,
-    hunt_page: usize,
+
+
     hunt_action_error: [Option<String>;4],
     hunt_estimate_cache: [hunt_panel::EstimateCache;4],
     atlas_results: [hunt_panel::ExplorerCache;4],
@@ -914,7 +917,7 @@ pub struct ControllerApp {
     tab_url_open: [bool; 4],
     idle_progress: [IdleProgressTracker; 4],
     xp_rates: [XpRateTracker; 4],
-    selected_details: Option<usize>,
+
     update_status: SharedUpdateStatus,
     #[cfg(windows)]
     tray: Option<TrayRuntime>,
@@ -972,18 +975,19 @@ impl ControllerApp {
             games: std::array::from_fn(|i| {
                 GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
             }),
-            panel_tab: PanelTab::Overview,
-            accounts_section: AccountsSection::Profiles,
-            kick_selected_account: 0,
-            dashboard_show_history: false,
-            dashboard_session_view: false,
+            workspace: WorkspaceState::default(),
+
+
+
+
+
             ui_options: Config::load_ui_options().unwrap_or_else(|error| {
                 logging::warn(&format!("controller options load failed: {error}"));
                 UiOptions::default()
             }),
-            hunt_account: 0,
-            automation_account: 0,
-            automation_section: AutomationSection::Capture,
+
+
+
             automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
             market_drafts: std::array::from_fn(|_|None),
             market_snatch_drafts: std::array::from_fn(|_|crate::native_market::SnatchTarget{
@@ -993,14 +997,14 @@ impl ControllerApp {
             market_notices: std::array::from_fn(|_|String::new()),
             market_copy_targets: [false;4],
             market_copy_activation: false,
-            history_rows_limit: 100,
+
             offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
             hunt_region: String::new(),
             hunt_type: String::new(),
             hunt_ranking: HuntRanking::TrainerXp,
-            hunt_subtab: HuntSubtab::Explorer,
-            hunt_page: 0,
+
+
             hunt_action_error: std::array::from_fn(|_|None),
             hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
             atlas_results: std::array::from_fn(|_|hunt_panel::ExplorerCache::default()),
@@ -1061,7 +1065,7 @@ impl ControllerApp {
             tab_url_open: [false; 4],
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
             xp_rates: std::array::from_fn(|_| XpRateTracker::default()),
-            selected_details: None,
+
             update_status,
             #[cfg(windows)]
             tray,
@@ -1155,8 +1159,8 @@ impl eframe::App for ControllerApp {
         // Repaint only while visible; tray/background retains the cheap timer.
         let background = self.controller_in_background(ui.ctx());
         let native_detail = self.games.iter().any(|game| game.native.is_some())
-            && (matches!(self.panel_tab, PanelTab::Hunts | PanelTab::Automation)
-                || self.panel_tab == PanelTab::Overview);
+            && (matches!(self.workspace.panel_tab, PanelTab::Hunts | PanelTab::Automation)
+                || self.workspace.panel_tab == PanelTab::Overview);
         ui.ctx().request_repaint_after(
             if background { UI_BACKGROUND_REPAINT_INTERVAL }
             else if native_detail { Duration::from_secs(1) }
@@ -1173,7 +1177,7 @@ impl eframe::App for ControllerApp {
                 let compact = ui.available_width() < 780.0;
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(tr(match self.panel_tab {
+                        RichText::new(tr(match self.workspace.panel_tab {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
                             PanelTab::Accounts => "Accounts",
@@ -1225,30 +1229,30 @@ impl eframe::App for ControllerApp {
             .show(ui, |ui| {
                 // Accounts has its own full page with an account selector.
                 // All other native workspaces share the same compact strip.
-                let active = match self.panel_tab {
-                    PanelTab::Overview => Some(self.selected_details),
-                    PanelTab::Hunts if self.hunt_subtab == HuntSubtab::Compare => None,
-                    PanelTab::Hunts => Some(Some(self.hunt_account)),
-                    PanelTab::Automation => Some(Some(self.automation_account)),
+                let active = match self.workspace.panel_tab {
+                    PanelTab::Overview => Some(self.workspace.selected_details),
+                    PanelTab::Hunts if self.workspace.hunt_subtab == HuntSubtab::Compare => None,
+                    PanelTab::Hunts => Some(Some(self.workspace.hunt_account)),
+                    PanelTab::Automation => Some(Some(self.workspace.automation_account)),
                     _ => None,
                 };
                 if let Some(selected) = active {
                     let next = draw_account_switcher(
-                        self, ui, selected, self.panel_tab == PanelTab::Overview
+                        self, ui, selected, self.workspace.panel_tab == PanelTab::Overview
                     );
                     if next != selected {
                         if let Some(index) = next {
                             self.select_workspace_account(index);
-                            if self.panel_tab == PanelTab::Overview {
-                                self.selected_details = Some(index);
+                            if self.workspace.panel_tab == PanelTab::Overview {
+                                self.workspace.selected_details = Some(index);
                             }
-                        } else if self.panel_tab == PanelTab::Overview {
-                            self.selected_details = None;
+                        } else if self.workspace.panel_tab == PanelTab::Overview {
+                            self.workspace.selected_details = None;
                         }
                     }
                     ui.add_space(6.0);
                 }
-                match self.panel_tab {
+                match self.workspace.panel_tab {
                     PanelTab::Overview => draw_instance_section(self, ui),
                     PanelTab::Hunts => hunt_panel::draw_hunt_atlas_panel(self, ui),
                     PanelTab::Accounts => draw_accounts_panel(self, ui),
@@ -1264,9 +1268,9 @@ impl eframe::App for ControllerApp {
         // Only keep Explorer results for the account actually being viewed.
         // Rankings can be rebuilt on demand; holding all four accounts'
         // destination copies throughout Overview/Automation wastes RAM.
-        let active_explorer=if self.panel_tab==PanelTab::Hunts &&
-            self.hunt_subtab==HuntSubtab::Explorer {
-            Some(self.hunt_account)
+        let active_explorer=if self.workspace.panel_tab==PanelTab::Hunts &&
+            self.workspace.hunt_subtab==HuntSubtab::Explorer {
+            Some(self.workspace.hunt_account)
         } else {None};
         for (index,results) in self.atlas_results.iter_mut().enumerate() {
             if active_explorer!=Some(index) {results.release();}
@@ -1274,7 +1278,7 @@ impl eframe::App for ControllerApp {
 
         // If the user leaves Accounts while editing the name, persist it
         // without needing to close a dialog that no longer exists.
-        if self.panel_tab != PanelTab::Accounts {
+        if self.workspace.panel_tab != PanelTab::Accounts {
             self.save_dirty_account_names();
         }
         // Apply the persisted preference immediately to all Firefox monitors.

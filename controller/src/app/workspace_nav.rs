@@ -222,37 +222,37 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             section_label(ui, tr("WORKSPACE"));
 
-            if sidebar_button(ui, tr("Dashboard"), app.panel_tab == PanelTab::Overview).clicked() {
-                app.panel_tab = PanelTab::Overview;
+            if sidebar_button(ui, tr("Dashboard"), app.workspace.panel_tab == PanelTab::Overview).clicked() {
+                app.workspace.panel_tab = PanelTab::Overview;
             }
 
-            if sidebar_button(ui, &format!("  ·  {}", tr("Hunt Atlas")), app.panel_tab == PanelTab::Hunts).clicked() {
-                app.panel_tab = PanelTab::Hunts;
+            if sidebar_button(ui, &format!("  ·  {}", tr("Hunt Atlas")), app.workspace.panel_tab == PanelTab::Hunts).clicked() {
+                app.workspace.panel_tab = PanelTab::Hunts;
             }
 
             if sidebar_button(ui, tr("Accounts"),
-                app.panel_tab == PanelTab::Accounts &&
-                app.accounts_section == AccountsSection::Profiles).clicked() {
-                app.panel_tab = PanelTab::Accounts;
-                app.accounts_section = AccountsSection::Profiles;
+                app.workspace.panel_tab == PanelTab::Accounts &&
+                app.workspace.accounts_section == AccountsSection::Profiles).clicked() {
+                app.workspace.panel_tab = PanelTab::Accounts;
+                app.workspace.accounts_section = AccountsSection::Profiles;
             }
             if sidebar_button(ui, "  ·  Kick",
-                app.panel_tab == PanelTab::Accounts &&
-                app.accounts_section == AccountsSection::Kick).clicked() {
-                app.panel_tab = PanelTab::Accounts;
-                app.accounts_section = AccountsSection::Kick;
+                app.workspace.panel_tab == PanelTab::Accounts &&
+                app.workspace.accounts_section == AccountsSection::Kick).clicked() {
+                app.workspace.panel_tab = PanelTab::Accounts;
+                app.workspace.accounts_section = AccountsSection::Kick;
             }
 
-            if sidebar_button(ui, tr("Automation"), app.panel_tab == PanelTab::Automation).clicked() {
-                app.panel_tab = PanelTab::Automation;
+            if sidebar_button(ui, tr("Automation"), app.workspace.panel_tab == PanelTab::Automation).clicked() {
+                app.workspace.panel_tab = PanelTab::Automation;
             }
 
             if sidebar_button(ui, tr("Logs"), false).clicked() {
                 app.open_logs();
             }
 
-            if sidebar_button(ui, tr("Options"), app.panel_tab == PanelTab::Options).clicked() {
-                app.panel_tab = PanelTab::Options;
+            if sidebar_button(ui, tr("Options"), app.workspace.panel_tab == PanelTab::Options).clicked() {
+                app.workspace.panel_tab = PanelTab::Options;
             }
 
             // Global start/stop actions are in the header; avoid a duplicate
@@ -362,11 +362,11 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
         ui.label(RichText::new(tr("ACCOUNT OVERVIEW"))
             .font(FontId::proportional(17.0)).strong().color(TEXT));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.selectable_label(app.dashboard_session_view, tr("Session")).clicked() {
-                app.dashboard_session_view = true;
+            if ui.selectable_label(app.workspace.dashboard_session_view, tr("Session")).clicked() {
+                app.workspace.dashboard_session_view = true;
             }
-            if ui.selectable_label(!app.dashboard_session_view, tr("Summary")).clicked() {
-                app.dashboard_session_view = false;
+            if ui.selectable_label(!app.workspace.dashboard_session_view, tr("Summary")).clicked() {
+                app.workspace.dashboard_session_view = false;
             }
         });
     });
@@ -381,7 +381,7 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 .filter(|index| app.accounts[*index].enabled)
                 .collect();
 
-            if profiles.is_empty() && app.selected_details.is_none() {
+            if profiles.is_empty() && app.workspace.selected_details.is_none() {
                 ui.label(RichText::new(tr(
                     "No accounts enabled. Open Account Manager to add or enable one."
                 )).size(12.0).color(DIM));
@@ -389,7 +389,7 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                 // The dashboard matches the React manager: aggregate metrics
                 // above a responsive grid of account cards. Details replace
                 // the grid rather than leaving an empty two-column workspace.
-                if app.selected_details.is_none() {
+                if app.workspace.selected_details.is_none() {
                     let totals = collect_overview_totals(app, &profiles);
                     draw_overview_totals(ui, &totals);
                     ui.add_space(12.0);
@@ -414,33 +414,33 @@ pub(super) fn draw_instance_section(app: &mut ControllerApp, ui: &mut egui::Ui) 
                     }
                 }
 
-                if let Some(index) = app.selected_details {
+                if let Some(index) = app.workspace.selected_details {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(format!(
                             "{} {}", tr("Details for"),
                             app.account_name(app.games[index].profile)
                         )).size(15.0).strong().color(TEXT));
                         ui.add_space(8.0);
-                        if ui.selectable_label(!app.dashboard_show_history, tr("Live details")).clicked() {
-                            app.dashboard_show_history = false;
+                        if ui.selectable_label(!app.workspace.dashboard_show_history, tr("Live details")).clicked() {
+                            app.workspace.dashboard_show_history = false;
                         }
-                        if ui.selectable_label(app.dashboard_show_history, tr("History")).clicked() {
-                            app.dashboard_show_history = true;
+                        if ui.selectable_label(app.workspace.dashboard_show_history, tr("History")).clicked() {
+                            app.workspace.dashboard_show_history = true;
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button(tr("Hide details")).clicked() {
-                                app.selected_details = None;
+                                app.workspace.selected_details = None;
                             }
                         });
                     });
                     ui.add_space(8.0);
-                    if app.selected_details == Some(index) {
+                    if app.workspace.selected_details == Some(index) {
                         let width = ui.available_width().min(900.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(width, 0.0),
                             Layout::top_down(Align::Min),
                             |ui| {
-                                if app.dashboard_show_history {
+                                if app.workspace.dashboard_show_history {
                                     draw_history_panel(app, ui, index);
                                 } else {
                                     draw_game_details(app, ui, index, width);

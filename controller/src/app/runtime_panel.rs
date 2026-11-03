@@ -22,7 +22,7 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(tr("Open Profiles")).clicked() {
-                app.panel_tab = PanelTab::Accounts;
+                app.workspace.panel_tab = PanelTab::Accounts;
             }
             if ui.button(tr("Open Logs")).clicked() {
                 app.open_logs();

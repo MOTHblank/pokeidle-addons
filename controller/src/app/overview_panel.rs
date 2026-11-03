@@ -153,7 +153,7 @@ pub(super) fn draw_native_missing_panel(
                         app.launch_one(profile);
                     }
                     if ui.small_button(tr("Account settings")).clicked() {
-                        app.panel_tab=PanelTab::Accounts;
+                        app.workspace.panel_tab=PanelTab::Accounts;
                     }
                 });
             } else {
@@ -164,7 +164,7 @@ pub(super) fn draw_native_missing_panel(
                         app.launch_enabled();
                     }
                     if ui.small_button(tr("Manage accounts")).clicked() {
-                        app.panel_tab=PanelTab::Accounts;
+                        app.workspace.panel_tab=PanelTab::Accounts;
                     }
                 });
             }
@@ -229,7 +229,7 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
 
     egui::Frame::new()
         .fill(PANEL)
-        .stroke(Stroke::new(1.0, if app.selected_details == Some(index) { ACCENT } else { BORDER }))
+        .stroke(Stroke::new(1.0, if app.workspace.selected_details == Some(index) { ACCENT } else { BORDER }))
         .corner_radius(12.0)
         .inner_margin(12.0)
         .show(ui, |ui| {
@@ -239,10 +239,10 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
                         .size(14.0).strong().color(TEXT),
                 ).truncate()).on_hover_text(account_name.as_str());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let expanded = app.selected_details == Some(index);
+                    let expanded = app.workspace.selected_details == Some(index);
                     let label = tr(if expanded { "Hide details" } else { "Show details" });
                     if ui.small_button(label).clicked() {
-                        app.selected_details = if expanded { None } else { Some(index) };
+                        app.workspace.selected_details = if expanded { None } else { Some(index) };
                         if !expanded { app.select_workspace_account(index); }
                     }
                 });
@@ -285,7 +285,7 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
             }
             draw_overview_matchup(app, ui, &health, fresh, native_view.as_ref());
             ui.add_space(6.0);
-            if app.dashboard_session_view {
+            if app.workspace.dashboard_session_view {
                 draw_overview_session(ui, native_view.as_ref());
             } else {
                 draw_overview_account_summary(app, ui, index, fresh,
@@ -357,7 +357,7 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
                 ui.add_space(7.0);
                 if ui.small_button(RichText::new(tr("Setup needed")).color(WARN)).clicked() {
                     app.select_workspace_account(index);
-                    app.panel_tab = PanelTab::Accounts;
+                    app.workspace.panel_tab = PanelTab::Accounts;
                 }
             }
             if idle_warning {
@@ -992,7 +992,7 @@ pub(super) fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, ind
     let mut entries=history.days.iter().collect::<Vec<_>>();
     entries.sort_by(|a,b|b.day.cmp(&a.day).then_with(||a.hunt.cmp(&b.hunt)));
     let total_entries=entries.len();
-    let displayed_entries=total_entries.min(app.history_rows_limit);
+    let displayed_entries=total_entries.min(app.workspace.history_rows_limit);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(tr("Hunt activity")).size(13.0).strong().color(TEXT));
         ui.label(RichText::new(format!("{} / {} {}", displayed_entries,
@@ -1045,7 +1045,7 @@ pub(super) fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, ind
         });
     if displayed_entries<total_entries {
         if ui.small_button(tr("Show 100 more hunt-days")).clicked() {
-            app.history_rows_limit=app.history_rows_limit.saturating_add(100);
+            app.workspace.history_rows_limit=app.workspace.history_rows_limit.saturating_add(100);
         }
     }
     ui.add_space(7.0);

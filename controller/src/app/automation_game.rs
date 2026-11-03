@@ -4,7 +4,7 @@ use super::{automation_badge, draw_native_missing_panel, egui, format_number,
     PanelTab, RichText, DIM, MUTED, PANEL, PANEL_ALT, TEXT, WARN};
 
 pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    let index = app.automation_account;
+    let index = app.workspace.automation_account;
     let Some(native) = app.games[index].native.as_ref() else {
         draw_native_missing_panel(app,ui,Some(index),
             tr("Start this account to manage game settings"));
@@ -153,8 +153,8 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
             .size(11.0).color(MUTED));
         if ui.small_button(tr("Open restock on Overview")).clicked() {
             app.restock_open[index] = true;
-            app.selected_details = None;
-            app.panel_tab = PanelTab::Overview;
+            app.workspace.selected_details = None;
+            app.workspace.panel_tab = PanelTab::Overview;
         }
     });
 }

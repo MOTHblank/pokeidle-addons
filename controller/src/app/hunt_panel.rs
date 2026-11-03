@@ -1182,8 +1182,8 @@ fn draw_atlas_view_controls(app:&mut ControllerApp,ui:&mut egui::Ui){
             (HuntSubtab::Session,"Session",tr("Recorded battle rewards and history")),
             (HuntSubtab::Compare,tr("Compare"),tr("Compare all four accounts")),
         ]{
-            if workspace_tab_button(ui,label,app.hunt_subtab==tab,hint).clicked(){
-                app.hunt_subtab=tab;
+            if workspace_tab_button(ui,label,app.workspace.hunt_subtab==tab,hint).clicked(){
+                app.workspace.hunt_subtab=tab;
             }
         }
     });
@@ -1331,7 +1331,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
             let ui=&mut columns[*index%count];
             ui.push_id(("atlas-compare",index),|ui|{
                 egui::Frame::new().fill(PANEL)
-                    .stroke(Stroke::new(1.0,if *index==app.hunt_account{
+                    .stroke(Stroke::new(1.0,if *index==app.workspace.hunt_account{
                         ACCENT
                     }else{BORDER}))
                     .corner_radius(10.0).inner_margin(egui::Margin::same(13))
@@ -1345,7 +1345,7 @@ fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                             ui.colored_label(color,format!("● {activity}"));
                             if ui.small_button(tr("Open Atlas →")).clicked(){
                                 app.select_workspace_account(*index);
-                                app.hunt_subtab=HuntSubtab::Explorer;
+                                app.workspace.hunt_subtab=HuntSubtab::Explorer;
                             }
                         });
                         let current=view.hunts.iter().find(|h|
@@ -2100,7 +2100,7 @@ fn draw_atlas_explorer(
 /// Per-account modeling preference. The controller never sends this flag to
 /// the game; users tick it only when their Pokémon actually has AoE.
 fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
-    let index=app.hunt_account;
+    let index=app.workspace.hunt_account;
     let account_name=app.account_name(app.games[index].profile);
     let mut aoe_enabled=app.ui_options.atlas_aoe_enabled[index];
     egui::Frame::new().fill(PANEL_ALT)
@@ -2125,9 +2125,9 @@ fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
 }
 
 pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    if app.hunt_subtab==HuntSubtab::Explorer {
+    if app.workspace.hunt_subtab==HuntSubtab::Explorer {
         egui::ScrollArea::vertical()
-            .id_salt(("hunt-atlas-explorer-page",app.hunt_account))
+            .id_salt(("hunt-atlas-explorer-page",app.workspace.hunt_account))
             .auto_shrink([false,false])
             .show(ui,|ui|{
                 ui.set_min_width(ui.available_width());
@@ -2154,7 +2154,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     draw_atlas_view_controls(app,ui);
     draw_atlas_aoe_checkbox(app,ui);
     ui.add_space(6.0);
-    if app.hunt_subtab==HuntSubtab::Compare {
+    if app.workspace.hunt_subtab==HuntSubtab::Compare {
         egui::ScrollArea::vertical()
             .id_salt("hunt-atlas-all-accounts")
             .auto_shrink([false,true]).show(ui,|ui|{
@@ -2177,7 +2177,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
     ui.add_space(6.0);
 
-    let index=app.hunt_account;
+    let index=app.workspace.hunt_account;
     let Some(native)=app.games[index].native.as_ref() else {
         egui::Frame::new().fill(PANEL)
             .stroke(Stroke::new(1.0,BORDER))
@@ -2202,10 +2202,10 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             app.launch_one(app.games[index].profile);
                         }
                     } else if ui.button(tr("Enable account")).clicked(){
-                        app.panel_tab=PanelTab::Accounts;
+                        app.workspace.panel_tab=PanelTab::Accounts;
                     }
                     if ui.small_button(tr("Account settings")).clicked(){
-                        app.panel_tab=PanelTab::Accounts;
+                        app.workspace.panel_tab=PanelTab::Accounts;
                     }
                 });
             });
@@ -2268,9 +2268,9 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
     }
     ui.add_space(6.0);
-    if app.hunt_subtab!=HuntSubtab::Current &&
+    if app.workspace.hunt_subtab!=HuntSubtab::Current &&
         draw_atlas_context(ui,&view,live){
-        app.hunt_subtab=HuntSubtab::Current;
+        app.workspace.hunt_subtab=HuntSubtab::Current;
     }
     ui.add_space(6.0);
     draw_atlas_combat_profile(ui,&view,&app.hunt_estimate_cache[index],
@@ -2281,7 +2281,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     // Explorer uses one full-page ScrollArea; its result panes now size to
     // their contents rather than relying on available_height().
-    if app.hunt_subtab==HuntSubtab::Explorer{
+    if app.workspace.hunt_subtab==HuntSubtab::Explorer{
         draw_atlas_explorer(ui,&view,native,live,index,
             app.ui_options.atlas_aoe_enabled[index],
             app.hunt_reference.as_deref(),&mut app.atlas_filters[index],
@@ -2290,10 +2290,10 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             &mut app.hunt_action_error[index]);
         return;
     }
-    egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.hunt_subtab as u8))
+    egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.workspace.hunt_subtab as u8))
         .auto_shrink([false,true]).show(ui,|ui|{
             ui.set_min_width(ui.available_width());
-            match app.hunt_subtab {
+            match app.workspace.hunt_subtab {
                 HuntSubtab::Explorer | HuntSubtab::Compare => {}
                 HuntSubtab::Models => {
                     let history=native.history_snapshot();
@@ -2605,10 +2605,10 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             }
                         }
                         if ui.small_button(tr("Open persistent history")).clicked(){
-                            app.selected_details=Some(index);
-                            app.dashboard_show_history=true;
-                            app.history_rows_limit=100;
-                            app.panel_tab=PanelTab::Overview;
+                            app.workspace.selected_details=Some(index);
+                            app.workspace.dashboard_show_history=true;
+                            app.workspace.history_rows_limit=100;
+                            app.workspace.panel_tab=PanelTab::Overview;
                         }
                     });
                     ui.add_space(10.0);
@@ -2720,14 +2720,14 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ]{
                             if ui.selectable_value(&mut app.hunt_ranking,ranking,label)
                                 .changed(){
-                                app.hunt_page=0;
+                                app.workspace.hunt_page=0;
                             }
                         }
                     });
                     ui.horizontal_wrapped(|ui|{
                         if ui.add(egui::TextEdit::singleline(&mut app.hunt_query)
                             .hint_text(tr("Hunt, area, region or species")).desired_width(220.0)).changed(){
-                            app.hunt_page=0;
+                            app.workspace.hunt_page=0;
                         }
                         let regions=atlas_locations(hunts,None);
                         egui::ComboBox::from_id_salt("hunt-region")
@@ -2736,10 +2736,10 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             }else{app.hunt_region.clone()})
                             .show_ui(ui,|ui|{
                                 if ui.selectable_value(&mut app.hunt_region,
-                                    String::new(),tr("All areas")).changed(){app.hunt_page=0;}
+                                    String::new(),tr("All areas")).changed(){app.workspace.hunt_page=0;}
                                 for region in regions{
                                     if ui.selectable_value(&mut app.hunt_region,
-                                        region.clone(),region.as_str()).changed(){app.hunt_page=0;}
+                                        region.clone(),region.as_str()).changed(){app.workspace.hunt_page=0;}
                                 }
                             });
                         if let Some(reference)=app.hunt_reference.as_deref(){
@@ -2753,16 +2753,16 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 }else{app.hunt_type.clone()})
                                 .show_ui(ui,|ui|{
                                     if ui.selectable_value(&mut app.hunt_type,
-                                        String::new(),tr("All types")).changed(){app.hunt_page=0;}
+                                        String::new(),tr("All types")).changed(){app.workspace.hunt_page=0;}
                                     for kind in types{
                                         if ui.selectable_value(&mut app.hunt_type,
-                                            kind.to_owned(),atlas_type_name(kind)).changed(){app.hunt_page=0;}
+                                            kind.to_owned(),atlas_type_name(kind)).changed(){app.workspace.hunt_page=0;}
                                     }
                                 });
                         }
                         if ui.small_button(tr("Clear filters")).clicked(){
                             app.hunt_query.clear();app.hunt_region.clear();
-                            app.hunt_type.clear();app.hunt_page=0;
+                            app.hunt_type.clear();app.workspace.hunt_page=0;
                         }
                     });
                     let reference=app.hunt_reference.as_deref();
@@ -2774,7 +2774,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ranked.len(),tr("matching hunts"),tr("only current hunt has measured rates")
                     )).size(11.0).color(MUTED));
                     if !live {ui.label(tr("Rankings disabled while account data is stale."));}
-                    let visible=atlas_pager(ui,&mut app.hunt_page,ranked.len(),16);
+                    let visible=atlas_pager(ui,&mut app.workspace.hunt_page,ranked.len(),16);
                     ui.add_space(7.0);
                     for (offset,result) in ranked.iter().skip(visible.start)
                         .take(visible.end-visible.start).enumerate(){
@@ -2796,7 +2796,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     app.hunt_query.clear();
                                     app.hunt_region.clear();
                                     app.hunt_type.clear();
-                                    app.hunt_page=0;
+                                    app.workspace.hunt_page=0;
                                 }
                             });
                     }

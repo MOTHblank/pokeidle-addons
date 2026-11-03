@@ -12,16 +12,16 @@ pub(super) fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
             (AutomationSection::Market, "Market", "Automatic buying rules and Snatch"),
         ] {
             if workspace_tab_button(ui, label,
-                app.automation_section == section, hint).clicked() {
-                app.automation_section = section;
+                app.workspace.automation_section == section, hint).clicked() {
+                app.workspace.automation_section = section;
             }
         }
     });
     ui.add_space(7.0);
     ui.separator();
-    let index = app.automation_account;
+    let index = app.workspace.automation_account;
     egui::ScrollArea::vertical()
-        .id_salt(("automation-page", index, app.automation_section as u8))
+        .id_salt(("automation-page", index, app.workspace.automation_section as u8))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -30,8 +30,8 @@ pub(super) fn draw_automation_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 }
 
 fn draw_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    let index = app.automation_account;
-    match app.automation_section {
+    let index = app.workspace.automation_account;
+    match app.workspace.automation_section {
         AutomationSection::Capture => {
             if app.games[index].native.is_some() {
                 draw_native_automation(app, ui, index);

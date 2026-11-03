@@ -110,8 +110,8 @@ pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui
                     ui.label(RichText::new(text).size(10.0).color(MUTED));
                 }
                 if ui.small_button(tr("Open Hunt Atlas")).clicked() {
-                    app.hunt_account = index;
-                    app.panel_tab = PanelTab::Hunts;
+                    app.workspace.hunt_account = index;
+                    app.workspace.panel_tab = PanelTab::Hunts;
                 }
             });
             ui.columns(3, |cols| {
@@ -262,8 +262,8 @@ pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui
     // Automation has its own sidebar page. Keep the dashboard for game data.
     ui.add_space(7.0);
     if ui.small_button(tr("Open Automation")).clicked() {
-        app.automation_account = index;
-        app.panel_tab = PanelTab::Automation;
+        app.workspace.automation_account = index;
+        app.workspace.panel_tab = PanelTab::Automation;
     }
 }
 

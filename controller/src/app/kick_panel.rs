@@ -557,17 +557,17 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         for index in 0..4 {
             let account = &app.accounts[index];
-            let selected = app.kick_selected_account == index;
+            let selected = app.workspace.kick_selected_account == index;
             let active = app.kick_monitors[index].is_some();
             let title = format!("{}{}", account.name, if active { " ●" } else { "" });
             if ui.selectable_label(selected, title).clicked() {
-                app.kick_selected_account = index;
+                app.workspace.kick_selected_account = index;
             }
         }
     });
     ui.add_space(10.0);
 
-    let index = app.kick_selected_account.min(3);
+    let index = app.workspace.kick_selected_account.min(3);
     let profile = GameProfile::from_index(index).expect("known Kick profile");
     let login_status = crate::native_kick_login::status(profile);
     if matches!(login_status, crate::native_kick_login::LoginStatus::Done) {

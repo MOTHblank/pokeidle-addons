@@ -8,17 +8,17 @@ use super::{egui, kick_panel, localize_status, pt_br, status_chip, tr, tr_dynami
 /// account. All indicators come from the current game and Twitch connection.
 pub(super) fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
-        if ui.selectable_label(app.accounts_section == AccountsSection::Profiles,
+        if ui.selectable_label(app.workspace.accounts_section == AccountsSection::Profiles,
             if pt_br() { "Perfis PokéIdle" } else { "PokéIdle profiles" }).clicked() {
-            app.accounts_section = AccountsSection::Profiles;
+            app.workspace.accounts_section = AccountsSection::Profiles;
         }
-        if ui.selectable_label(app.accounts_section == AccountsSection::Kick,
+        if ui.selectable_label(app.workspace.accounts_section == AccountsSection::Kick,
             "Kick").clicked() {
-            app.accounts_section = AccountsSection::Kick;
+            app.workspace.accounts_section = AccountsSection::Kick;
         }
     });
     ui.add_space(12.0);
-    if app.accounts_section == AccountsSection::Kick {
+    if app.workspace.accounts_section == AccountsSection::Kick {
         kick_panel::draw_kick_panel(app, ui);
         return;
     }
@@ -186,8 +186,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 .size(10.0).color(if kick_running { GOOD } else { MUTED }));
             if ui.small_button(if pt_br() { "Gerenciar Kick →" }
                                else { "Manage Kick →" }).clicked() {
-                app.kick_selected_account = index;
-                app.accounts_section = AccountsSection::Kick;
+                app.workspace.kick_selected_account = index;
+                app.workspace.accounts_section = AccountsSection::Kick;
             }
         });
 

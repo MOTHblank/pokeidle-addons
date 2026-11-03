@@ -35,7 +35,7 @@ impl ControllerApp {
         // overrides that selection without clearing the open details panel.
         for (index, slot) in self.games.iter().enumerate() {
             let pace = monitor_pace_for_slot(
-                self.selected_details, index, self.accounts[index].enabled, background
+                self.workspace.selected_details, index, self.accounts[index].enabled, background
             );
             if let Some(monitor) = slot.monitor.as_ref() {
                 monitor.set_pace(pace);
@@ -45,16 +45,16 @@ impl ControllerApp {
 
     /// Switching accounts changes the workspace selection, not a live session.
     pub(super) fn select_workspace_account(&mut self, index: usize) {
-        if index >= self.games.len() || index == self.hunt_account { return; }
+        if index >= self.games.len() || index == self.workspace.hunt_account { return; }
         self.save_dirty_account_names();
-        self.history_rows_limit = 100;
-        self.dashboard_show_history = false;
-        self.hunt_account = index;
-        if self.panel_tab == PanelTab::Hunts && self.hunt_subtab == HuntSubtab::Compare {
-            self.hunt_subtab = HuntSubtab::Explorer;
+        self.workspace.history_rows_limit = 100;
+        self.workspace.dashboard_show_history = false;
+        self.workspace.hunt_account = index;
+        if self.workspace.panel_tab == PanelTab::Hunts && self.workspace.hunt_subtab == HuntSubtab::Compare {
+            self.workspace.hunt_subtab = HuntSubtab::Explorer;
         }
-        self.automation_account = index;
-        self.hunt_page = 0;
+        self.workspace.automation_account = index;
+        self.workspace.hunt_page = 0;
     }
 
     /// Account edits are buffered until focus is lost, the selected account
