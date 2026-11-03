@@ -90,7 +90,7 @@ mod capture_handoff_tests {
         let (release_tx,release_rx)=mpsc::sync_channel(0);
         let writer_generation=Arc::clone(&generation);
         let writer=std::thread::spawn(move || {
-            capture_write_transaction(&writer_generation,3,|| {
+            capture_write_transaction(GameProfile::Game1,&writer_generation,3,|| {
                 inside_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
                 Ok(())
@@ -102,7 +102,7 @@ mod capture_handoff_tests {
         let stop_generation=Arc::clone(&generation);
         let stopping=std::thread::spawn(move || {
             starting_tx.send(()).unwrap();
-            invalidate_capture_generation(&stop_generation);
+            invalidate_capture_generation(GameProfile::Game1,&stop_generation);
             done_tx.send(()).unwrap();
         });
         starting_rx.recv().unwrap();
@@ -114,7 +114,7 @@ mod capture_handoff_tests {
         done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         stopping.join().unwrap();
         assert_eq!(generation.load(Ordering::Acquire),4);
-        assert!(capture_write_transaction::<()>(&generation,3,||
+        assert!(capture_write_transaction::<()>(GameProfile::Game1,&generation,3,||
             panic!("an old session must never enter the vault writer")).is_err());
     }
     #[test]
@@ -229,18 +229,20 @@ fn capture_generation_is_current(
 // The session boundary and the entire encrypted read/modify/write transaction
 // share the same lock. A UI invalidation cannot overtake a blocked keyring
 // write, then allow that old write to finish against the replacement session.
-pub fn invalidate_capture_generation(generation:&std::sync::atomic::AtomicU64) {
-    let _guard=PREFERENCE_WRITE.lock().unwrap_or_else(|error|error.into_inner());
+pub fn invalidate_capture_generation(profile:GameProfile,
+    generation:&std::sync::atomic::AtomicU64) {
+    let _guard=preference_write(profile).lock().unwrap_or_else(|error|error.into_inner());
     generation.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
 }
 fn capture_write_transaction<T>(
+    profile:GameProfile,
     generation:&std::sync::atomic::AtomicU64, expected:u64,
     write:impl FnOnce()->Result<T,String>
 )->Result<T,String> {
     if !capture_generation_is_current(generation,expected) {
         return Err("Capture settings save canceled: session changed".into());
     }
-    let _guard=PREFERENCE_WRITE.lock()
+    let _guard=preference_write(profile).lock()
         .map_err(|_|"Native settings writer unavailable".to_owned())?;
     if !capture_generation_is_current(generation,expected) {
         return Err("Capture settings save canceled: session changed".into());
@@ -251,7 +253,7 @@ pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
     generation:&std::sync::atomic::AtomicU64, expected:u64) -> Result<(),String> {
     config.validate()?;
-    capture_write_transaction(generation,expected,|| {
+    capture_write_transaction(profile,generation,expected,|| {
         let Some(mut saved)=load(profile)? else {
             return Err("Native credential cache unavailable; authenticate again to save preferences".into());
         };
