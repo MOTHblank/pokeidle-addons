@@ -65,6 +65,7 @@ pub struct BossLoot {
 #[derive(Clone, Debug, Default)]
 pub struct BossView {
     pub catalog_ready: bool,
+    pub state_known: bool,
     pub catalog: Vec<BossEntry>,
     pub auto: bool,
     pub auto_key: Option<String>,
@@ -229,6 +230,9 @@ impl BossManager {
         if !self.view.catalog_ready {
             return Err("Waiting for the server boss catalog".into());
         }
+        if !self.view.state_known {
+            return Err("Waiting for authoritative server boss state".into());
+        }
         let boss = self.view.catalog.iter().find(|b| b.key == key)
             .ok_or_else(|| "This boss does not have a playable server arena".to_owned())?;
         if hunt.trainer_level.unwrap_or(0) < boss.min_level {
@@ -311,6 +315,7 @@ impl BossManager {
             }
         }
         if let Some(boss) = frame.get("estado").and_then(|state| state.get("boss")) {
+            self.view.state_known = boss.is_object();
             self.view.auto = boss.get("auto").and_then(Value::as_bool).unwrap_or(false);
             self.view.auto_key = boss.get("autoKey").and_then(Value::as_str).map(str::to_owned);
             self.view.arena = boss.get("arena").and_then(|arena| arena.get("key"))
@@ -485,6 +490,7 @@ impl BossManager {
             }
         }
         self.view.catalog_ready = false;
+        self.view.state_known = false;
         self.view.catalog.clear();
         self.view.auto = false;
         self.view.auto_key = None;
@@ -499,6 +505,14 @@ impl BossManager {
         if !trip.recovering { return; }
         trip.recovering = false;
         self.view.warning = None;
+        if !self.view.state_known {
+            self.view.warning = Some(
+                "Server boss state unavailable after reconnect; return requires manual review".into());
+            self.trip = None;
+            self.view.original_hunt = None;
+            self.view.phase = "Boss trip interrupted".into();
+            return;
+        }
         if self.view.auto {
             if self.view.auto_key.as_deref() != Some(trip.key.as_str()) {
                 self.view.warning = Some(
@@ -566,7 +580,7 @@ mod tests {
             "key":"bronze","nome":"Bronze Boss",
             "minNivelTreinador":20,
             "entrada":{"itemId":500,"qtd":2,"nome":"Bronze Boss Token"}
-        }]}));
+        }],"estado":{"boss":{"auto":false,"arena":null}}}));
         manager
     }
     fn hunt() -> HuntView {
