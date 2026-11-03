@@ -42,7 +42,7 @@ mod session_actions;
 use localization::{pt_br, localize_status, tr_dynamic, tr};
 use workspace_nav::{draw_header_actions, draw_account_switcher, draw_options_panel, draw_sidebar, draw_instance_section};
 use workspace_state::WorkspaceState;
-use overview_panel::{collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
+use overview_panel::{OverviewAccountSample, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
 use automation_panel::draw_automation_panel;
 use automation_game::draw_game_automation_contents;
 use automation_details::draw_game_details;
@@ -83,6 +83,25 @@ static PT_BR: AtomicBool = AtomicBool::new(true);
 const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
 const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
 const AUTH_PROGRESS_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
+// Display-only data can be sampled together; native automation and session
+// transitions have their own workers/wake-ups and are not paced by this timer.
+const UI_NATIVE_REPAINT_INTERVAL: Duration = Duration::from_secs(2);
+const UI_MULTI_ACCOUNT_REPAINT_INTERVAL: Duration = Duration::from_secs(4);
+
+fn ui_repaint_interval(
+    background: bool,
+    auth_in_progress: bool,
+    native_detail: bool,
+    multi_account_overview: bool,
+) -> Duration {
+    // Login fallback needs a short UI heartbeat because BiDi may become
+    // ready without a channel notification. Never batch this case.
+    if auth_in_progress { AUTH_PROGRESS_REPAINT_INTERVAL }
+    else if background { UI_BACKGROUND_REPAINT_INTERVAL }
+    else if multi_account_overview { UI_MULTI_ACCOUNT_REPAINT_INTERVAL }
+    else if native_detail { UI_NATIVE_REPAINT_INTERVAL }
+    else { UI_REPAINT_INTERVAL }
+}
 
 // eframe/egui reports native window focus via ViewportInfo. Treat missing
 // focus information as foreground instead of disabling live monitoring on
@@ -298,19 +317,32 @@ impl GameSlot {
     }
 
     fn health(&self) -> Health {
+        self.health_with_native(None)
+    }
+
+    // Overview builds a single native sample per enabled account and shares it
+    // between totals, health projection and cards. Other callers use the normal
+    // live snapshots rather than retaining UI state in the native worker.
+    fn health_with_native(
+        &self,
+        native_sample: Option<(&crate::native_background::NativeSnapshot, &HuntView)>,
+    ) -> Health {
         if self.handoff_closing {
             let mut health = Health::default();
             health.state = "Connecting".into();
             return health;
         }
         if let Some(native) = self.native.as_ref() {
-            let state = native.snapshot();
+            let owned = native_sample.is_none().then(|| (native.snapshot(), native.hunt_snapshot()));
+            let (state, view) = native_sample.unwrap_or_else(|| {
+                let (state, view) = owned.as_ref().expect("native sample available");
+                (state, view)
+            });
             let mut health = Health::default();
             health.state = if state.phase == "Online" { "Running".into() }
                 else { state.phase.clone() };
             // Project the same authoritative native account domains used by
             // Hunts / Inventory. A Firefox Bridge snapshot is not required.
-            let view = native.hunt_snapshot();
             health.activity = if view.in_center { "Center".into() }
                 else if view.hunt_slug.is_some() { "Hunting".into() }
                 else { "Online".into() };
@@ -374,7 +406,7 @@ impl GameSlot {
             health.orbs = view.orbs.or(state.orbs).unwrap_or_default();
             health.last_successful_probe_at = state.last_received;
             health.last_heartbeat_at = state.last_received;
-            health.last_error = state.error;
+            health.last_error = state.error.clone();
             return health;
         }
         // The launcher process can exit while the exact-profile Firefox process
@@ -767,6 +799,25 @@ impl<T> WakeSender<T> {
 fn wake_channel<T>(ctx: &egui::Context) -> (WakeSender<T>, Receiver<T>) {
     let (sender, receiver) = mpsc::channel();
     (WakeSender { sender, ctx: ctx.clone() }, receiver)
+}
+
+#[cfg(test)]
+mod ui_repaint_tests {
+    use super::*;
+
+    #[test]
+    fn multi_account_overview_batches_nonessential_redraws() {
+        assert_eq!(ui_repaint_interval(false, false, true, true), Duration::from_secs(4));
+        assert_eq!(ui_repaint_interval(false, false, true, false), Duration::from_secs(2));
+        assert_eq!(ui_repaint_interval(false, false, false, false), Duration::from_secs(3));
+    }
+
+    #[test]
+    fn authentication_and_background_pacing_take_precedence() {
+        assert_eq!(ui_repaint_interval(false, true, true, true), Duration::from_secs(1));
+        assert_eq!(ui_repaint_interval(true, false, true, true), Duration::from_secs(30));
+        assert_eq!(ui_repaint_interval(true, true, true, true), Duration::from_secs(1));
+    }
 }
 
 #[cfg(test)]
@@ -1226,8 +1277,8 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
-        // Live native panels publish snapshots at one-second cadence.
-        // Repaint only while visible; tray/background retains the cheap timer.
+        // Native workers publish state independently of the display timer.
+        // Batch normal redraws; tray/background retains its cheaper cadence.
         let background = self.controller_in_background(ui.ctx());
         // Firefox's BiDi monitor may become ready without emitting a channel
         // reply. Give temporary sign-ins a lightweight progress heartbeat even
@@ -1238,12 +1289,15 @@ impl eframe::App for ControllerApp {
         let native_detail = self.games.iter().any(|game| game.native.is_some())
             && (matches!(self.workspace.panel_tab, PanelTab::Hunts | PanelTab::Automation)
                 || self.workspace.panel_tab == PanelTab::Overview);
-        ui.ctx().request_repaint_after(
-            if auth_in_progress { AUTH_PROGRESS_REPAINT_INTERVAL }
-            else if background { UI_BACKGROUND_REPAINT_INTERVAL }
-            else if native_detail { Duration::from_secs(1) }
-            else { UI_REPAINT_INTERVAL }
-        );
+        // Multiple overview cards are costly to rebuild; one batched sample
+        // every four seconds is enough while their native workers run normally.
+        // Direct user interactions still repaint immediately through egui.
+        let multi_account_overview = self.workspace.panel_tab == PanelTab::Overview
+            && self.workspace.selected_details.is_none()
+            && self.accounts.iter().filter(|account| account.enabled).take(2).count() == 2;
+        ui.ctx().request_repaint_after(ui_repaint_interval(
+            background, auth_in_progress, native_detail, multi_account_overview,
+        ));
 
         draw_sidebar(self, ui);
 
