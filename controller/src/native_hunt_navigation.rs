@@ -209,6 +209,19 @@ mod tests {
         }
     }
     #[test]
+    fn center_dispatch_is_distinct_from_queued_intent() {
+        let at = Instant::now();
+        let state = view();
+        let mut nav = HuntNavigator::default();
+        nav.center(at);
+        assert!(nav.center_pending());
+        assert!(!nav.center_command_sent());
+        assert!(matches!(nav.next_action(&state, at), Some(GameCommand::Center)));
+        assert!(nav.center_command_sent());
+        nav.cancel();
+        assert!(!nav.center_command_sent());
+    }
+    #[test]
     fn hunt_select_waits_until_server_combat_timer_expires() {
         let at = Instant::now();
         let mut nav = HuntNavigator::default();
