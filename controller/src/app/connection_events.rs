@@ -3,6 +3,12 @@
 //! never determines when a native/Firefox authentication stage completes.
 use super::*;
 
+// Old native-session acknowledgements are never authority for a new
+// authenticated socket, even when both belong to the same account slot.
+fn capture_save_belongs_to_session(event:&CaptureSavedEvent,current:u64)->bool {
+    event.generation==current
+}
+
 // Restock acknowledgements update only the restock fields of an open Capture
 // editor. This preserves unsaved capture priorities, reserves and timing.
 fn reconcile_capture_draft(
@@ -73,7 +79,8 @@ impl ControllerApp {
             self.capture_save_busy[event.index]=false;
             // Do not apply an old save to a newly adopted native socket or
             // acknowledge it by clearing a newer editor's pending changes.
-            if event.generation!=self.capture_generations[event.index].load(Ordering::Acquire) {
+            if !capture_save_belongs_to_session(&event,
+                self.capture_generations[event.index].load(Ordering::Acquire)) {
                 // A pending restock selection can be rebased on the new
                 // session's confirmed preferences by the regular save queue.
                 if event.origin==CaptureSaveOrigin::Restock &&
@@ -526,6 +533,16 @@ impl ControllerApp {
 #[cfg(test)]
 mod capture_save_reconciliation_tests {
     use super::*;
+
+    #[test]
+    fn old_session_acknowledgement_does_not_belong_to_reauthenticated_slot() {
+        let event=CaptureSavedEvent {
+            index:2,generation:7,config:CatchSettings::default(),
+            origin:CaptureSaveOrigin::Toggle,result:Ok(())
+        };
+        assert!(capture_save_belongs_to_session(&event,7));
+        assert!(!capture_save_belongs_to_session(&event,8));
+    }
 
     #[test]
     fn restock_save_keeps_unsaved_capture_edits_and_updates_only_restock() {
