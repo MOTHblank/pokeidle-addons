@@ -932,15 +932,16 @@ mod dashboard_overview_tests {
 pub(super) fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     ui.label(RichText::new(tr("Battle history")).size(14.0)
         .strong().color(TEXT));
-    let profile=app.runtimes[index].game.profile;
-    let history=if let Some(native)=app.runtimes[index].game.native.as_ref() {
-        app.runtimes[index].hunt.offline_history=None;
+    let runtime = &mut app.runtimes[index];
+    let profile=runtime.game.profile;
+    let history=if let Some(native)=runtime.game.native.as_ref() {
+        runtime.hunt.offline_history=None;
         native.history_snapshot()
     } else {
         if ui.small_button(tr("Reload saved history")).clicked() {
-            app.runtimes[index].hunt.offline_history=None;
+            runtime.hunt.offline_history=None;
         }
-        app.runtimes[index].hunt.offline_history
+        runtime.hunt.offline_history
             .get_or_insert_with(||crate::native_history::load_offline(profile)).clone()
     };
     if !history.owner.is_empty() {
