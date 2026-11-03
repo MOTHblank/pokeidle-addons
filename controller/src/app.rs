@@ -68,7 +68,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool,AtomicU64, Ordering};
 
 use std::sync::Arc;
 #[cfg(windows)]
@@ -964,7 +964,7 @@ pub struct ControllerApp {
     cached_native_rx: Receiver<CachedNativeEvent>,
     cached_native_busy: [bool; 4],
     // Every asynchronous login stage carries the ID of its launch attempt.
-    // Stop/restart invalidates it without waiting for blocked OS keyrings.
+    // Stop/restart invalidates it before another launch may be adopted.
     auth_generations: [Arc<AtomicU64>; 4],
     require_browser_login: [bool; 4],
     games: [GameSlot; 4],
