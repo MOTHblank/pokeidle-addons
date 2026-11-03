@@ -758,6 +758,8 @@ mod tests {
             include_str!("overview_panel.rs"),
             include_str!("automation_panel.rs"),
             include_str!("automation_game.rs"),
+            include_str!("automation_manager.rs"),
+            include_str!("automation_details.rs"),
             include_str!("automation_capture.rs"),
             include_str!("automation_restock.rs"),
             include_str!("automation_widgets.rs"),
