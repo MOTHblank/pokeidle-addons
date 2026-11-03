@@ -43,9 +43,9 @@ pub(super) fn collect_overview_totals(
     for &index in profiles {
         let sample = samples[index].as_ref().expect("enabled account sampled");
         let health = &sample.health;
-        let running = app.games[index].is_running();
+        let running = app.runtimes[index].game.is_running();
         if !running || !health.logged_in || !health.bridge_snapshot_ok ||
-            (app.games[index].native.is_none() && !health.telemetry_is_fresh()) {
+            (app.runtimes[index].game.native.is_none() && !health.telemetry_is_fresh()) {
             continue;
         }
         result.online += 1;
@@ -67,7 +67,7 @@ pub(super) fn collect_overview_totals(
                 result.gem_balances += 1;
             }
         } else {
-            if let Some(rate) = app.xp_rates[index].observe(health) {
+            if let Some(rate) = app.runtimes[index].telemetry.xp_rates.observe(health) {
                 result.xp_h += rate;
                 result.xp_samples += 1;
             }
@@ -161,8 +161,8 @@ pub(super) fn draw_native_missing_panel(
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
             ui.label(RichText::new(purpose).size(13.0).strong().color(TEXT));
             if let Some(index)=selected {
-                let profile=app.games[index].profile;
-                let running=app.games[index].is_running();
+                let profile=app.runtimes[index].game.profile;
+                let running=app.runtimes[index].game.is_running();
                 let name=app.account_name(profile);
                 ui.label(RichText::new(format!("{} · {}",name,
                     if running { tr("Waiting for sign-in") }
@@ -211,9 +211,9 @@ pub(super) fn draw_overview_card(
     sample: &OverviewAccountSample,
 ) {
     ui.set_width(width);
-    let profile = app.games[index].profile;
+    let profile = app.runtimes[index].game.profile;
     let health = &sample.health;
-    let running = app.games[index].is_running();
+    let running = app.runtimes[index].game.is_running();
     let native_view = sample.view.as_ref();
     let account_name = native_view
         .and_then(|view| view.account_nick.as_deref())
@@ -223,21 +223,21 @@ pub(super) fn draw_overview_card(
     let xp_per_hour = if let Some(view) = native_view {
         if view.measurements.valid_trainer { Some(view.measurements.trainer_xp_h) } else { None }
     } else if running {
-        app.xp_rates[index].observe(health)
+        app.runtimes[index].telemetry.xp_rates.observe(health)
     } else {
-        app.xp_rates[index] = XpRateTracker::default();
+        app.runtimes[index].telemetry.xp_rates = XpRateTracker::default();
         None
     };
     // Bridge inactivity checks require Firefox telemetry; native battle
     // receipts are assessed independently by the Hunts panel.
-    let idle_warning = if app.games[index].native.is_some() {
-        app.idle_progress[index] = IdleProgressTracker::default();
+    let idle_warning = if app.runtimes[index].game.native.is_some() {
+        app.runtimes[index].telemetry.idle_progress = IdleProgressTracker::default();
         false
     } else { app.idle_warning_for(index, health) };
     // Only authentication/setup issues belong on the dashboard.
     // Only actual account sign-in problems appear here.
-    let needs_setup = !app.account_setup[index].setup_complete
-        && app.games[index].native.is_none();
+    let needs_setup = !app.runtimes[index].telemetry.account_setup.setup_complete
+        && app.runtimes[index].game.native.is_none();
     // The authenticated game socket supplies the data directly. Browser
     // sampling intervals must not hide its last confirmed snapshot.
     let fresh = running && (health.telemetry_is_fresh()
@@ -247,7 +247,7 @@ pub(super) fn draw_overview_card(
     let repair_available = monitor_repair_available(
         running,
         health.last_error.as_deref(),
-        app.games[index].orphaned_pid.is_some() && app.games[index].monitor.is_none(),
+        app.runtimes[index].game.orphaned_pid.is_some() && app.runtimes[index].game.monitor.is_none(),
     );
 
     egui::Frame::new()
@@ -273,7 +273,7 @@ pub(super) fn draw_overview_card(
             ui.add_space(3.0);
             ui.horizontal_wrapped(|ui| {
                 status_badge(ui, health, running);
-                ui.label(RichText::new(if app.games[index].native.is_some() {
+                ui.label(RichText::new(if app.runtimes[index].game.native.is_some() {
                     tr("PokéIdle")
                 } else if running { "Firefox" } else { tr("Offline") })
                     .size(10.0).color(DIM));
@@ -357,7 +357,7 @@ pub(super) fn draw_overview_card(
                 // Overview reports the saved Auto Catch switch, NOT temporary
                 // throw readiness, inventory state or receipt timing. Those
                 // operational diagnostics belong exclusively to Automation.
-                let catch_enabled = app.games[index].native.as_ref()
+                let catch_enabled = app.runtimes[index].game.native.as_ref()
                     .map(|native|native.capture_settings().enabled)
                     .unwrap_or(health.autocatch_on);
                 automation_badge(
@@ -410,8 +410,8 @@ pub(super) fn draw_overview_card(
             ui.horizontal_wrapped(|ui| {
                 // Native and Firefox are mutually exclusive launch options.
                 let action = tr(if !running { "Start account" }
-                    else if app.games[index].native.is_some() { "Stop" }
-                    else if app.games[index].browser_only { "Stop Firefox" }
+                    else if app.runtimes[index].game.native.is_some() { "Stop" }
+                    else if app.runtimes[index].game.browser_only { "Stop Firefox" }
                     else { "Stop login" });
                 let (fill, stroke) = if running {
                     (BAD.linear_multiply(0.18), Stroke::new(1.0, BAD.linear_multiply(0.55)))
@@ -450,7 +450,7 @@ pub(super) fn draw_overview_card(
                 // Keep diagnostics in the account details; show only a compact status.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if let (Some(native), Some(game)) =
-                        (app.games[index].native.as_ref(), sample.native.as_ref()) {
+                        (app.runtimes[index].game.native.as_ref(), sample.native.as_ref()) {
                         let twitch = native.twitch_snapshot();
                         let online = game.phase == "Online" && twitch.phase == "Online";
                         let summary = if online {
@@ -467,18 +467,18 @@ pub(super) fn draw_overview_card(
                             twitch.phase, twitch.joined, twitch.desired
                         ));
                     } else if running {
-                        let stage = if app.games[index].browser_only {
+                        let stage = if app.runtimes[index].game.browser_only {
                             tr("Firefox running")
-                        } else if app.native_verifying[index] {
+                        } else if app.runtimes[index].session.native_verifying {
                             tr("Connecting to PokéIdle")
-                        } else if app.native_handoff_busy[index] {
+                        } else if app.runtimes[index].session.native_handoff_busy {
                             tr("Checking sign-in")
                         } else {
                             tr("Firefox login")
                         };
                         ui.add(egui::Label::new(
                             RichText::new(stage).size(10.0).color(WARN)
-                        ).truncate()).on_hover_text(tr(if app.games[index].browser_only {
+                        ).truncate()).on_hover_text(tr(if app.runtimes[index].game.browser_only {
                             "Firefox remains open until you stop this account."
                         } else {
                             "Firefox closes after sign-in. PokéIdle and Twitch keep running in the app."
@@ -486,8 +486,8 @@ pub(super) fn draw_overview_card(
                     }
                 });
             });
-            if app.games[index].native.is_none() {
-                if let Some(error) = app.native_error[index].as_deref() {
+            if app.runtimes[index].game.native.is_none() {
+                if let Some(error) = app.runtimes[index].session.native_error.as_deref() {
                     ui.add_space(5.0);
                     ui.add(egui::Label::new(
                         RichText::new(format!("{}: {}", tr("Connection error"), compact_text(&tr_dynamic(localize_status(error.to_owned())), 60)))
@@ -782,8 +782,8 @@ fn draw_overview_account_summary(
         v.measurements.valid_gold.then_some(v.measurements.gold_net_h));
     // The restock editor stages selections while the encrypted save runs.
     // Use those staged IDs immediately so the icon and count always agree.
-    let restock_selection = app.restock_drafts[index].as_ref().cloned()
-        .or_else(|| app.games[index].native.as_ref().map(|n| n.capture_settings()))
+    let restock_selection = app.runtimes[index].capture.restock_draft.as_ref().cloned()
+        .or_else(|| app.runtimes[index].game.native.as_ref().map(|n| n.capture_settings()))
         .unwrap_or_default();
     let balls = view.and_then(|v|
         selected_restock_stock(v.balls.as_ref(), restock_selection.ball_id));
@@ -932,15 +932,15 @@ mod dashboard_overview_tests {
 pub(super) fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     ui.label(RichText::new(tr("Battle history")).size(14.0)
         .strong().color(TEXT));
-    let profile=app.games[index].profile;
-    let history=if let Some(native)=app.games[index].native.as_ref() {
-        app.offline_histories[index]=None;
+    let profile=app.runtimes[index].game.profile;
+    let history=if let Some(native)=app.runtimes[index].game.native.as_ref() {
+        app.runtimes[index].hunt.offline_history=None;
         native.history_snapshot()
     } else {
         if ui.small_button(tr("Reload saved history")).clicked() {
-            app.offline_histories[index]=None;
+            app.runtimes[index].hunt.offline_history=None;
         }
-        app.offline_histories[index]
+        app.runtimes[index].hunt.offline_history
             .get_or_insert_with(||crate::native_history::load_offline(profile)).clone()
     };
     if !history.owner.is_empty() {
