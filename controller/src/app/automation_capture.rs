@@ -102,7 +102,7 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                                     crate::native_auth::set_capture_settings(profile,&next)))
                                 .unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
                             let _=tx.send(CaptureSavedEvent{
-                                index,config:next,toggle_only:true,result
+                                index,config:next,origin:CaptureSaveOrigin::Toggle,result
                             });
                         });
                     }
@@ -230,6 +230,15 @@ fn capture_ball_name(k:&str)->&'static str {
         "great"=>"Great Ball","poke"=>"Poké Ball",_=>"None"}
 }
 
+// The Capture editor owns only throwing preferences. Restock can be saved
+// separately while this editor is open, so never write its stale restock fields.
+fn copy_capture_fields(to:&mut CatchSettings, from:&CatchSettings) {
+    to.enabled=from.enabled;
+    to.priorities=from.priorities.clone();
+    to.interval_ms=from.interval_ms;
+    to.reserves=from.reserves.clone();
+}
+
 fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
     let profile=app.games[index].profile;
     let Some(native)=app.games[index].native.as_ref() else {return};
@@ -237,8 +246,12 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
         app.capture_drafts[index]=Some(native.capture_settings());
     }
     let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
-    ui.add_enabled(!app.capture_save_busy[index],
-        egui::Checkbox::new(&mut cfg.enabled,tr("Enable Auto Catch")));
+    // Freeze every editor control during the asynchronous vault write: the
+    // acknowledged snapshot can then safely replace the submitted draft.
+    let saving=app.capture_save_busy[index];
+    let mut discard_edits=false;
+    ui.add_enabled_ui(!saving,|ui|{
+    ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(tr("Throw interval")).size(10.0).color(MUTED));
         ui.add(egui::DragValue::new(&mut cfg.interval_ms)
@@ -281,14 +294,10 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     ui.separator();
     ui.label(RichText::new(tr("Restock is configured on each Overview account card"))
         .size(10.0).color(DIM));
-    if let Some(error)=app.capture_save_error[index].as_deref(){
-        ui.colored_label(BAD,error);
-    }
-    let mut discard_edits=false;
     ui.horizontal(|ui|{
-        if ui.add_enabled(!app.capture_save_busy[index],
-            egui::Button::new(tr("Save settings"))).clicked() {
-            let to_save=cfg.clone();
+        if ui.button(tr("Save settings")).clicked() {
+            let mut to_save=native.capture_settings();
+            copy_capture_fields(&mut to_save,cfg);
             if let Err(error)=to_save.validate() {
                 app.capture_save_error[index]=Some(error);
             } else {
@@ -300,7 +309,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                         std::panic::AssertUnwindSafe(||
                             crate::native_auth::set_capture_settings(profile,&to_save))
                     ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
-                    let _=tx.send(CaptureSavedEvent{index,config:to_save,toggle_only:false,result});
+                    let _=tx.send(CaptureSavedEvent{index,config:to_save,origin:CaptureSaveOrigin::Editor,result});
                 });
             }
         }
@@ -308,6 +317,10 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             discard_edits=true;
         }
     });
+    });
+    if let Some(error)=app.capture_save_error[index].as_deref() {
+        ui.colored_label(BAD,error);
+    }
     if discard_edits {
         app.capture_drafts[index]=Some(native.capture_settings());
         app.capture_save_error[index]=None;
@@ -318,3 +331,34 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
     }
 }
 
+
+#[cfg(test)]
+mod capture_editor_save_tests {
+    use super::*;
+
+    #[test]
+    fn editor_save_merges_only_throwing_fields_with_current_restock() {
+        let mut current=CatchSettings::default();
+        current.restock_enabled=true;
+        current.ball_id=5;
+        current.potion_id=203;
+        current.revive_id=206;
+        current.gold_reserve=123;
+        let mut editor=CatchSettings::default();
+        editor.enabled=true;
+        editor.interval_ms=250;
+        editor.priorities=vec!["beast".into(),"ultra".into()];
+        editor.reserves.insert("beast".into(),7);
+        copy_capture_fields(&mut current,&editor);
+        current.validate().unwrap();
+        assert!(current.enabled);
+        assert_eq!(current.interval_ms,250);
+        assert_eq!(current.priorities,vec!["beast","ultra"]);
+        assert_eq!(current.reserves.get("beast"),Some(&7));
+        assert!(current.restock_enabled);
+        assert_eq!(current.ball_id,5);
+        assert_eq!(current.potion_id,203);
+        assert_eq!(current.revive_id,206);
+        assert_eq!(current.gold_reserve,123);
+    }
+}
