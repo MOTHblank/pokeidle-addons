@@ -2,7 +2,7 @@ use super::*;
 pub(super) fn draw_atlas_current(
     ui: &mut egui::Ui, view: &HuntView,
     reference: Option<&AtlasReference>, estimates: &EstimateCache,
-    aoe_enabled: bool,
+    aoe_enabled: bool, live: bool,
 ) {
                     let hunts=&view;
                     let (activity,activity_color)=atlas_combat_status(hunts,live);
