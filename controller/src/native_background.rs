@@ -1040,7 +1040,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         // Run the optional history sampler within the
                         // already existing one-second hunt refresh, not the
                         // 60 ms purchase/capture dispatch hot path.
-                        if Instant::now() >= next_background_forecast {
+                        // The market's release-time buying window always
+                        // takes priority over optional Atlas modeling.
+                        if Instant::now() >= next_background_forecast
+                            && !market.snatch_critical(&market_cfg) {
                             next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;
                             let reference=background_forecast_reference.lock().ok()
                                 .and_then(|current|current.clone());
