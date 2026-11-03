@@ -955,6 +955,7 @@ pub struct ControllerApp {
 
     hunt_action_error: [Option<String>;4],
     hunt_estimate_cache: [hunt_panel::EstimateCache;4],
+    hunt_rankings: [hunt_panel::RankingsCache;4],
     atlas_results: [hunt_panel::ExplorerCache;4],
     atlas_filters: [hunt_panel::AtlasFilters;4],
     atlas_scenarios: [hunt_panel::AtlasScenario;4],
@@ -1104,6 +1105,7 @@ impl ControllerApp {
 
             hunt_action_error: std::array::from_fn(|_|None),
             hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
+            hunt_rankings: std::array::from_fn(|_|hunt_panel::RankingsCache::default()),
             atlas_results: std::array::from_fn(|_|hunt_panel::ExplorerCache::default()),
             atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
             atlas_scenarios: std::array::from_fn(|_|hunt_panel::AtlasScenario::default()),
@@ -1406,6 +1408,13 @@ impl eframe::App for ControllerApp {
         } else {None};
         for (index,results) in self.atlas_results.iter_mut().enumerate() {
             if active_explorer!=Some(index) {results.release();}
+        }
+        let active_rankings=if self.workspace.panel_tab==PanelTab::Hunts &&
+            self.workspace.hunt_subtab==HuntSubtab::Recommendations {
+            Some(self.workspace.hunt_account)
+        } else {None};
+        for (index,results) in self.hunt_rankings.iter_mut().enumerate() {
+            if active_rankings!=Some(index) {results.release();}
         }
 
         // If the user leaves Accounts while editing the name, persist it
