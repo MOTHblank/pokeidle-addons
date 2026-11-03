@@ -49,8 +49,9 @@ mod auto_catch_ui_state_tests {
 }
 
 pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
-    let profile = app.games[index].profile;
-    let Some(native) = app.games[index].native.as_ref() else { return; };
+    let runtime = &mut app.runtimes[index];
+    let profile = runtime.game.profile;
+    let Some(native) = runtime.game.native.as_ref() else { return; };
     let game = native.snapshot();
     let twitch = native.twitch_snapshot();
 
@@ -79,7 +80,7 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                     .size(11.0).strong()
                     .color(if capture_enabled {GOOD} else {MUTED}));
                 ui.add_space(8.0);
-                if ui.add_enabled(!app.capture_save_busy[index],
+                if ui.add_enabled(!runtime.capture.capture_save_busy,
                     egui::Button::new(tr(if capture_enabled {"Disable"} else {"Enable"})))
                     .on_hover_text(tr("Turn Auto Catch on or off for this account"))
                     .clicked()
@@ -91,14 +92,14 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                     let mut next=native.capture_settings();
                     next.enabled=!capture_enabled;
                     if let Err(error)=next.validate() {
-                        app.capture_save_error[index]=Some(error);
+                        runtime.capture.capture_save_error=Some(error);
                     } else {
-                        app.capture_save_error[index]=None;
-                        app.capture_save_busy[index]=true;
-                        app.capture_save_ids[index]=app.capture_save_ids[index].wrapping_add(1);
-                        let request_id=app.capture_save_ids[index];
+                        runtime.capture.capture_save_error=None;
+                        runtime.capture.capture_save_busy=true;
+                        runtime.capture.capture_save_id=runtime.capture.capture_save_id.wrapping_add(1);
+                        let request_id=runtime.capture.capture_save_id;
                         let tx=app.capture_save_tx.clone();
-                        let generation_state=Arc::clone(&app.capture_generations[index]);
+                        let generation_state=Arc::clone(&runtime.capture.capture_generation);
                         let generation=generation_state.load(Ordering::Acquire);
                         let updater=native.capture_settings_updater();
                         std::thread::spawn(move || {
@@ -115,7 +116,7 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                         });
                     }
                 }
-                if app.capture_save_busy[index] {
+                if runtime.capture.capture_save_busy {
                     ui.label(RichText::new(tr("Saving Auto Catch settings"))
                         .size(10.0).color(WARN));
                 }
@@ -248,15 +249,16 @@ fn copy_capture_fields(to:&mut CatchSettings, from:&CatchSettings) {
 }
 
 fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
-    let profile=app.games[index].profile;
-    let Some(native)=app.games[index].native.as_ref() else {return};
-    if app.capture_drafts[index].is_none() {
-        app.capture_drafts[index]=Some(native.capture_settings());
+    let runtime = &mut app.runtimes[index];
+    let profile=runtime.game.profile;
+    let Some(native)=runtime.game.native.as_ref() else {return};
+    if runtime.capture.capture_draft.is_none() {
+        runtime.capture.capture_draft=Some(native.capture_settings());
     }
-    let Some(cfg)=app.capture_drafts[index].as_mut() else{return};
+    let Some(cfg)=runtime.capture.capture_draft.as_mut() else{return};
     // Freeze every editor control during the asynchronous vault write: the
     // acknowledged snapshot can then safely replace the submitted draft.
-    let saving=app.capture_save_busy[index];
+    let saving=runtime.capture.capture_save_busy;
     let mut discard_edits=false;
     ui.add_enabled_ui(!saving,|ui|{
         ui.checkbox(&mut cfg.enabled,tr("Enable Auto Catch"));
@@ -307,14 +309,14 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                 let mut to_save=native.capture_settings();
                 copy_capture_fields(&mut to_save,cfg);
                 if let Err(error)=to_save.validate() {
-                    app.capture_save_error[index]=Some(error);
+                    runtime.capture.capture_save_error=Some(error);
                 } else {
-                    app.capture_save_error[index]=None;
-                    app.capture_save_busy[index]=true;
-                    app.capture_save_ids[index]=app.capture_save_ids[index].wrapping_add(1);
-                    let request_id=app.capture_save_ids[index];
+                    runtime.capture.capture_save_error=None;
+                    runtime.capture.capture_save_busy=true;
+                    runtime.capture.capture_save_id=runtime.capture.capture_save_id.wrapping_add(1);
+                    let request_id=runtime.capture.capture_save_id;
                     let tx=app.capture_save_tx.clone();
-                    let generation_state=Arc::clone(&app.capture_generations[index]);
+                    let generation_state=Arc::clone(&runtime.capture.capture_generation);
                     let generation=generation_state.load(Ordering::Acquire);
                     let updater=native.capture_settings_updater();
                     std::thread::spawn(move || {
@@ -335,14 +337,14 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
             }
         });
     });
-    if let Some(error)=app.capture_save_error[index].as_deref() {
+    if let Some(error)=runtime.capture.capture_save_error.as_deref() {
         ui.colored_label(BAD,error);
     }
     if discard_edits {
-        app.capture_drafts[index]=Some(native.capture_settings());
-        app.capture_save_error[index]=None;
+        runtime.capture.capture_draft=Some(native.capture_settings());
+        runtime.capture.capture_save_error=None;
     }
-    if app.capture_save_busy[index] {
+    if runtime.capture.capture_save_busy {
         ui.label(RichText::new(tr("Saving encrypted preferences..."))
             .size(10.0).color(MUTED));
     }
