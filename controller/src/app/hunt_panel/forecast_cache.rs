@@ -3,7 +3,7 @@ use super::*;
 /// path. Immutable snapshots and Arc guide data are cheap to hand to the
 /// worker; no blocking game/network I/O or combat loop executes in render.
 #[derive(Default)]
-pub(super) struct EstimateCache {
+pub(in crate::app) struct EstimateCache {
     pub(super) account: Option<usize>,
     pub(super) catalog_ptr: usize,
     pub(super) reference_ptr: usize,

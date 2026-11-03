@@ -5,13 +5,15 @@ use super::{automation_badge, draw_native_missing_panel, egui, format_number,
 
 pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.workspace.automation_account;
-    let Some(native) = app.runtimes[index].game.native.as_ref() else {
+    if app.runtimes[index].game.native.is_none() {
         draw_native_missing_panel(app,ui,Some(index),
             tr("Start this account to manage game settings"));
         return;
+    }
+    let (snapshot, view) = {
+        let native = app.runtimes[index].game.native.as_ref().expect("checked above");
+        (native.snapshot(), native.hunt_snapshot())
     };
-    let snapshot = native.snapshot();
-    let view = native.hunt_snapshot();
     if let Some(automation) = view.automation.as_ref() {
         if !app.runtimes[index].automation.automation_draft.initialized {
             app.runtimes[index].automation.automation_draft=AutomationDraft::from_server(automation);
@@ -93,7 +95,7 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
             });
         });
         for (field,value) in commands {
-            if let Err(error)=native.send_command(GameCommand::SetAutomation {field,value}) {
+            if let Err(error)=app.runtimes[index].game.native.as_ref().expect("checked above").send_command(GameCommand::SetAutomation {field,value}) {
                 app.status=format!("Server automation: {error}");
                 app.status_error=true;
             }

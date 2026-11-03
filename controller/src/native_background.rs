@@ -263,7 +263,7 @@ impl NativeSession {
             .filter(|name| !name.is_empty()).unwrap_or_else(||profile.name().to_owned());
         let history_recorder = HistoryRecorder::new(profile, nick.clone());
         let history = Arc::clone(&history_recorder.shared);
-        let boss_manager = BossManager::new(profile, &nick)?;
+        let boss_manager = BossManager::new(profile, &nick);
         let boss = Arc::new(Mutex::new(boss_manager.view.clone()));
         let worker_boss = Arc::clone(&boss);
         let hunts = Arc::new(Mutex::new(hunt_intel.view.clone()));
@@ -737,9 +737,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 }
                 hunt_intel.ingest_value(&frame, received_at);
                 boss_manager.ingest(&frame);
-                boss_manager.publish(&boss);
                 let mut navigator = HuntNavigator::default();
                 navigator.observe(&frame, &hunt_intel.view, received_at);
+                boss_manager.recover_on_welcome(&hunt_intel.view);
+                boss_manager.publish(&boss);
                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
