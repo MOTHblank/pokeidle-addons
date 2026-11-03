@@ -143,10 +143,17 @@ fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
 
 type IrcSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
+type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+fn notify_phase_change(wake: &PhaseWake) {
+    let callback=wake.lock().ok().and_then(|slot|slot.clone());
+    if let Some(callback)=callback {callback();}
+}
+
 pub struct TwitchSession {
     state: Arc<Mutex<TwitchSnapshot>>,
     desired: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
+    phase_wake:PhaseWake,
 }
 impl TwitchSession {
     /// Server welcome is mandatory before we close the authentication
@@ -163,11 +170,14 @@ impl TwitchSession {
         let worker_state = Arc::clone(&state);
         let worker_desired = Arc::clone(&desired);
         let worker_stop = Arc::clone(&stop);
+        let phase_wake:PhaseWake=Arc::new(Mutex::new(None));
+        let worker_phase_wake=Arc::clone(&phase_wake);
         thread::Builder::new().name("moth-native-twitch".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run(identity, Arc::clone(&worker_state), worker_desired,
-                        Arc::clone(&worker_stop), first_socket);
+                        Arc::clone(&worker_stop), first_socket,
+                        Arc::clone(&worker_phase_wake));
                 }));
                 if result.is_err() {
                     if let Ok(mut state) = worker_state.lock() {
@@ -175,17 +185,24 @@ impl TwitchSession {
                         state.error = Some("Twitch connection stopped unexpectedly. See the controller log.".into());
                         state.joined = 0;
                     }
+                    notify_phase_change(&worker_phase_wake);
                     worker_stop.store(true, Ordering::Relaxed);
                 }
             })
             .map_err(|_| "Could not start the Twitch connection".to_owned())?;
-        Ok(Self { state, desired, stop })
+        Ok(Self { state, desired, stop, phase_wake })
     }
     pub fn snapshot(&self) -> TwitchSnapshot {
         self.state.lock().map(|state| state.clone()).unwrap_or_default()
     }
     pub fn desired_handle(&self) -> Arc<Mutex<Vec<String>>> {
         Arc::clone(&self.desired)
+    }
+    pub fn set_phase_waker(&self, wake:Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut slot)=self.phase_wake.lock() {
+            *slot=Some(Arc::clone(&wake));
+        }
+        if self.snapshot().phase=="NeedsLogin" {wake();}
     }
     pub fn stop(&self) { self.stop.store(true, Ordering::Relaxed); }
 }
@@ -195,7 +212,7 @@ impl Drop for TwitchSession {
 
 fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
        desired: Arc<Mutex<Vec<String>>>, stop: Arc<AtomicBool>,
-       first_socket: Option<IrcSocket>) {
+       first_socket: Option<IrcSocket>, phase_wake:PhaseWake) {
     let mut first_socket = first_socket;
     while !stop.load(Ordering::Relaxed) {
         match first_socket.take().map(Ok).unwrap_or_else(|| connect(&identity)) {
@@ -207,6 +224,7 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                     s.joined = 0;
                     s.last_received = Some(Instant::now());
                 }
+                notify_phase_change(&phase_wake);
                 let mut joined = BTreeSet::new();
                 let mut next_join = Instant::now();
                 let mut auth_rejected = false;
@@ -290,6 +308,7 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                             s.error = Some("Your Twitch login expired. Sign in again.".into());
                         }
                     }
+                    notify_phase_change(&phase_wake);
                     if auth_rejected { break; }
                 }
             }
@@ -300,6 +319,7 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
                     s.error = Some(error);
                     s.joined = 0;
                 }
+                notify_phase_change(&phase_wake);
                 // Network failures are handled within this native worker.
                 // No browser is opened for transient IRC outages.
                 if auth_expired { break; }
@@ -312,12 +332,23 @@ fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
     }
     if stop.load(Ordering::Relaxed) {
         if let Ok(mut s) = state.lock() { s.phase = "Stopped".into(); s.joined = 0; }
+        notify_phase_change(&phase_wake);
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn phase_waker_can_signal_background_auth_expiration() {
+        let observed=Arc::new(AtomicBool::new(false));
+        let flag=Arc::clone(&observed);
+        let wake:PhaseWake=Arc::new(Mutex::new(Some(Arc::new(move || {
+            flag.store(true,Ordering::Relaxed);
+        }))));
+        notify_phase_change(&wake);
+        assert!(observed.load(Ordering::Relaxed));
+    }
     #[test]
     fn filters_invalid_rooms_and_deduplicates() {
         let channels = normalize_channels(vec![
