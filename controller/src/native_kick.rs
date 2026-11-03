@@ -3,9 +3,10 @@
 //! balances are distinct signals. Only an observed increase of a real
 //! authenticated point balance is reported as points earned.
 use crate::native_kick_viewer::{self, AuthGate, WatchTelemetry};
+use crate::config::KickStreamPreferences;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -258,6 +259,176 @@ impl Drop for KickMonitor {
     fn drop(&mut self) { self.stop(); }
 }
 
+/// Compute limited viewer slots once per roster/configuration change, never
+/// in a rendering pass or in the native game's per-packet hot path.
+pub(crate) fn select_kick_streams(official_live: &[String], manual: &[String],
+                                  prefs: &KickStreamPreferences) -> Vec<String> {
+    let mut names = Vec::<String>::new();
+    for slug in official_live.iter().chain(manual) {
+        if !names.contains(slug) { names.push(slug.clone()); }
+    }
+    // Favorited channels occupy slots first in the order they were starred.
+    names.sort_by_key(|slug| {
+        let position=prefs.favorites.iter().position(|favorite|favorite==slug);
+        (position.is_none(), position.unwrap_or(usize::MAX))
+    });
+    names.truncate(prefs.max_streams.min(MAX_CHANNELS));
+    names
+}
+
+fn roster_choices(roster: &[OfficialKickChannel], manual: &[String],
+                  prefs: &KickStreamPreferences) -> (Vec<String>, Vec<String>) {
+    let live = roster.iter().filter(|creator|creator.live)
+        .map(|creator|creator.slug.clone()).collect::<Vec<_>>();
+    let all = roster.iter().map(|creator|creator.slug.clone()).collect::<Vec<_>>();
+    (select_kick_streams(&live,manual,prefs),all)
+}
+
+enum KickReconcileEvent {
+    Roster(Vec<OfficialKickChannel>),
+    Preferences {
+        manual:Vec<String>,
+        fallback_live:Vec<String>,
+        prefs:KickStreamPreferences,
+    },
+    Stop,
+}
+
+/// The native game worker sends only changed authoritative rosters. The
+/// coordinator is parked on recv() in the absence of changes.
+#[derive(Clone)]
+pub struct KickRosterPublisher {
+    sender:mpsc::Sender<KickReconcileEvent>,
+}
+impl KickRosterPublisher {
+    pub fn publish(&self, roster:Vec<OfficialKickChannel>) {
+        let _=self.sender.send(KickReconcileEvent::Roster(roster));
+    }
+}
+
+/// Own Kick's channel selection independently of the app's paint cadence.
+/// One small parked thread per connected Kick account; no periodic scans,
+/// no additional HTTP requests, no duplicated stream connections.
+pub struct KickSupervisor {
+    monitor:Arc<Mutex<KickMonitor>>,
+    sender:mpsc::Sender<KickReconcileEvent>,
+    stop:Arc<AtomicBool>,
+    identity:Instant,
+}
+impl KickSupervisor {
+    pub fn start(token:String,input:&str,manual:Vec<String>,
+                 fallback_live:Vec<String>,prefs:KickStreamPreferences) -> Result<Self,String> {
+        let monitor=KickMonitor::start(token,input)?;
+        let identity=monitor.identity();
+        let monitor=Arc::new(Mutex::new(monitor));
+        let weak=Arc::downgrade(&monitor);
+        let initial_selected=if input.is_empty() {Vec::new()} else {
+            normalize_channels(input).unwrap_or_default()
+        };
+        let (sender,receiver)=mpsc::channel();
+        let stop=Arc::new(AtomicBool::new(false));
+        let worker_stop=Arc::clone(&stop);
+        thread::Builder::new().name("moth-kick-roster".into())
+            .stack_size(256*1024)
+            .spawn(move || {
+                let mut manual=manual;
+                let mut prefs=prefs;
+                let mut fallback_live=fallback_live;
+                let mut authoritative:Option<Vec<OfficialKickChannel>>=None;
+                // Start() already validated and selected these channels.
+                let mut last_selected=initial_selected;
+                let mut last_official=Vec::<String>::new();
+                'coordinator: while let Ok(event)=receiver.recv() {
+                    if worker_stop.load(Ordering::Acquire){break}
+                    // Coalesce a burst of live/offline announcements and user
+                    // edits before touching any viewer worker. This prevents
+                    // starting streams that were immediately deselected.
+                    let mut next=event;
+                    loop {
+                        match next {
+                            KickReconcileEvent::Roster(roster)=>authoritative=Some(roster),
+                            KickReconcileEvent::Preferences{
+                                manual:next_manual,fallback_live:next_live,prefs:next_prefs
+                            }=>{
+                                manual=next_manual;
+                                fallback_live=next_live;
+                                prefs=next_prefs;
+                            }
+                            KickReconcileEvent::Stop=>break 'coordinator,
+                        }
+                        match receiver.try_recv() {
+                            Ok(latest)=>next=latest,
+                            Err(_)=>break,
+                        }
+                    }
+                    if worker_stop.load(Ordering::Acquire){break}
+                    let Some(monitor)=weak.upgrade() else {break};
+                    let (selected,official)=if let Some(roster)=authoritative.as_ref() {
+                        roster_choices(roster,&manual,&prefs)
+                    } else {
+                        (select_kick_streams(&fallback_live,&manual,&prefs),Vec::new())
+                    };
+                    let mut selected_sorted=selected.clone();
+                    selected_sorted.sort_unstable();
+                    let selected_changed=selected_sorted!=last_selected;
+                    let official_changed=official!=last_official;
+                    if !selected_changed && !official_changed {continue}
+                    let Ok(mut monitor)=monitor.lock() else {break};
+                    if worker_stop.load(Ordering::Acquire){break}
+                    // Reconcile only changed streams. Unchanged viewers retain
+                    // their HLS, WebSocket, and point-balance baselines.
+                    let outcome=(if selected_changed {
+                        monitor.sync_channels(&selected)
+                    } else {Ok(())}).and_then(|_|{
+                        if selected_changed || official_changed {
+                            monitor.sync_offline_officials(&official)
+                        } else {Ok(())}
+                    });
+                    match outcome {
+                        Ok(())=>{
+                            last_selected=selected_sorted;
+                            last_official=official;
+                        }
+                        Err(error)=>{
+                            crate::logging::warn(&format!(
+                                "Kick roster reconciliation failed: {error}"
+                            ));
+                            if let Ok(mut state)=monitor.snapshot.lock() {
+                                state.error=Some(error);
+                            }
+                        }
+                    }
+                }
+            })
+            .map_err(|error|format!("Could not start Kick roster coordinator: {error}"))?;
+        Ok(Self { monitor,sender,stop,identity })
+    }
+    pub fn roster_publisher(&self)->KickRosterPublisher {
+        KickRosterPublisher{sender:self.sender.clone()}
+    }
+    pub fn update_preferences(&self,manual:Vec<String>,fallback_live:Vec<String>,
+                              prefs:KickStreamPreferences) {
+        let _=self.sender.send(KickReconcileEvent::Preferences{
+            manual,fallback_live,prefs
+        });
+    }
+    pub fn identity(&self)->Instant {self.identity}
+    pub fn snapshot(&self)->KickSnapshot {
+        self.monitor.lock().map(|monitor|monitor.snapshot()).unwrap_or_default()
+    }
+    pub fn offline_point_balances(&self)->BTreeMap<String,OfflinePoints> {
+        self.monitor.lock().map(|monitor|monitor.offline_point_balances())
+            .unwrap_or_default()
+    }
+}
+impl Drop for KickSupervisor {
+    fn drop(&mut self) {
+        self.stop.store(true,Ordering::Release);
+        let _=self.sender.send(KickReconcileEvent::Stop);
+        if let Ok(monitor)=self.monitor.lock() {monitor.stop();}
+    }
+}
+
 fn update_channel(snapshot: &Arc<Mutex<KickSnapshot>>, slug: &str,
                   action: impl FnOnce(&mut ChannelStatus)) {
     if let Ok(mut state) = snapshot.lock() {
@@ -441,6 +612,34 @@ pub fn normalize_channels(input: &str) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_roster_publication_is_delivered_without_a_ui_frame() {
+        let (sender,receiver)=mpsc::channel();
+        let publisher=KickRosterPublisher{sender};
+        let worker=publisher.clone();
+        std::thread::spawn(move ||worker.publish(vec![
+            OfficialKickChannel{slug:"alpha".into(),live:true}
+        ])).join().unwrap();
+        let KickReconcileEvent::Roster(roster)=receiver.try_recv().unwrap()
+            else{panic!("expected native roster publication")};
+        assert_eq!(roster.len(),1);
+        assert_eq!(roster[0].slug,"alpha");
+    }
+    #[test]
+    fn roster_selection_respects_favorites_and_preserves_offline_accounts() {
+        let prefs=KickStreamPreferences{
+            max_streams:2,favorites:vec!["beta".into(),"offline".into()],
+        };
+        let roster=vec![
+            OfficialKickChannel{slug:"alpha".into(),live:true},
+            OfficialKickChannel{slug:"offline".into(),live:false},
+            OfficialKickChannel{slug:"beta".into(),live:true},
+        ];
+        let (selected,all)=roster_choices(&roster,&["manual".into()],&prefs);
+        assert_eq!(selected,vec!["beta","alpha"]);
+        assert_eq!(all,vec!["alpha","offline","beta"]);
+        assert!(select_kick_streams(&[],&[],&prefs).is_empty());
+    }
     #[test]
     fn channels_validate_and_deduplicate() {
         assert_eq!(normalize_channels("https://kick.com/SomeName, somename\nOther_2").unwrap(),
