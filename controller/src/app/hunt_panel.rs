@@ -3570,7 +3570,8 @@ mod tests {
         view.geo_revisions=Arc::new(std::collections::BTreeMap::from([
             ("a".into(),1),("b".into(),1)]));
         cache.refresh(0,&view,None,true,false);
-        assert_eq!(cache.get("b").unwrap().kills_h,250.0);
+        assert!(cache.get("b").is_none(),
+            "the first geometry sample affects both destinations");
         assert!(cache.geometry_dirty.contains("a"));
         assert!(cache.geometry_dirty.contains("b"));
         cache.geometry_dirty.clear();
