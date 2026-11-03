@@ -390,9 +390,16 @@ impl NativeSession {
         if let Ok(mut current)=self.kick_roster_publisher.lock() {
             *current=Some(publisher.clone());
         }
-        if let Some(roster)=self.official_kick_roster() {
-            publisher.publish(roster);
-        }
+        // A verified native handoff may install the publisher between
+        // observing welcome and publishing phase=Online. The just-received
+        // roster is already authoritative even in that narrow transition.
+        let ready=self.snapshot.lock().ok().and_then(|state| {
+            let recent=state.last_received.is_some_and(|at|
+                at.elapsed()<Duration::from_secs(90));
+            (recent && matches!(state.phase.as_str(),"Online"|"Connecting"))
+                .then(||state.kick_official_roster.clone()).flatten()
+        });
+        if let Some(roster)=ready {publisher.publish(roster);}
     }
     pub fn clear_kick_roster_publisher(&self) {
         if let Ok(mut current)=self.kick_roster_publisher.lock() {
@@ -696,6 +703,17 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.last_received = Some(Instant::now());
                 });
                 notify_phase_change(&phase_wake);
+                // A reconnect can confirm exactly the previous roster.
+                // Replay it once after welcome so a new Kick subscriber does
+                // not depend on the next live/offline status change.
+                let subscriber=kick_roster_publisher.lock().ok()
+                    .and_then(|publisher|publisher.clone());
+                if let Some(subscriber)=subscriber {
+                    if let Some(roster)=snapshot.lock().ok()
+                        .and_then(|state|state.kick_official_roster.clone()) {
+                        subscriber.publish(roster);
+                    }
+                }
                 let mut last_ping = Instant::now();
                 // Delayed capture receipts are diagnostic, not connection failures.
                 // Summarize them at most once every five minutes per game socket.
