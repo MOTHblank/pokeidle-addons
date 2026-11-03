@@ -850,8 +850,8 @@ pub struct ControllerApp {
     market_snatch_drafts: [crate::native_market::SnatchTarget;4],
     market_imports: [String;4],
     market_notices: [String;4],
-    market_copy_targets: [bool;4],
-    market_copy_activation: bool,
+
+
 
     offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
     hunt_query: String,
@@ -876,12 +876,12 @@ pub struct ControllerApp {
     // picker from the last confirmed worker snapshot while a save is in flight.
     restock_drafts:[Option<CatchSettings>;4],
     restock_dirty:[bool;4],
-    restock_open:[bool;4],
+
     capture_save_busy:[bool;4],
     capture_save_error:[Option<String>;4],
     capture_save_tx:Sender<CaptureSavedEvent>,
     capture_save_rx:Receiver<CaptureSavedEvent>,
-    session_reset_confirm:[bool;4],
+
     inventory_catalog:Option<Arc<ItemCatalog>>,
     visuals:VisualCache,
     inventory_catalog_error:Option<String>,
@@ -907,14 +907,14 @@ pub struct ControllerApp {
     kick_channel_new: [String; 4],
     kick_saved_login: [bool; 4],
     kick_remember_login: [bool; 4],
-    account_names_dirty: [bool; 4],
+
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
     account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
-    tab_url_input: [String; 4],
-    tab_url_open: [bool; 4],
+
+
     idle_progress: [IdleProgressTracker; 4],
     xp_rates: [XpRateTracker; 4],
 
@@ -995,8 +995,8 @@ impl ControllerApp {
             }),
             market_imports: std::array::from_fn(|_|String::new()),
             market_notices: std::array::from_fn(|_|String::new()),
-            market_copy_targets: [false;4],
-            market_copy_activation: false,
+
+
 
             offline_histories: std::array::from_fn(|_|None),
             hunt_query: String::new(),
@@ -1019,12 +1019,12 @@ impl ControllerApp {
             capture_drafts:std::array::from_fn(|_|None),
             restock_drafts:std::array::from_fn(|_|None),
             restock_dirty:[false;4],
-            restock_open:[false;4],
+
             capture_save_busy:[false;4],
             capture_save_error:std::array::from_fn(|_|None),
             capture_save_tx,
             capture_save_rx,
-            session_reset_confirm:[false;4],
+
             inventory_catalog:None,
             visuals:VisualCache::default(),
             inventory_catalog_error:None,
@@ -1055,14 +1055,14 @@ impl ControllerApp {
                         .ok().flatten().is_some())
             }),
             kick_remember_login: [true; 4],
-            account_names_dirty: [false; 4],
+
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
             account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
-            tab_url_input: std::array::from_fn(|_| String::new()),
-            tab_url_open: [false; 4],
+
+
             idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
             xp_rates: std::array::from_fn(|_| XpRateTracker::default()),
 

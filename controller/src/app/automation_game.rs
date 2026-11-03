@@ -152,7 +152,7 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
         ui.label(RichText::new(tr("Restock is configured on each Overview account card"))
             .size(11.0).color(MUTED));
         if ui.small_button(tr("Open restock on Overview")).clicked() {
-            app.restock_open[index] = true;
+            app.workspace.restock_open[index] = true;
             app.workspace.selected_details = None;
             app.workspace.panel_tab = PanelTab::Overview;
         }

@@ -112,7 +112,7 @@ pub(super) fn draw_browser_controls(
                             .on_hover_text(tr("Open a custom URL in this Firefox profile"))
                             .clicked()
                         {
-                            app.tab_url_open[index] = !app.tab_url_open[index];
+                            app.workspace.browser_tabs[index].open = !app.workspace.browser_tabs[index].open;
                         }
                     });
                 });
@@ -123,10 +123,10 @@ pub(super) fn draw_browser_controls(
                     .corner_radius(10.0)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
-                        if app.tab_url_open[index] {
+                        if app.workspace.browser_tabs[index].open {
                             ui.horizontal(|ui| {
                                 let response = ui.add(
-                                    egui::TextEdit::singleline(&mut app.tab_url_input[index])
+                                    egui::TextEdit::singleline(&mut app.workspace.browser_tabs[index].input)
                                         .hint_text(tr("https://example.com"))
                                         .desired_width((width - 150.0).max(180.0))
                                 );
@@ -135,7 +135,7 @@ pub(super) fn draw_browser_controls(
                                     && ui.input(|input| input.key_pressed(egui::Key::Enter));
 
                                 if ui.button(tr("Open")).clicked() || enter {
-                                    let raw = app.tab_url_input[index].trim();
+                                    let raw = app.workspace.browser_tabs[index].input.trim();
                                     if raw.is_empty() {
                                         app.set_status(
                                             format!(
@@ -182,8 +182,8 @@ pub(super) fn draw_browser_controls(
                                                     "url": candidate
                                                 })) {
                                                     Ok(id) => {
-                                                        app.tab_url_input[index].clear();
-                                                        app.tab_url_open[index] = false;
+                                                        app.workspace.browser_tabs[index].input.clear();
+                                                        app.workspace.browser_tabs[index].open = false;
                                                         app.set_status(
                                                             format!("{} · {} #{}", &account_name, tr("custom tab queued"), id),
                                                             false,
@@ -210,7 +210,7 @@ pub(super) fn draw_browser_controls(
                                 }
 
                                 if ui.button("×").clicked() {
-                                    app.tab_url_open[index] = false;
+                                    app.workspace.browser_tabs[index].open = false;
                                 }
                             });
 

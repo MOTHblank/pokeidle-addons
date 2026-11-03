@@ -534,7 +534,7 @@ mod selected_restock_stock_tests {
 fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
                           index: usize, label: &str, count: Option<u64>,
                           kind: SpriteKind, selected: u64) {
-    let expanded = app.restock_open[index];
+    let expanded = app.workspace.restock_open[index];
     let response = egui::Frame::new().fill(PANEL_ALT)
         .stroke(Stroke::new(1.0, if expanded { ACCENT } else { BORDER }))
         .corner_radius(7.0).inner_margin(Margin::symmetric(6, 5))
@@ -559,7 +559,7 @@ fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
             tr(if selected == 0 { "No restock item selected" } else { "Selected item only" }),
             tr("Configure restock")))
         .clicked() {
-        app.restock_open[index] = !expanded;
+        app.workspace.restock_open[index] = !expanded;
     }
 }
 

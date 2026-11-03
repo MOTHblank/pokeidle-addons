@@ -2590,18 +2590,18 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         });
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui|{
-                        if !app.session_reset_confirm[index] {
+                        if !app.workspace.session_reset_confirm[index] {
                             if ui.small_button(tr("Reset session counters")).clicked() {
-                                app.session_reset_confirm[index]=true;
+                                app.workspace.session_reset_confirm[index]=true;
                             }
                         } else {
                             ui.label(RichText::new(tr("Clear session-only totals?")).color(WARN));
                             if ui.small_button(tr("Confirm")).clicked(){
                                 native.reset_hunt_session();
-                                app.session_reset_confirm[index]=false;
+                                app.workspace.session_reset_confirm[index]=false;
                             }
                             if ui.small_button(tr("Cancel")).clicked(){
-                                app.session_reset_confirm[index]=false;
+                                app.workspace.session_reset_confirm[index]=false;
                             }
                         }
                         if ui.small_button(tr("Open persistent history")).clicked(){

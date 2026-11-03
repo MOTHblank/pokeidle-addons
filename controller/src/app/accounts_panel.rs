@@ -119,8 +119,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             egui::TextEdit::singleline(&mut app.accounts[index].name)
                 .hint_text(profile.label()).desired_width(ui.available_width())
         );
-        if response.changed() { app.account_names_dirty[index] = true; }
-        if response.lost_focus() && app.account_names_dirty[index] { changed = true; }
+        if response.changed() { app.workspace.account_names_dirty[index] = true; }
+        if response.lost_focus() && app.workspace.account_names_dirty[index] { changed = true; }
         ui.add_space(6.0);
 
         let game_label = if game_online { tr("Connected") }
@@ -234,7 +234,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 profile.label().to_owned()
             } else { trimmed.to_owned() };
             if app.save_account_config() {
-                app.account_names_dirty[index] = false;
+                app.workspace.account_names_dirty[index] = false;
             }
         }
     });

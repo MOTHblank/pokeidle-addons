@@ -47,14 +47,7 @@ impl ControllerApp {
     pub(super) fn select_workspace_account(&mut self, index: usize) {
         if index >= self.games.len() || index == self.workspace.hunt_account { return; }
         self.save_dirty_account_names();
-        self.workspace.history_rows_limit = 100;
-        self.workspace.dashboard_show_history = false;
-        self.workspace.hunt_account = index;
-        if self.workspace.panel_tab == PanelTab::Hunts && self.workspace.hunt_subtab == HuntSubtab::Compare {
-            self.workspace.hunt_subtab = HuntSubtab::Explorer;
-        }
-        self.workspace.automation_account = index;
-        self.workspace.hunt_page = 0;
+        self.workspace.select_account(index);
     }
 
     /// Account edits are buffered until focus is lost, the selected account
@@ -62,7 +55,7 @@ impl ControllerApp {
     pub(super) fn save_dirty_account_names(&mut self) {
         for profile in GameProfile::ALL {
             let index = profile.index();
-            if self.account_names_dirty[index] {
+            if self.workspace.account_names_dirty[index] {
                 let name = self.accounts[index].name.trim();
                 self.accounts[index].name = if name.is_empty() {
                     profile.label().to_owned()
@@ -70,7 +63,7 @@ impl ControllerApp {
                     name.to_owned()
                 };
                 if self.save_account_config() {
-                    self.account_names_dirty[index] = false;
+                    self.workspace.account_names_dirty[index] = false;
                 }
             }
         }

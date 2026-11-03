@@ -360,16 +360,16 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
                 } else {
                     format!("{} · {}", dest+1, name)
                 };
-                ui.checkbox(&mut app.market_copy_targets[dest],label);
+                ui.checkbox(&mut app.workspace.market_copy_targets[dest],label);
             }
         });
-        ui.checkbox(&mut app.market_copy_activation,
+        ui.checkbox(&mut app.workspace.market_copy_activation,
             tr("Also copy buying activation (may immediately start purchases)"));
         ui.label(RichText::new(
             tr("Default: buying remains OFF on destination accounts. Only select the option above to copy the source's enabled/paused state.")
         ).size(10.0).color(DIM));
         let selected=(0..app.games.len()).any(|dest|
-            dest!=source && app.market_copy_targets[dest]);
+            dest!=source && app.workspace.market_copy_targets[dest]);
         if ui.add_enabled(selected,egui::Button::new(
             tr("Overwrite buying settings on selected accounts"))).clicked() {
             apply=true;
@@ -384,7 +384,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
     let mut copied=Vec::new();
     let mut failures=Vec::new();
     for dest in 0..app.games.len() {
-        if dest==source || !app.market_copy_targets[dest] { continue; }
+        if dest==source || !app.workspace.market_copy_targets[dest] { continue; }
         let profile=app.games[dest].profile;
         // Respect the destination's in-memory draft first: a newly armed
         // Snatch listing may not have been saved yet. Its queue must survive
@@ -401,7 +401,7 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
             }
         };
         let copied_rules=existing.copy_buying_from(
-            &source_rules,app.market_copy_activation);
+            &source_rules,app.workspace.market_copy_activation);
         let result=match app.games[dest].native.as_ref() {
             Some(native)=>native.set_market_rules(copied_rules.clone()),
             None=>copied_rules.save(profile)
@@ -412,13 +412,13 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
                 app.market_notices[dest]=format!(
                     "Buying settings copied from account {}. Snatch queue preserved.",
                     source+1);
-                app.market_copy_targets[dest]=false;
+                app.workspace.market_copy_targets[dest]=false;
                 copied.push((dest+1).to_string());
             }
             Err(error)=>failures.push(format!("Account {}: {error}",dest+1)),
         }
     }
-    app.market_copy_activation=false;
+    app.workspace.market_copy_activation=false;
     let success=if copied.is_empty() {
         tr("No accounts updated").to_owned()
     } else {
