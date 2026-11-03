@@ -275,6 +275,8 @@ struct GameSlot {
     profile: GameProfile,
     native: Option<NativeSession>,
     handoff_closing: bool,
+    // A shutdown worker owns the browser until its completion is reconciled.
+    stopping: bool,
     child: Option<Child>,
     monitor: Option<MonitorHandle>,
     headless: bool,
@@ -289,6 +291,7 @@ impl GameSlot {
             profile,
             native: None,
             handoff_closing: false,
+            stopping: false,
             child: None,
             monitor: None,
             headless: true,
@@ -298,7 +301,7 @@ impl GameSlot {
     }
 
     fn is_running(&mut self) -> bool {
-        if self.native.is_some() || self.handoff_closing { return true; }
+        if self.native.is_some() || self.handoff_closing || self.stopping { return true; }
         if let Some(child) = self.child.as_mut() {
             // On an OS inspection error, conservatively keep ownership rather
             // than offer a duplicate launch into a potentially locked profile.
@@ -327,6 +330,11 @@ impl GameSlot {
         &self,
         native_sample: Option<(&crate::native_background::NativeSnapshot, &HuntView)>,
     ) -> Health {
+        if self.stopping {
+            let mut health = Health::default();
+            health.state = "Stopping".into();
+            return health;
+        }
         if self.handoff_closing {
             let mut health = Health::default();
             health.state = "Connecting".into();
@@ -869,6 +877,27 @@ struct NativeBrowserClosedEvent {
     result: Result<(), String>,
 }
 
+/// Explicit Stop transfers exclusive process ownership to one worker per account.
+struct FirefoxStopOwnership {
+    child: Option<Child>,
+    orphaned_pid: Option<u32>,
+    monitor: Option<MonitorHandle>,
+}
+
+struct FirefoxStoppedEvent {
+    index: usize,
+    generation: u64,
+    ownership: FirefoxStopOwnership,
+    result: Result<(), String>,
+}
+
+#[derive(Clone, Copy)]
+enum AfterStop {
+    Native { headless: bool },
+    Firefox,
+    Unmonitored(ProfileAction),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PanelTab { Overview, Hunts, Accounts, Automation, Options }
 
@@ -958,6 +987,9 @@ pub struct ControllerApp {
     native_closed_tx: WakeSender<NativeBrowserClosedEvent>,
     native_closed_rx: Receiver<NativeBrowserClosedEvent>,
     native_close_cancelled: [bool; 4],
+    firefox_stopped_tx: WakeSender<FirefoxStoppedEvent>,
+    firefox_stopped_rx: Receiver<FirefoxStoppedEvent>,
+    after_stop: [Option<AfterStop>; 4],
     cached_native_tx: WakeSender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
     cached_native_busy: [bool; 4],
@@ -1079,6 +1111,7 @@ impl ControllerApp {
         let (native_handoff_tx, native_handoff_rx) = wake_channel(&cc.egui_ctx);
         let (cached_native_tx, cached_native_rx) = wake_channel(&cc.egui_ctx);
         let (native_closed_tx, native_closed_rx) = wake_channel(&cc.egui_ctx);
+        let (firefox_stopped_tx, firefox_stopped_rx) = wake_channel(&cc.egui_ctx);
         let (native_verified_tx, native_verified_rx) = wake_channel(&cc.egui_ctx);
         let (hunt_reference_tx, hunt_reference_rx) = wake_channel(&cc.egui_ctx);
         let (capture_save_tx,capture_save_rx)=wake_channel(&cc.egui_ctx);
@@ -1108,6 +1141,9 @@ impl ControllerApp {
             native_closed_tx,
             native_closed_rx,
             native_close_cancelled: [false; 4],
+            firefox_stopped_tx,
+            firefox_stopped_rx,
+            after_stop: [None; 4],
             cached_native_tx,
             cached_native_rx,
             cached_native_busy: [false; 4],
@@ -1307,16 +1343,27 @@ impl Drop for ControllerApp {
         for slot in &mut self.games {
             if let Some(mut child) = slot.child.take() {
                 let account_name = self.accounts[slot.profile.index()].name.clone();
+                let monitor = slot.monitor.take();
                 logging::info(&format!(
-                    "controller shutting down; closing {} Firefox PID {}",
-                    account_name,
-                    child.id()
+                    "controller exiting; scheduling {} Firefox PID {} for shutdown",
+                    account_name, child.id()
                 ));
-                if let Err(error) = firefox::stop_child(&mut child, slot.monitor.as_ref()) {
-                    logging::error(&format!("{} shutdown failed: {}", account_name, error));
-                }
-            }
-            if let Some(monitor) = slot.monitor.take() {
+                // A process owned by this controller is closed independently of
+                // the egui window teardown. Do not join or perform BiDi waits here.
+                // In-flight explicit Stop/handoff workers already own their
+                // handles and continue without this receiver.
+                let _ = std::thread::Builder::new()
+                    .name(format!("moth-exit-{}", slot.profile.name()))
+                    .spawn(move || {
+                        if let Err(error) = firefox::stop_child(&mut child, monitor.as_ref()) {
+                            logging::error(&format!("{} exit shutdown failed: {}", account_name, error));
+                        }
+                        if let Some(monitor) = monitor { monitor.stop(); }
+                    })
+                    .map_err(|error| logging::error(&format!(
+                        "could not schedule Firefox exit cleanup: {error}"
+                    )));
+            } else if let Some(monitor) = slot.monitor.take() {
                 monitor.stop();
             }
             // Recovered processes are intentionally not owned by this controller
