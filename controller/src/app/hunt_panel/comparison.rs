@@ -143,13 +143,14 @@ pub(super) fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
         tr("Current measured results and best modeled unlocked hunts, side by side. Unknown and stale values remain unavailable.")
     ).size(11.0).color(MUTED));
     let mut views=Vec::new();
-    for index in 0..app.games.len(){
-        let profile=app.games[index].profile;
+    for index in 0..app.runtimes.len(){
+        let profile=app.runtimes[index].game.profile;
         let name=app.account_name(profile);
-        if let Some(native)=app.games[index].native.as_ref(){
+        let runtime = &mut app.runtimes[index];
+        if let Some(native)=runtime.game.native.as_ref(){
             let view=native.hunt_snapshot();
             let live=account_is_live(native);
-            app.hunt_estimate_cache[index].refresh(index,&view,app.hunt_reference.as_ref(),
+            runtime.hunt.hunt_estimate_cache.refresh(index,&view,app.hunt_reference.as_ref(),
                 live,app.ui_options.atlas_aoe_enabled[index]);
             views.push((index,name,view,live));
         }else{
@@ -198,7 +199,7 @@ pub(super) fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                                 .map(|p|p.name.as_str()).unwrap_or("—")
                         )).size(10.0).color(MUTED));
                         let current_model=view.hunt_slug.as_deref()
-                            .and_then(|slug|app.hunt_estimate_cache[*index].get(slug));
+                            .and_then(|slug|app.runtimes[*index].hunt.hunt_estimate_cache.get(slug));
                         draw_atlas_combat_cues(ui,view.active_pokemon.as_ref(),current_model.as_ref(),
                             app.ui_options.atlas_aoe_enabled[*index]);
                         ui.add_space(5.0);
@@ -229,7 +230,7 @@ pub(super) fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         ui.label(RichText::new(tr("TOP MODELED UNLOCKED HUNTS"))
                             .size(10.0).strong().color(DIM));
                         let mut estimates=view.hunts.iter().filter_map(|h|{
-                            app.hunt_estimate_cache[*index].get(&h.slug)
+                            app.runtimes[*index].hunt.hunt_estimate_cache.get(&h.slug)
                                 .map(|f|(h,f))
                         }).collect::<Vec<_>>();
                         estimates.sort_by(|a,b|b.1.trainer_xp_h.total_cmp(&a.1.trainer_xp_h));
@@ -244,7 +245,7 @@ pub(super) fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         }
                         if estimates.is_empty(){
                             ui.label(RichText::new(if *live &&
-                                app.hunt_estimate_cache[*index].is_pending(){
+                                app.runtimes[*index].hunt.hunt_estimate_cache.is_pending(){
                                 tr("Calculating modeled rankings...")
                             }else{tr("Not enough battle data for a reliable estimate yet.")})
                                 .size(10.0).color(MUTED));
