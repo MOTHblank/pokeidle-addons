@@ -114,11 +114,13 @@ pub(super) struct EstimateCache {
     catalog_ptr: usize,
     reference_ptr: usize,
     active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
+    active_species_id: Option<u64>,
+    active_max_hp: Option<u64>,
     bonus_signature: [u64;12],
     geo_ptr: usize,
-    hunt_slug: Option<String>,
     live: bool,
     refreshed: Option<Instant>,
+    failed_at:Option<Instant>,
     last_archived:Option<(String,Instant)>,
     pending: Option<std::sync::mpsc::Receiver<
         std::collections::BTreeMap<String,Option<native_atlas::Forecast>>>>,
@@ -136,11 +138,14 @@ impl EstimateCache {
             Some(Ok(values))=>{
                 self.values=values;
                 self.refreshed=Some(Instant::now());
+                self.failed_at=None;
                 self.pending=None;
             }
             Some(Err(TryRecvError::Disconnected))=>{
                 self.pending=None;
-                self.refreshed=Some(Instant::now()); // Backoff on worker panic.
+                // Only a failed worker retries after a delay. Successful
+                // forecasts never refresh just because time passed.
+                self.failed_at=Some(Instant::now());
             }
             _=>{}
         }
@@ -164,30 +169,41 @@ impl EstimateCache {
             b.delayed_xp_multiplier.to_bits(),b.extra_loot_pct.to_bits(),
             b.guild_known as u64,
         ];
+        // Only the inputs actually read by estimate_with_aoe invalidate its
+        // results. Changing hunts or receiving a combat receipt does not
+        // change the modeled throughput for any destination.
+        let active_species_id=view.active_pokemon.as_ref().and_then(|p|p.species_id);
+        let active_max_hp=view.active_pokemon.as_ref().and_then(|p|p.max_hp);
         let changed=self.account!=Some(account) || self.catalog_ptr!=catalog_ptr
             || self.reference_ptr!=reference_ptr || self.geo_ptr!=geo_ptr || self.live!=live
             || self.active_signature!=active_signature
-            || self.bonus_signature!=bonus_signature
-            || self.hunt_slug!=view.hunt_slug;
+            || self.active_species_id!=active_species_id
+            || self.active_max_hp!=active_max_hp
+            || self.bonus_signature!=bonus_signature;
         if changed {
             self.account=Some(account);
             self.catalog_ptr=catalog_ptr;
             self.reference_ptr=reference_ptr;
             self.geo_ptr=geo_ptr;
             self.active_signature=active_signature;
+            self.active_species_id=active_species_id;
+            self.active_max_hp=active_max_hp;
             self.bonus_signature=bonus_signature;
             self.live=live;
-            self.hunt_slug=view.hunt_slug.clone();
             self.refreshed=None;
+            self.failed_at=None;
             self.last_archived=None;
             self.pending=None; // Discard outdated asynchronous results.
             self.values.clear();
         }
-        if !live || self.pending.is_some() ||
-            self.refreshed.is_some_and(|at|at.elapsed()<Duration::from_secs(20)) {
+        // A completed generation remains valid until a relevant input changes.
+        // Do not launch another full combat simulation on a 20-second timer.
+        if !live || self.pending.is_some() || self.refreshed.is_some() ||
+            self.failed_at.is_some_and(|at|at.elapsed()<Duration::from_secs(20)) {
             return;
         }
         let Some(reference)=reference else {return};
+        self.failed_at=None;
         let guide=Arc::clone(reference);
         let snapshot=view.clone();
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
@@ -295,6 +311,105 @@ fn ranked_hunts<'a>(
     }.then_with(||a.hunt.level.cmp(&b.hunt.level))
         .then_with(||a.hunt.name.cmp(&b.hunt.name)));
     ranked
+}
+
+
+#[derive(Clone, Copy)]
+struct CachedRankingRow {
+    hunt_index:usize,
+    value:Option<f64>,
+    source:RateSource,
+}
+
+/// Keep only indices and sortable rates, not copies of the hunt catalog or
+/// forecasts. Completed rankings survive egui repaints and live socket polls.
+#[derive(Default)]
+pub(super) struct RankingsCache {
+    rows:Vec<CachedRankingRow>,
+    catalog:Option<Arc<Vec<native_hunts::HuntEntry>>>,
+    reference:Option<Arc<AtlasReference>>,
+    forecast_at:Option<Instant>,
+    ranking:Option<HuntRanking>,
+    query:String,
+    region:String,
+    species_type:String,
+    live:bool,
+    needs_fallback:bool,
+    fallback:Option<(Option<String>,Option<u64>,Option<u64>)>,
+    initialized:bool,
+    #[cfg(test)]
+    rebuilds:usize,
+}
+impl RankingsCache {
+    pub(super) fn release(&mut self){
+        if self.initialized {*self=Self::default();}
+    }
+    fn fallback_signature(view:&HuntView,ranking:HuntRanking,live:bool)
+        ->(Option<String>,Option<u64>,Option<u64>){
+        let m=&view.measurements;
+        let recent=live && m.last_battle_age_secs.is_none_or(|age|age<=180);
+        let pace=(recent && m.seconds>=20.0 && m.kills>=5
+            && m.kills_h.is_finite() && m.kills_h>0.0)
+            .then_some(m.kills_h.to_bits());
+        let actual=(if recent {
+            match ranking {
+                HuntRanking::TrainerXp if m.valid_trainer=>Some(m.trainer_xp_h),
+                HuntRanking::PokemonXp if m.valid_pokemon=>Some(m.pokemon_xp_h),
+                HuntRanking::Gold if m.valid_gross_gold && m.kills>=5=>
+                    Some(m.gold_gross_h),
+                _=>None,
+            }
+        }else{None}).filter(|n|n.is_finite()).map(f64::to_bits);
+        (view.hunt_slug.clone(),pace,actual)
+    }
+    fn update(&mut self,view:&HuntView,reference:Option<&Arc<AtlasReference>>,
+        estimates:&EstimateCache,ranking:HuntRanking,live:bool,
+        query:&str,region:&str,species_type:&str,
+    )->&[CachedRankingRow] {
+        // Measurements are irrelevant when every hunt already has a combat
+        // forecast. Otherwise, missing forecasts may use measured rates or
+        // same-pace scenarios and those inputs must remain live.
+        let fallback=self.needs_fallback.then(||
+            Self::fallback_signature(view,ranking,live));
+        let changed=!self.initialized ||
+            self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
+            self.reference.as_ref().map(Arc::as_ptr)!=reference.map(Arc::as_ptr) ||
+            self.forecast_at!=estimates.refreshed ||
+            self.ranking!=Some(ranking) || self.live!=live ||
+            self.query!=query || self.region!=region ||
+            self.species_type!=species_type ||
+            self.fallback!=fallback;
+        if changed {
+            #[cfg(test)]
+            {self.rebuilds+=1;}
+            let indices=view.hunts.iter().enumerate()
+                .map(|(index,hunt)|(hunt.slug.as_str(),index))
+                .collect::<std::collections::BTreeMap<_,_>>();
+            let ranked=ranked_hunts(view,reference.map(Arc::as_ref),ranking,live,
+                query,region,species_type,estimates);
+            // Only measured or same-pace rows in the *visible filter set*
+            // can be reordered by incoming battle measurements.
+            self.needs_fallback=live && ranked.iter().any(|row|
+                row.source!=RateSource::Experimental);
+            self.rows=ranked.into_iter()
+                .filter_map(|row|indices.get(row.hunt.slug.as_str())
+                    .map(|&hunt_index|CachedRankingRow{
+                        hunt_index,value:row.value,source:row.source,
+                    })).collect();
+            self.fallback=self.needs_fallback.then(||
+                Self::fallback_signature(view,ranking,live));
+            self.catalog=Some(Arc::clone(&view.hunts));
+            self.reference=reference.cloned();
+            self.forecast_at=estimates.refreshed;
+            self.ranking=Some(ranking);
+            self.live=live;
+            self.query=query.to_owned();
+            self.region=region.to_owned();
+            self.species_type=species_type.to_owned();
+            self.initialized=true;
+        }
+        &self.rows
+    }
 }
 
 fn rate_label(ranking: HuntRanking) -> &'static str {
@@ -956,10 +1071,10 @@ pub(super) struct ExplorerCache {
     reference_ptr:usize,
     forecast_at:Option<Instant>,
     model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
-    hunt_slug:Option<String>,
     trainer_level:Option<u32>,
     outland_catalog:Option<[(u32,f64);8]>,
     roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
+    owned_species:std::collections::BTreeSet<u64>,
     roster_ready:bool,
     ball_quotes:Option<Arc<std::collections::BTreeMap<u64,native_hunts::BallQuote>>>,
     initialized:bool,
@@ -978,6 +1093,37 @@ impl ExplorerCache {
     )->&[AtlasSpeciesRow] {
         let mut key_filters=filters.clone();
         key_filters.selected_species=None;
+        // Explorer uses only the modeling fields relevant to this sort;
+        // disclosure state, selected destination and unrelated scenario
+        // knobs must not trigger a full species/destination sort.
+        let mut key_scenario=scenario.clone();
+        key_scenario.hunt_slug.clear();
+        key_scenario.modifiers_open=false;
+        match filters.sort {
+            AtlasSort::Capture=>{
+                key_scenario.tier=1;
+                key_scenario.rare_target=70000;
+                key_scenario.accepted_fraction_override=None;
+            }
+            AtlasSort::ShinyCaught=>{
+                key_scenario.tier=1;
+                key_scenario.rare_target=70000;
+            }
+            AtlasSort::OutlandRare=>{
+                key_scenario.ball=BallKind::Ultra;
+                key_scenario.accepted_fraction_override=None;
+            }
+            _=>key_scenario=AtlasScenario::default(),
+        }
+        // Roster Arc changes on HP/XP updates. Only the owned species IDs
+        // affect the Explorer labels and collection filter.
+        let roster_changed=self.roster.as_ref().is_none_or(|old|
+            !Arc::ptr_eq(old,&view.pokemon_roster));
+        let species=roster_changed.then(||view.pokemon_roster.iter()
+            .filter_map(|p|p.species_id)
+            .collect::<std::collections::BTreeSet<_>>());
+        let ownership_changed=species.as_ref().is_some_and(|ids|
+            ids!=&self.owned_species);
         // Retaining the previous source Arc prevents pointer reuse from
         // hiding a genuine server roster/catalog update.
         let reference_ptr=reference.map_or(0,|r|r as *const _ as usize);
@@ -985,15 +1131,14 @@ impl ExplorerCache {
         // as XP and kills; unrelated live reward receipts cannot reorder it.
         let changed=!self.initialized ||
             self.filters.as_ref()!=Some(&key_filters) ||
-            self.scenario.as_ref()!=Some(scenario) ||
+            self.scenario.as_ref()!=Some(&key_scenario) ||
             self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
             self.reference_ptr!=reference_ptr ||
             self.forecast_at!=estimates.refreshed ||
             self.model_signature!=estimates.active_signature ||
-            self.hunt_slug!=view.hunt_slug ||
             self.trainer_level!=view.trainer_level ||
             self.outland_catalog!=view.outland_catalog ||
-            self.roster.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.pokemon_roster)) ||
+            ownership_changed ||
             self.roster_ready!=view.roster_ready ||
             self.ball_quotes.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.ball_quotes));
         if changed {
@@ -1001,18 +1146,20 @@ impl ExplorerCache {
             {self.rebuilds+=1;}
             self.rows=atlas_species_rows(view,reference,estimates,filters,scenario);
             self.filters=Some(key_filters);
-            self.scenario=Some(scenario.clone());
+            self.scenario=Some(key_scenario);
             self.catalog=Some(Arc::clone(&view.hunts));
             self.reference_ptr=reference_ptr;
             self.forecast_at=estimates.refreshed;
             self.model_signature=estimates.active_signature.clone();
-            self.hunt_slug=view.hunt_slug.clone();
             self.trainer_level=view.trainer_level;
             self.outland_catalog=view.outland_catalog;
-            self.roster=Some(Arc::clone(&view.pokemon_roster));
             self.roster_ready=view.roster_ready;
             self.ball_quotes=Some(Arc::clone(&view.ball_quotes));
             self.initialized=true;
+        }
+        if let Some(species)=species {
+            self.owned_species=species;
+            self.roster=Some(Arc::clone(&view.pokemon_roster));
         }
         &self.rows
     }
@@ -2774,9 +2921,10 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         }
                     });
                     let reference=app.hunt_reference.as_deref();
-                    let ranked=ranked_hunts(hunts,reference,app.workspace.hunt_filters.ranking,live,
-                        &app.workspace.hunt_filters.query,&app.workspace.hunt_filters.region,&app.workspace.hunt_filters.pokemon_type,
-                        &app.hunt_estimate_cache[index]);
+                    let ranked=app.hunt_rankings[index].update(hunts,app.hunt_reference.as_ref(),
+                        &app.hunt_estimate_cache[index],app.workspace.hunt_filters.ranking,live,
+                        &app.workspace.hunt_filters.query,&app.workspace.hunt_filters.region,
+                        &app.workspace.hunt_filters.pokemon_type);
                     ui.label(RichText::new(format!(
                         "{} {} · {}",
                         ranked.len(),tr("matching hunts"),tr("only current hunt has measured rates")
@@ -2786,7 +2934,12 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(7.0);
                     for (offset,result) in ranked.iter().skip(visible.start)
                         .take(visible.end-visible.start).enumerate(){
-                        draw_hunt_row(ui,result,visible.start+offset+1,app.workspace.hunt_filters.ranking,
+                        let hunt=&hunts.hunts[result.hunt_index];
+                        let row=RankedHunt{
+                            hunt,forecast:if live {app.hunt_estimate_cache[index].get(&hunt.slug)} else {None},
+                            value:result.value,source:result.source,
+                        };
+                        draw_hunt_row(ui,&row,visible.start+offset+1,app.workspace.hunt_filters.ranking,
                             hunts,reference,live,native,&mut app.hunt_action_error[index],
                             app.ui_options.atlas_aoe_enabled[index]);
                         ui.add_space(5.0);
@@ -3309,6 +3462,113 @@ mod tests {
     }
 
 
+
+    #[test]
+    fn combat_cache_does_not_recompute_by_age_or_hunt_switch(){
+        let mut view=HuntView::default();
+        let reference=Arc::new(AtlasReference::default());
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,Some(&reference),true,false);
+        // Force a completed generation older than the former 20s timer.
+        cache.pending=None;
+        let old=Instant::now()-Duration::from_secs(120);
+        cache.refreshed=Some(old);
+        cache.refresh(0,&view,Some(&reference),true,false);
+        assert!(cache.pending.is_none(),"age alone must not spawn a worker");
+        assert_eq!(cache.refreshed,Some(old));
+        view.hunt_slug=Some("other-hunt".into());
+        cache.refresh(0,&view,Some(&reference),true,false);
+        assert!(cache.pending.is_none(),"a hunt switch must reuse the same model");
+        assert_eq!(cache.refreshed,Some(old));
+    }
+    #[test]
+    fn combat_cache_invalidates_when_max_hp_or_species_changes(){
+        let mut view=HuntView::default();
+        view.active_pokemon=Some(native_hunts::PokemonInfo{
+            id:1,species_id:Some(25),max_hp:Some(100),..Default::default()
+        });
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        cache.refreshed=Some(Instant::now());
+        view.active_pokemon.as_mut().unwrap().max_hp=Some(200);
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        cache.refreshed=Some(Instant::now());
+        view.active_pokemon.as_mut().unwrap().species_id=Some(26);
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+    }
+    #[test]
+    fn rankings_cache_ignores_receipts_when_forecasts_are_complete(){
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"a".into(),name:"A".into(),..Default::default()
+        }]);
+        let mut estimates=EstimateCache::default();
+        estimates.values.insert("a".into(),Some(simulated_forecast(300.0,false)));
+        estimates.refreshed=Some(Instant::now());
+        let mut results=RankingsCache::default();
+        results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        assert_eq!(results.rebuilds,1);
+        view.measurements.seconds=60.0;
+        view.measurements.kills=10;
+        view.measurements.kills_h=600.0;
+        view.hunt_slug=Some("a".into());
+        results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        assert_eq!(results.rebuilds,1);
+        results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"A","","");
+        assert_eq!(results.rebuilds,2,"filter edits must invalidate rankings");
+        estimates.refreshed=Some(Instant::now()+Duration::from_secs(1));
+        results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"A","","");
+        assert_eq!(results.rebuilds,3,"new forecasts must invalidate rankings");
+    }
+    #[test]
+    fn rankings_cache_tracks_live_fallback_when_forecast_is_missing(){
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"a".into(),name:"A".into(),..Default::default()
+        }]);
+        let estimates=EstimateCache::default();
+        let mut results=RankingsCache::default();
+        results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        assert_eq!(results.rebuilds,1);
+        view.hunt_slug=Some("a".into());
+        view.measurements.seconds=60.0;
+        view.measurements.kills=10;
+        view.measurements.kills_h=600.0;
+        view.measurements.trainer_xp_h=1200.0;
+        view.measurements.valid_trainer=true;
+        results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        assert_eq!(results.rebuilds,2);
+        assert_eq!(results.rows[0].value,Some(1200.0));
+    }
+    #[test]
+    fn explorer_cache_ignores_roster_hp_and_unrelated_scenario_edits(){
+        let mut view=HuntView::default();
+        view.pokemon_roster=Arc::new(vec![native_hunts::PokemonInfo{
+            species_id:Some(25),hp:Some(20),..Default::default()
+        }]);
+        let estimates=EstimateCache::default();
+        let filters=AtlasFilters::default();
+        let mut scenario=AtlasScenario::default();
+        let mut results=ExplorerCache::default();
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,1);
+        view.pokemon_roster=Arc::new(vec![native_hunts::PokemonInfo{
+            species_id:Some(25),hp:Some(10),..Default::default()
+        }]);
+        scenario.modifiers_open=true;
+        scenario.hunt_slug="different".into();
+        scenario.ball=BallKind::Beast;
+        view.hunt_slug=Some("other-hunt".into());
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,1);
+        view.pokemon_roster=Arc::new(vec![native_hunts::PokemonInfo{
+            species_id:Some(26),hp:Some(10),..Default::default()
+        }]);
+        results.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(results.rebuilds,2,"ownership changes must refresh badges");
+    }
     #[test]
     fn explorer_cache_skips_selection_only_redraws_but_not_new_filters() {
         let view=HuntView::default();
