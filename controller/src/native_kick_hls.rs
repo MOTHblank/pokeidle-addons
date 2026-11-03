@@ -2,6 +2,7 @@
 //! rendition, then discards segment bytes without decoding or caching them.
 //! A successful download is evidence of *network media transfer*, not proof
 //! that Kick credited a view or that somebody watched the content.
+use crate::native_kick_pool;
 use reqwest::blocking::Client;
 use reqwest::{Url, redirect::Policy};
 use std::collections::VecDeque;
@@ -24,20 +25,91 @@ pub struct MediaStatus {
     pub last_segment: Option<Instant>,
     pub error: Option<String>,
 }
+
+/// HLS payload bytes, including manifests and interrupted transfers. This is
+/// not an estimate based on the advertised bitrate and excludes protocol
+/// overhead. A counter belongs to one Kick account session only.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BandwidthUsage {
+    pub bytes: u64,
+    pub last_minute: u64,
+}
+#[derive(Default)]
+struct Traffic {
+    bytes: u64,
+    recent: VecDeque<(Instant, u64)>,
+}
+#[derive(Default)]
+pub struct AccountBandwidth {
+    traffic: Mutex<Traffic>,
+}
+impl AccountBandwidth {
+    fn record(&self, bytes: u64) {
+        if bytes == 0 { return; }
+        let Ok(mut traffic) = self.traffic.lock() else { return };
+        let now = Instant::now();
+        traffic.bytes = traffic.bytes.saturating_add(bytes);
+        // Merge bursts into one bucket/second, not one entry per HTTP read.
+        if let Some((at, sum)) = traffic.recent.back_mut() {
+            if now.saturating_duration_since(*at) < Duration::from_secs(1) {
+                *sum = sum.saturating_add(bytes);
+            } else {
+                traffic.recent.push_back((now, bytes));
+            }
+        } else {
+            traffic.recent.push_back((now, bytes));
+        }
+        while traffic.recent.front().is_some_and(|(at, _)|
+            now.saturating_duration_since(*at) >= Duration::from_secs(60))
+        {
+            traffic.recent.pop_front();
+        }
+    }
+    pub fn usage(&self) -> BandwidthUsage {
+        let Ok(mut traffic) = self.traffic.lock() else { return BandwidthUsage::default() };
+        let now = Instant::now();
+        while traffic.recent.front().is_some_and(|(at, _)|
+            now.saturating_duration_since(*at) >= Duration::from_secs(60))
+        {
+            traffic.recent.pop_front();
+        }
+        BandwidthUsage {
+            bytes: traffic.bytes,
+            last_minute: traffic.recent.iter().fold(0_u64, |sum, (_, bytes)|
+                sum.saturating_add(*bytes)),
+        }
+    }
+}
+/// Charge bytes even when a segment read fails after transferring part of it.
+struct MeteredReader<'a, R: Read> {
+    reader: R,
+    bytes: u64,
+    account: &'a AccountBandwidth,
+}
+impl<R: Read> Read for MeteredReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let amount = self.reader.read(buf)?;
+        self.bytes = self.bytes.saturating_add(amount as u64);
+        Ok(amount)
+    }
+}
+impl<R: Read> Drop for MeteredReader<'_, R> {
+    fn drop(&mut self) { self.account.record(self.bytes); }
+}
 pub struct MediaRunner {
     pub state: Arc<Mutex<MediaStatus>>,
     stop: Arc<AtomicBool>,
 }
 impl MediaRunner {
-    pub fn start(source: String, account_stop: Arc<AtomicBool>) -> Result<Self, String> {
+    pub fn start(source: String, account_stop: Arc<AtomicBool>,
+                 bandwidth: Arc<AccountBandwidth>) -> Result<Self, String> {
         let url = media_url(&source)?;
         let state = Arc::new(Mutex::new(MediaStatus::default()));
         let local_stop = Arc::new(AtomicBool::new(false));
         let worker_state = Arc::clone(&state);
         let worker_stop = Arc::clone(&local_stop);
-        thread::Builder::new().name("moth-kick-hls".into())
-            .spawn(move || run(url, account_stop, worker_stop, worker_state))
-            .map_err(|_| "Could not start Kick media worker".to_owned())?;
+        native_kick_pool::submit_hls(Arc::clone(&local_stop),
+            move || run(url, account_stop, worker_stop, worker_state, bandwidth))?;
         Ok(Self { state, stop: local_stop })
     }
     pub fn snapshot(&self) -> MediaStatus {
@@ -48,7 +120,10 @@ impl MediaRunner {
     }
 }
 impl Drop for MediaRunner {
-    fn drop(&mut self) { self.stop.store(true, Ordering::Relaxed); }
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        native_kick_pool::discard_canceled_hls();
+    }
 }
 
 /// Never fetch arbitrary hosts advertised by an untrusted playlist. HLS URLs
@@ -69,15 +144,17 @@ fn join_checked(base: &Url, relative: &str) -> Result<Url, String> {
         .map_err(|_| "Invalid Kick playlist reference".to_owned())?;
     media_url(candidate.as_str())
 }
-fn playlist_text(client: &Client, url: &Url) -> Result<String, String> {
+fn playlist_text(client: &Client, url: &Url,
+                 bandwidth: &AccountBandwidth) -> Result<String, String> {
     let mut response = client.get(url.clone()).send()
         .map_err(|_| "Kick HLS playlist download failed".to_owned())?
         .error_for_status()
         .map_err(|_| "Kick HLS playlist rejected the request".to_owned())?;
     let mut buffer = Vec::new();
-    (&mut response).take(MAX_PLAYLIST_BYTES as u64 + 1)
-        .read_to_end(&mut buffer)
-        .map_err(|_| "Kick HLS playlist could not be read".to_owned())?;
+    let result = (&mut response).take(MAX_PLAYLIST_BYTES as u64 + 1)
+        .read_to_end(&mut buffer);
+    bandwidth.record(buffer.len() as u64);
+    result.map_err(|_| "Kick HLS playlist could not be read".to_owned())?;
     if buffer.len() > MAX_PLAYLIST_BYTES {
         return Err("Kick HLS playlist is too large".into());
     }
@@ -137,7 +214,7 @@ fn pause(stop: &AtomicBool, account_stop: &AtomicBool, delay: Duration) {
     }
 }
 fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
-       state: Arc<Mutex<MediaStatus>>) {
+       state: Arc<Mutex<MediaStatus>>, bandwidth: Arc<AccountBandwidth>) {
     let client = match Client::builder()
         .timeout(Duration::from_secs(18))
         .connect_timeout(Duration::from_secs(7))
@@ -160,7 +237,7 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
             let chosen = if let Some(url) = &variant {
                 url.clone()
             } else {
-                let body = playlist_text(&client, &master)?;
+                let body = playlist_text(&client, &master, &bandwidth)?;
                 if let Some((url, rate)) = cheapest_variant(&body, &master)? {
                     if let Ok(mut status) = state.lock() {
                         status.bitrate = (rate != u64::MAX).then_some(rate);
@@ -172,7 +249,7 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
                     master.clone()
                 }
             };
-            let playlist = playlist_text(&client, &chosen)?;
+            let playlist = playlist_text(&client, &chosen, &bandwidth)?;
             let (entries, delay) = segments(&playlist, &chosen)?;
             if entries.is_empty() { return Err("Kick media playlist has no segments".into()); }
             let first_pass = known.is_empty();
@@ -190,9 +267,17 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
                     .map_err(|_| "Kick HLS segment request failed".to_owned())?
                     .error_for_status()
                     .map_err(|_| "Kick HLS segment rejected the request".to_owned())?;
-                // std::io::sink() discards the bytes; it does not cache video.
-                let bytes = std::io::copy(&mut (&mut response).take(MAX_SEGMENT_BYTES), &mut sink())
-                    .map_err(|_| "Kick HLS segment transfer failed".to_owned())?;
+                // The sink discards media; the account meter counts all
+                // transferred payload, including partial reads on failure.
+                let bytes = {
+                    let mut counted = MeteredReader {
+                        reader: (&mut response).take(MAX_SEGMENT_BYTES),
+                        bytes: 0,
+                        account: &bandwidth,
+                    };
+                    std::io::copy(&mut counted, &mut sink())
+                        .map_err(|_| "Kick HLS segment transfer failed".to_owned())?
+                };
                 known.push_back(key);
                 while known.len() > MAX_SEEN { known.pop_front(); }
                 if let Ok(mut status) = state.lock() {
@@ -223,6 +308,31 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_bandwidth_is_isolated_and_counts_real_payload() {
+        let first = AccountBandwidth::default();
+        let second = AccountBandwidth::default();
+        first.record(1024);
+        first.record(2048);
+        second.record(512);
+        assert_eq!(first.usage().bytes, 3072);
+        assert_eq!(first.usage().last_minute, 3072);
+        assert_eq!(second.usage().bytes, 512);
+    }
+    #[test]
+    fn metered_reader_counts_partial_transfers_when_dropped() {
+        let bandwidth = AccountBandwidth::default();
+        {
+            let mut reader = MeteredReader {
+                reader: &b"some media bytes"[..],
+                bytes: 0,
+                account: &bandwidth,
+            };
+            let mut buffer = [0_u8; 4];
+            reader.read_exact(&mut buffer).unwrap();
+        }
+        assert_eq!(bandwidth.usage().bytes, 4);
+    }
     #[test]
     fn lowest_bitrate_is_selected() {
         let base = media_url("https://edge.us-west-2.playback.live-video.net/live/index.m3u8").unwrap();

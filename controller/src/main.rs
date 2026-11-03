@@ -7,6 +7,7 @@ mod icon;
 mod config;
 mod kick;
 mod native_kick;
+mod native_kick_pool;
 mod native_kick_login;
 mod native_kick_hls;
 mod native_kick_viewer;

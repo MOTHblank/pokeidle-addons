@@ -641,6 +641,16 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             kick_metric(&mut cols[2], kick_label(br, "Points earned", "Pontos ganhos"),
                 format!("+{earned}"), if earned > 0 { GOOD } else { TEXT });
         });
+        if let Some(snapshot) = monitor {
+            ui.label(RichText::new(format!(
+                "{}: {:.1} MiB {} · {:.1} MiB {}",
+                kick_label(br, "HLS payload transferred", "Dados HLS transferidos"),
+                snapshot.bandwidth.bytes as f64 / 1_048_576.0,
+                kick_label(br, "this session", "nesta sessão"),
+                snapshot.bandwidth.last_minute as f64 / 1_048_576.0,
+                kick_label(br, "last 60 seconds", "últimos 60 segundos"),
+            )).size(10.0).color(MUTED));
+        }
         ui.label(RichText::new(kick_label(br,
             "Media receiving counts recent transfers, not confirmed views. Earned points count only observed balance increases.",
             "Recebendo mídia conta transferências recentes, não visualizações confirmadas. Pontos ganhos contam apenas aumentos observados do saldo."))

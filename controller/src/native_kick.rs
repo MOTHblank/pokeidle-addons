@@ -3,11 +3,13 @@
 //! balances are distinct signals. Only an observed increase of a real
 //! authenticated point balance is reported as points earned.
 use crate::native_kick_viewer::{self, AuthGate, WatchTelemetry};
+use crate::native_kick_hls::{AccountBandwidth, BandwidthUsage};
+use crate::native_kick_pool;
 use crate::config::KickStreamPreferences;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const MAX_CHANNELS: usize = 12;
@@ -27,6 +29,7 @@ pub struct ChannelStatus {
 pub struct KickSnapshot {
     pub phase: String,
     pub auth_denied: bool,
+    pub bandwidth: BandwidthUsage,
     pub channels: Vec<ChannelStatus>,
     pub last_checked: Option<Instant>,
     pub error: Option<String>,
@@ -36,6 +39,7 @@ impl Default for KickSnapshot {
         Self {
             phase: "Connecting".into(),
             auth_denied: false,
+            bandwidth: BandwidthUsage::default(),
             channels: Vec::new(),
             last_checked: None,
             error: None,
@@ -63,6 +67,7 @@ struct OfflinePointsWorker {
     roster: Arc<Mutex<Vec<String>>>,
     balances: Arc<Mutex<BTreeMap<String, OfflinePoints>>>,
     stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
 }
 pub struct KickMonitor {
     snapshot: Arc<Mutex<KickSnapshot>>,
@@ -70,6 +75,7 @@ pub struct KickMonitor {
     observed: Vec<KickWorker>,
     token: String,
     auth: Arc<AuthGate>,
+    bandwidth: Arc<AccountBandwidth>,
     offline_points: Option<OfflinePointsWorker>,
 }
 impl KickMonitor {
@@ -94,6 +100,7 @@ impl KickMonitor {
             observed: Vec::new(),
             token: bearer.to_owned(),
             auth: Arc::new(AuthGate::default()),
+            bandwidth: Arc::new(AccountBandwidth::default()),
             offline_points: None,
         };
         monitor.sync_channels(&slugs)?;
@@ -112,9 +119,10 @@ impl KickMonitor {
         let desired: BTreeSet<_> = normalized.iter().cloned().collect();
         for worker in &self.observed {
             if !desired.contains(&worker.slug) {
-                worker.stop.store(true, Ordering::Relaxed);
+                worker.stop.store(true, Ordering::Release);
             }
         }
+        native_kick_pool::discard_canceled_channels();
         self.observed.retain(|w| desired.contains(&w.slug));
         if let Ok(mut state) = self.snapshot.lock() {
             state.channels.retain(|channel| desired.contains(&channel.slug));
@@ -137,25 +145,24 @@ impl KickMonitor {
             let child_stop = Arc::clone(&worker_stop);
             let child_token = self.token.clone();
             let child_auth = Arc::clone(&self.auth);
+            let child_bandwidth = Arc::clone(&self.bandwidth);
             let child_slug = slug.clone();
-            let result = thread::Builder::new()
-                .name("moth-kick-channel".into())
-                .spawn(move || {
-                    // A short stagger avoids bursts, without delaying already
-                    // active channels when the official list changes.
-                    for _ in 0..offset.min(5).saturating_mul(2) {
-                        if child_stop.load(Ordering::Relaxed) { return; }
-                        thread::sleep(Duration::from_secs(1));
-                    }
-                    channel_loop(child_token, child_slug, child_state,
-                        child_snapshot, child_stop, child_auth)
-                });
-            if result.is_err() {
-                worker_stop.store(true, Ordering::Relaxed);
+            let result = native_kick_pool::submit_channel(Arc::clone(&worker_stop), move || {
+                // A short stagger avoids bursts, without delaying already
+                // active channels when the official list changes.
+                for _ in 0..offset.min(5).saturating_mul(2) {
+                    if child_stop.load(Ordering::Acquire) { return; }
+                    thread::sleep(Duration::from_secs(1));
+                }
+                channel_loop(child_token, child_slug, child_state,
+                    child_snapshot, child_stop, child_auth, child_bandwidth)
+            });
+            if let Err(error) = result {
+                worker_stop.store(true, Ordering::Release);
                 if let Ok(mut state) = self.snapshot.lock() {
                     state.channels.retain(|item| item.slug != *slug);
                 }
-                return Err("Could not start Kick channel worker".into());
+                return Err(error);
             }
             self.observed.push(KickWorker {
                 slug: slug.clone(), telemetry, stop: worker_stop,
@@ -182,7 +189,7 @@ impl KickMonitor {
             let stop_worker = Arc::clone(&stop);
             let token = self.token.clone();
             let auth = Arc::clone(&self.auth);
-            thread::Builder::new().name("moth-kick-offline-points".into()).spawn(move || {
+            let handle = thread::Builder::new().name("moth-kick-offline-points".into()).spawn(move || {
                 let Ok(client) = native_kick_viewer::new_client(&token) else { return };
                 let mut previous = Vec::<String>::new();
                 let mut last_poll = Instant::now() - Duration::from_secs(130);
@@ -216,7 +223,7 @@ impl KickMonitor {
                     thread::sleep(Duration::from_secs(1));
                 }
             }).map_err(|_| "Could not start Kick offline balance polling".to_owned())?;
-            self.offline_points = Some(OfflinePointsWorker { roster, balances, stop });
+            self.offline_points = Some(OfflinePointsWorker { roster, balances, stop, handle });
         } else if let Some(worker) = &self.offline_points {
             if let Ok(mut current) = worker.roster.lock() {
                 if *current != pending { *current = pending; }
@@ -234,6 +241,7 @@ impl KickMonitor {
     pub fn snapshot(&self) -> KickSnapshot {
         let mut state = self.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
         state.auth_denied = self.auth.denied();
+        state.bandwidth = self.bandwidth.usage();
         if state.auth_denied { state.phase = "AuthDenied".into(); }
         for channel in &mut state.channels {
             if let Some(worker) = self.observed.iter()
@@ -251,12 +259,18 @@ impl KickMonitor {
             worker.stop.store(true, Ordering::Relaxed);
         }
         for worker in &self.observed {
-            worker.stop.store(true, Ordering::Relaxed);
+            worker.stop.store(true, Ordering::Release);
         }
+        native_kick_pool::discard_canceled_channels();
     }
 }
 impl Drop for KickMonitor {
-    fn drop(&mut self) { self.stop(); }
+    fn drop(&mut self) {
+        self.stop();
+        if let Some(worker) = self.offline_points.take() {
+            native_kick_pool::retire(worker.handle);
+        }
+    }
 }
 
 /// Compute limited viewer slots once per roster/configuration change, never
@@ -314,6 +328,7 @@ pub struct KickSupervisor {
     sender:mpsc::Sender<KickReconcileEvent>,
     stop:Arc<AtomicBool>,
     identity:Instant,
+    coordinator: Option<JoinHandle<()>>,
 }
 impl KickSupervisor {
     pub fn start(token:String,input:&str,manual:Vec<String>,
@@ -328,7 +343,7 @@ impl KickSupervisor {
         let (sender,receiver)=mpsc::channel();
         let stop=Arc::new(AtomicBool::new(false));
         let worker_stop=Arc::clone(&stop);
-        thread::Builder::new().name("moth-kick-roster".into())
+        let coordinator = thread::Builder::new().name("moth-kick-roster".into())
             .stack_size(256*1024)
             .spawn(move || {
                 let mut manual=manual;
@@ -401,7 +416,7 @@ impl KickSupervisor {
                 }
             })
             .map_err(|error|format!("Could not start Kick roster coordinator: {error}"))?;
-        Ok(Self { monitor,sender,stop,identity })
+        Ok(Self { monitor,sender,stop,identity,coordinator:Some(coordinator) })
     }
     pub fn roster_publisher(&self)->KickRosterPublisher {
         KickRosterPublisher{sender:self.sender.clone()}
@@ -426,12 +441,18 @@ impl Drop for KickSupervisor {
         self.stop.store(true,Ordering::Release);
         let _=self.sender.send(KickReconcileEvent::Stop);
         if let Ok(monitor)=self.monitor.lock() {monitor.stop();}
+        if let Some(handle)=self.coordinator.take() {
+            native_kick_pool::retire(handle);
+        }
     }
 }
 
 fn update_channel(snapshot: &Arc<Mutex<KickSnapshot>>, slug: &str,
-                  action: impl FnOnce(&mut ChannelStatus)) {
+                  stop: &AtomicBool, action: impl FnOnce(&mut ChannelStatus)) {
     if let Ok(mut state) = snapshot.lock() {
+        // The slug can be removed and re-added while an old HTTP request is
+        // completing. Never let that retired worker update the new row.
+        if stop.load(Ordering::Acquire) { return; }
         state.last_checked = Some(Instant::now());
         if let Some(channel) = state.channels.iter_mut().find(|item| item.slug == slug) {
             action(channel);
@@ -457,32 +478,33 @@ fn pause(stop: &AtomicBool, duration: Duration) {
 }
 fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry>>,
                 snapshot: Arc<Mutex<KickSnapshot>>, stop: Arc<AtomicBool>,
-                auth: Arc<AuthGate>) {
+                auth: Arc<AuthGate>, bandwidth: Arc<AccountBandwidth>) {
     let client = match native_kick_viewer::new_client(&token) {
         Ok(client) => client,
         Err(error) => {
-            update_channel(&snapshot, &slug, |c| c.error = Some(error));
+            update_channel(&snapshot, &slug, &stop, |c| c.error = Some(error));
             return;
         }
     };
     let public_client = match native_kick_viewer::new_public_client() {
         Ok(client) => client,
         Err(error) => {
-            update_channel(&snapshot, &slug, |c| c.error = Some(error));
+            update_channel(&snapshot, &slug, &stop, |c| c.error = Some(error));
             return;
         }
     };
     let mut failures = 0_u32;
     while !stop.load(Ordering::Relaxed) {
         if auth.denied() {
-            update_channel(&snapshot, &slug, |c| c.error = Some(
+            update_channel(&snapshot, &slug, &stop, |c| c.error = Some(
                 "Kick auth rejected by viewer API (401/403); retries stopped".into()));
             return;
         }
         match native_kick_viewer::channel_meta(&public_client, &slug) {
             Ok(meta) => {
+                if stop.load(Ordering::Acquire) { return; }
                 failures = 0;
-                update_channel(&snapshot, &slug, |c| {
+                update_channel(&snapshot, &slug, &stop, |c| {
                     c.live = Some(meta.is_live);
                     c.title = meta.title.clone();
                     c.viewers = meta.viewers;
@@ -506,7 +528,8 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     continue;
                 }
                 let result = native_kick_viewer::run_viewer(
-                    &client, &slug, &meta, &telemetry, Arc::clone(&stop), &token, &auth);
+                    &client, &slug, &meta, &telemetry, Arc::clone(&stop), &token, &auth,
+                    Arc::clone(&bandwidth));
                 if let Ok(mut state) = telemetry.lock() {
                     state.ws_connected = false;
                     state.handshake_received = false;
@@ -519,7 +542,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     }
                 }
                 if auth.denied() {
-                    update_channel(&snapshot, &slug, |c| {
+                    update_channel(&snapshot, &slug, &stop, |c| {
                         c.error = Some("Kick private API denied authentication; requests paused".into());
                     });
                     return;
@@ -540,7 +563,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 // Public metadata requests cannot prove that an account's
                 // saved login has expired. A 401/403 can also be a network
                 // challenge, so retain errors and retry with backoff.
-                update_channel(&snapshot, &slug, |c| {
+                update_channel(&snapshot, &slug, &stop, |c| {
                     c.error = Some(error);
                     c.live = None;
                     c.viewers = None;
