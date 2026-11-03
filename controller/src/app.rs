@@ -1227,7 +1227,8 @@ impl ControllerApp {
     // Reset old UI acknowledgements only after the vault boundary is crossed.
     fn invalidate_capture_session(&mut self,index:usize) {
         self.auth_generations[index].fetch_add(1,Ordering::AcqRel);
-        crate::native_auth::invalidate_capture_generation(&self.capture_generations[index]);
+        crate::native_auth::invalidate_capture_generation(
+            self.games[index].profile,&self.capture_generations[index]);
         self.capture_save_busy[index]=false;
         self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
         self.capture_drafts[index]=None;
