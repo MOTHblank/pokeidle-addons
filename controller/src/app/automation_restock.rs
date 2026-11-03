@@ -8,10 +8,10 @@ use super::*;
 // Every variant must occupy the same fixed-sized cell: a centered/justified
 // fallback label used to stretch the "Off" cell across an entire column,
 // hiding the real ball/potion icons on the next wrapped row.
-pub(super) const RESTOCK_ICON_SIZE: f32 = 23.0;
-pub(super) const RESTOCK_ICON_PADDING: i8 = 4;
+const RESTOCK_ICON_SIZE: f32 = 23.0;
+const RESTOCK_ICON_PADDING: i8 = 4;
 
-pub(super) fn restock_selector_columns(available_width: f32) -> usize {
+fn restock_selector_columns(available_width: f32) -> usize {
     // Each full picker needs roughly 240 px for its six or seven icon cells.
     // Overview account cards are often only 350–500 px wide, so use stacked
     // full-width groups there instead of three unusably narrow columns.
@@ -35,7 +35,7 @@ mod restock_picker_layout_tests {
 // Rebase only the restock portion onto the latest worker preferences. This
 // prevents an old restock draft from resetting Auto Catch's ball priorities,
 // reserves or enabled state when the two settings pages are edited in sequence.
-pub(super) fn copy_restock_fields(to: &mut CatchSettings, from: &CatchSettings) {
+fn copy_restock_fields(to: &mut CatchSettings, from: &CatchSettings) {
     to.restock_enabled = from.restock_enabled;
     to.gold_reserve = from.gold_reserve;
     to.ball_id = from.ball_id;
@@ -85,7 +85,7 @@ mod restock_selection_tests {
     }
 }
 
-pub(super) fn capture_restock_chip(
+fn capture_restock_chip(
     ui: &mut egui::Ui, visuals: &mut VisualCache, kind: SpriteKind,
     group: &'static str, selected: &mut u64, id: u64, name: &str, icon: &str,
     icon_hint: Option<&str>, price: Option<u64>, stock: Option<u64>,
@@ -120,7 +120,7 @@ pub(super) fn capture_restock_chip(
         }
     });
 }
-pub(super) fn capture_restock_threshold(
+fn capture_restock_threshold(
     ui:&mut egui::Ui,label:&str,at:&mut u64,to:&mut u64,
     current:Option<u64>
 ) {

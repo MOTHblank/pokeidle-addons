@@ -8,7 +8,7 @@ pub(super) fn auto_catch_setting_label(enabled:bool)->&'static str {
 
 // A separate, concrete operational signal for Automation only.
 // Ready means the next valid target can be thrown at, not proof of a capture.
-pub(super) fn auto_catch_operational_label(connected:bool,
+fn auto_catch_operational_label(connected:bool,
     capture:&crate::native_gameplay::GameplayStatus)->&'static str {
     if !connected {
         "Auto Catch awaiting game connection"
@@ -225,12 +225,12 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
         });
 }
 
-pub(super) fn capture_ball_name(k:&str)->&'static str {
+fn capture_ball_name(k:&str)->&'static str {
     match k {"beast"=>"Beast Ball","ultra"=>"Ultra Ball","super"=>"Super Ball",
         "great"=>"Great Ball","poke"=>"Poké Ball",_=>"None"}
 }
 
-pub(super) fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
+fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usize) {
     let profile=app.games[index].profile;
     let Some(native)=app.games[index].native.as_ref() else {return};
     if app.capture_drafts[index].is_none() {

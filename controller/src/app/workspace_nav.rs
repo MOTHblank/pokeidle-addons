@@ -131,7 +131,7 @@ pub(super) fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
 }
 
-pub(super) fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
+fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tr("Performance and updates"))
         .size(17.0).strong().color(TEXT));
     ui.add_space(5.0);

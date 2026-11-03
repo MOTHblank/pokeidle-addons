@@ -476,7 +476,7 @@ pub(super) fn draw_overview_card(app: &mut ControllerApp, ui: &mut egui::Ui, ind
         });
 }
 
-pub(super) fn overview_stat_tile(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
+fn overview_stat_tile(ui: &mut egui::Ui, label: &str, value: &str, color: Color32) {
     egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
         .inner_margin(Margin::symmetric(9, 6)).show(ui, |ui| {
             ui.label(RichText::new(tr(label)).size(9.0).color(DIM));
@@ -531,7 +531,7 @@ mod selected_restock_stock_tests {
     }
 }
 
-pub(super) fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
+fn overview_resource_tile(app: &mut ControllerApp, ui: &mut egui::Ui,
                           index: usize, label: &str, count: Option<u64>,
                           kind: SpriteKind, selected: u64) {
     let expanded = app.restock_open[index];
@@ -588,11 +588,11 @@ pub(super) fn overview_combat_state(view: Option<&HuntView>, live: bool) -> Over
 // Use the hunt catalog, not the ephemeral wild slot, for a stable right card.
 // Choosing the highest-weight species is representative artwork only; the
 // card names the hunt rather than asserting this is the exact current enemy.
-pub(super) fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
+fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
     let slug = view.hunt_slug.as_deref()?;
     view.hunts.iter().find(|entry| entry.slug == slug)
 }
-pub(super) fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
+fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
     // Artwork follows the hunt's own species ID, never the current wild
     // encounter. A live HuntView retains the selected ID across kills.
     view.hunt_art_species.or_else(|| {
@@ -600,16 +600,16 @@ pub(super) fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
     })
 }
 
-pub(super) fn overview_hunt_art_looktype(view: &HuntView) -> Option<u64> {
+fn overview_hunt_art_looktype(view: &HuntView) -> Option<u64> {
     overview_hunt(view).and_then(|hunt| hunt.looktype).filter(|id| *id > 0)
 }
 
 // Looktypes are the game's visual IDs; species IDs require a separate
 // catalog lookup. Never treat an arbitrary species ID as a looktype.
 // 50% larger than the previous 48px overview sprites on both sides.
-pub(super) const OVERVIEW_POKEMON_SPRITE_SIZE: f32 = 72.0;
+const OVERVIEW_POKEMON_SPRITE_SIZE: f32 = 72.0;
 
-pub(super) fn overview_combat_image(
+fn overview_combat_image(
     visuals: &mut VisualCache,
     ui: &mut egui::Ui,
     preferred_looktype: Option<u64>,
@@ -655,7 +655,7 @@ pub(super) fn overview_combat_image(
 }
 
 /// Matchup is always visible, even when the card's lower metrics show Session.
-pub(super) fn draw_overview_matchup(
+fn draw_overview_matchup(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
     health: &Health,
@@ -745,7 +745,7 @@ pub(super) fn draw_overview_matchup(
     ui.add_space(5.0);
 }
 
-pub(super) fn draw_overview_account_summary(
+fn draw_overview_account_summary(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
     index: usize,
@@ -835,7 +835,7 @@ mod overview_combat_tests {
     }
 }
 
-pub(super) fn rare_session_drop_count(drops: &std::collections::BTreeMap<String, u64>,
+fn rare_session_drop_count(drops: &std::collections::BTreeMap<String, u64>,
                            matches: &[&str]) -> u64 {
     drops.iter()
         .filter(|(name, _)| {
@@ -846,7 +846,7 @@ pub(super) fn rare_session_drop_count(drops: &std::collections::BTreeMap<String,
         .fold(0u64, u64::saturating_add)
 }
 
-pub(super) fn draw_overview_session(ui: &mut egui::Ui, view: Option<&HuntView>) {
+fn draw_overview_session(ui: &mut egui::Ui, view: Option<&HuntView>) {
     let Some(view) = view else {
         ui.label(RichText::new(tr("Start an account to see session details"))
             .size(11.0).color(MUTED));
@@ -1053,7 +1053,7 @@ pub(super) fn draw_history_panel(app: &mut ControllerApp, ui: &mut egui::Ui, ind
         "History begins when this version first records a battle. Previous in-memory sessions cannot be recovered retroactively."
     )).size(10.0).color(DIM));
 }
-pub(super) fn history_day_label(day:u64)->String {
+fn history_day_label(day:u64)->String {
     // Civil-from-days (Gregorian UTC), no OS locale or timezone guesses.
     let z=day as i64+719_468;
     let era=if z>=0{z}else{z-146_096}/146_097;
