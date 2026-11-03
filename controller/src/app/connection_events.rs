@@ -2,7 +2,68 @@
 //! No additional network calls, monitors, loops or independent session ownership.
 use super::*;
 
+// Restock acknowledgements update only the restock fields of an open Capture
+// editor. This preserves unsaved capture priorities, reserves and timing.
+fn reconcile_capture_draft(
+    draft: &mut Option<CatchSettings>,
+    saved: &CatchSettings,
+    origin: CaptureSaveOrigin,
+) {
+    match origin {
+        CaptureSaveOrigin::Editor => *draft=None,
+        CaptureSaveOrigin::Toggle => {
+            if let Some(draft)=draft.as_mut() { draft.enabled=saved.enabled; }
+        }
+        CaptureSaveOrigin::Restock => {
+            if let Some(draft)=draft.as_mut() {
+                automation_restock::copy_restock_fields(draft,saved);
+            }
+        }
+    }
+}
+
 impl ControllerApp {
+    // Only this central event pump starts writes, not whichever page is visible.
+    // A new choice made during an earlier save is automatically processed on
+    // its acknowledgement, even if the picker has since been closed.
+    fn flush_queued_restock_saves(&mut self) {
+        for index in 0..self.games.len() {
+            if !self.restock_dirty[index] || self.capture_save_busy[index] { continue; }
+            let Some(native)=self.games[index].native.as_ref() else {continue};
+            let current=native.capture_settings();
+            let Some(staged)=self.restock_drafts[index].as_ref() else {
+                self.restock_dirty[index]=false;
+                continue;
+            };
+            let next=automation_restock::prepare_restock_save(&current,staged);
+            self.restock_dirty[index]=false;
+            match next {
+                Ok(None) => {
+                    if let Some(draft)=self.restock_drafts[index].as_mut() {
+                        automation_restock::copy_restock_fields(draft,&current);
+                    }
+                }
+                Err(error) => self.capture_save_error[index]=Some(error),
+                Ok(Some(next)) => {
+                    self.capture_save_error[index]=None;
+                    self.capture_save_busy[index]=true;
+                    let profile=self.games[index].profile;
+                    let tx=self.capture_save_tx.clone();
+                    std::thread::spawn(move || {
+                        let result=std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(||
+                                crate::native_auth::set_capture_settings(profile,&next)))
+                            .unwrap_or_else(|_|
+                                Err("Encrypted restock save panicked".into()));
+                        let _=tx.send(CaptureSavedEvent {
+                            index,config:next,origin:CaptureSaveOrigin::Restock,result
+                        });
+                    });
+                }
+            }
+        }
+    }
+
     pub(super) fn refresh_processes(&mut self) {
         while let Ok(event)=self.capture_save_rx.try_recv() {
             self.capture_save_busy[event.index]=false;
@@ -14,13 +75,9 @@ impl ControllerApp {
                             continue;
                         }
                     }
-                    if event.toggle_only {
-                        if let Some(draft)=self.capture_drafts[event.index].as_mut() {
-                            draft.enabled=event.config.enabled;
-                        }
-                    } else {
-                        self.capture_drafts[event.index]=None;
-                    }
+                    reconcile_capture_draft(
+                        &mut self.capture_drafts[event.index],&event.config,event.origin
+                    );
                     if self.restock_drafts[event.index].as_ref()
                         .is_some_and(|draft| restock_fields_equal(draft, &event.config))
                     {
@@ -38,6 +95,9 @@ impl ControllerApp {
                 }
             }
         }
+        // Dispatch any staged restock save after processing previous
+        // acknowledgements, regardless of the currently selected UI page.
+        self.flush_queued_restock_saves();
         while let Ok(result)=self.inventory_catalog_rx.try_recv() {
             self.inventory_catalog_busy=false;
             match result {
@@ -435,4 +495,43 @@ impl ControllerApp {
         }
     }
 
+}
+
+#[cfg(test)]
+mod capture_save_reconciliation_tests {
+    use super::*;
+
+    #[test]
+    fn restock_save_keeps_unsaved_capture_edits_and_updates_only_restock() {
+        let mut draft=CatchSettings::default();
+        draft.enabled=true;
+        draft.interval_ms=750;
+        draft.priorities=vec!["beast".into()];
+        let mut saved=CatchSettings::default();
+        saved.restock_enabled=true;
+        saved.ball_id=5;
+        saved.potion_id=203;
+        saved.revive_id=206;
+        let mut editor=Some(draft);
+        reconcile_capture_draft(&mut editor,&saved,CaptureSaveOrigin::Restock);
+        let result=editor.unwrap();
+        assert!(result.enabled);
+        assert_eq!(result.interval_ms,750);
+        assert_eq!(result.priorities,vec!["beast"]);
+        assert_eq!(result.ball_id,5);
+        assert_eq!(result.potion_id,203);
+        assert_eq!(result.revive_id,206);
+        assert!(result.restock_enabled);
+    }
+
+    #[test]
+    fn switch_save_does_not_discard_editor_and_editor_acknowledgement_does() {
+        let mut editor=Some(CatchSettings::default());
+        let mut saved=CatchSettings::default();
+        saved.enabled=true;
+        reconcile_capture_draft(&mut editor,&saved,CaptureSaveOrigin::Toggle);
+        assert!(editor.as_ref().unwrap().enabled);
+        reconcile_capture_draft(&mut editor,&saved,CaptureSaveOrigin::Editor);
+        assert!(editor.is_none());
+    }
 }

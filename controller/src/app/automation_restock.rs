@@ -35,7 +35,7 @@ mod restock_picker_layout_tests {
 // Rebase only the restock portion onto the latest worker preferences. This
 // prevents an old restock draft from resetting Auto Catch's ball priorities,
 // reserves or enabled state when the two settings pages are edited in sequence.
-fn copy_restock_fields(to: &mut CatchSettings, from: &CatchSettings) {
+pub(super) fn copy_restock_fields(to: &mut CatchSettings, from: &CatchSettings) {
     to.restock_enabled = from.restock_enabled;
     to.gold_reserve = from.gold_reserve;
     to.ball_id = from.ball_id;
@@ -55,9 +55,47 @@ pub(super) fn restock_fields_equal(a: &CatchSettings, b: &CatchSettings) -> bool
     updated == *b
 }
 
+// Use the worker's latest confirmed settings when processing any queued save.
+// This is independent of whether the Overview/restock editor is currently open.
+pub(super) fn prepare_restock_save(
+    current: &CatchSettings,
+    staged: &CatchSettings,
+) -> Result<Option<CatchSettings>, String> {
+    let mut next=current.clone();
+    copy_restock_fields(&mut next,staged);
+    if next==*current { return Ok(None); }
+    next.validate()?;
+    Ok(Some(next))
+}
+
 #[cfg(test)]
 mod restock_selection_tests {
     use super::*;
+
+    #[test]
+    fn queued_restock_rebases_on_latest_capture_settings_after_navigation() {
+        let mut staged=CatchSettings::default();
+        staged.restock_enabled=true;
+        staged.ball_id=5;
+        staged.potion_id=203;
+        staged.revive_id=206;
+        staged.gold_reserve=500;
+        let mut confirmed=CatchSettings::default();
+        confirmed.enabled=true;
+        confirmed.interval_ms=900;
+        confirmed.priorities=vec!["beast".into()];
+        let next=prepare_restock_save(&confirmed,&staged).unwrap().unwrap();
+        assert_eq!(next.restock_enabled,true);
+        assert_eq!(next.ball_id,5);
+        assert_eq!(next.potion_id,203);
+        assert_eq!(next.revive_id,206);
+        assert_eq!(next.gold_reserve,500);
+        assert!(next.enabled);
+        assert_eq!(next.interval_ms,900);
+        assert_eq!(next.priorities,vec!["beast"]);
+        assert!(prepare_restock_save(&next,&staged).unwrap().is_none());
+    }
+
     #[test]
     fn golden_potion_and_max_revive_preserve_independent_selections() {
         let mut staged = CatchSettings::default();
@@ -148,7 +186,6 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
             .size(10.0).color(WARN));
         return;
     };
-    let profile = app.games[index].profile;
     let current = native.capture_settings();
     if app.restock_drafts[index].is_none() {
         app.restock_drafts[index] = Some(current.clone());
@@ -312,6 +349,7 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
     }
     if *cfg != previous {
         app.restock_dirty[index] = true;
+        ui.ctx().request_repaint();
     }
     if let Some(error) = app.capture_save_error[index].as_deref() {
         ui.label(RichText::new(error).size(10.0).color(WARN));
@@ -323,29 +361,7 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
             tr("Saving encrypted preferences...")
         }).size(10.0).color(if app.restock_dirty[index] { WARN } else { DIM }));
     }
-    if app.restock_dirty[index] && !app.capture_save_busy[index] {
-        // A selection made during an earlier save stays visible and is sent
-        // immediately after the previous acknowledgement. The latest current
-        // worker configuration is used to avoid overwriting Auto Catch.
-        let mut next = current;
-        copy_restock_fields(&mut next,
-            app.restock_drafts[index].as_ref().expect("restock draft initialized"));
-        if let Err(error) = next.validate() {
-            app.capture_save_error[index] = Some(error);
-            app.restock_dirty[index] = false; // Retry after the next edit.
-        } else {
-            app.capture_save_error[index] = None;
-            app.restock_dirty[index] = false;
-            app.capture_save_busy[index] = true;
-            let tx = app.capture_save_tx.clone();
-            std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(||
-                        crate::native_auth::set_capture_settings(profile, &next)))
-                    .unwrap_or_else(|_| Err("Encrypted restock save panicked".into()));
-                let _ = tx.send(CaptureSavedEvent { index, config: next, toggle_only:false, result });
-            });
-        }
-    }
+    // The save queue is dispatched by refresh_processes, never from the
+    // rendered picker. It continues after navigation or closing this panel.
 }
 

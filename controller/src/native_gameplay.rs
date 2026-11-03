@@ -650,7 +650,7 @@ mod tests {
     fn distributes_throws_across_corpses() {
         let now=Instant::now();
         let mut g=Gameplay::new(Some(&json!({"enabled":true,"ballPriority":["ultra"],"intervalMs":100})));
-        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":0}}}"#,now);
+        g.ingest(r#"{"t":"welcome","estado":{"noCentro":false,"balls":{"4":4}}}"#,now);
         g.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem","slot":1},{"k":"morte","quem":"selvagem","slot":2}]}"#,now);
         assert_eq!(g.next_capture(now).unwrap().wire()["slot"],1);
         assert_eq!(g.next_capture(now+Duration::from_millis(100)).unwrap().wire()["slot"],2);
