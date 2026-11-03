@@ -385,8 +385,9 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::*;
-    use std::io::Write;
+    use std::io::{Read,Write};
     use std::process::{Command, Stdio};
+    use std::time::{Duration,Instant};
     const APP: &str = "moth-pokeidle-native";
     const KICK_APP: &str = "moth-kick-native";
     // User profile number is used only as an OS keyring attribute.
@@ -404,35 +405,83 @@ mod platform {
         code == Some(1) && stdout.is_empty() && stderr.is_empty()
     }
 
+    // Do not leave a locked Secret Service request holding a profile forever.
+    // Concurrent pipe draining also prevents large lookup results or writes
+    // from deadlocking before the timeout can be enforced.
     fn secret_tool(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, String> {
-        let mut child = Command::new("secret-tool")
+        const LIMIT:Duration=Duration::from_secs(12);
+        let mut child=Command::new("secret-tool")
             .args(args)
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdin(if input.is_some() {Stdio::piped()} else {Stdio::null()})
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|_| "Desktop keyring unavailable: install libsecret-tools and unlock a Secret Service keyring".to_owned())?;
-        if let Some(data) = input {
-            let mut stdin = child.stdin.take()
-                .ok_or_else(|| "Could not reach desktop keyring input".to_owned())?;
-            stdin.write_all(data)
-                .map_err(|_| "Desktop keyring refused credential input".to_owned())?;
-            drop(stdin);
+            .map_err(|_|"Desktop keyring unavailable: install libsecret-tools and unlock a Secret Service keyring".to_owned())?;
+        let stdout=child.stdout.take()
+            .ok_or_else(||"Desktop keyring output unavailable".to_owned())?;
+        let stderr=child.stderr.take()
+            .ok_or_else(||"Desktop keyring diagnostics unavailable".to_owned())?;
+        let stdout_reader=std::thread::spawn(move ||{
+            let mut bytes=Vec::new();
+            let mut stream=stdout.take((MAX_BOOTSTRAP_BYTES+5) as u64);
+            let _=stream.read_to_end(&mut bytes);
+            bytes
+        });
+        let stderr_reader=std::thread::spawn(move ||{
+            let mut bytes=Vec::new();
+            let mut stream=stderr.take(4096);
+            let _=stream.read_to_end(&mut bytes);
+            bytes
+        });
+        let input_writer=input.map(|data|{
+            let writer=child.stdin.take();
+            let data=data.to_vec();
+            std::thread::spawn(move ||{
+                let Some(mut writer)=writer else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,"keyring stdin unavailable"));
+                };
+                writer.write_all(&data)
+            })
+        });
+        let started=Instant::now();
+        let status=loop {
+            match child.try_wait() {
+                Ok(Some(status))=>break status,
+                Ok(None)=>{},
+                Err(_)=>{
+                    let _=child.kill();
+                    let _=child.wait();
+                    return Err("Desktop keyring request failed".into());
+                }
+            }
+            if started.elapsed()>=LIMIT {
+                let _=child.kill();
+                let _=child.wait();
+                return Err("Desktop keyring request timed out".into());
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let output=stdout_reader.join()
+            .map_err(|_|"Desktop keyring output reader failed".to_owned())?;
+        let diagnostics=stderr_reader.join()
+            .map_err(|_|"Desktop keyring diagnostics reader failed".to_owned())?;
+        if input_writer.is_some_and(|writer|
+            writer.join().is_err_or(|result|result.is_err())) {
+            return Err("Desktop keyring refused credential input".into());
         }
-        let output = child.wait_with_output()
-            .map_err(|_| "Desktop keyring request failed".to_owned())?;
-        if !output.status.success() {
-            if args.first() == Some(&"lookup")
-                && missing_lookup(output.status.code(), &output.stdout, &output.stderr)
+        if !status.success() {
+            if args.first()==Some(&"lookup")
+                && missing_lookup(status.code(),&output,&diagnostics)
             {
                 return Ok(Vec::new());
             }
             return Err("Desktop keyring request failed: ensure Secret Service is running and unlocked".into());
         }
-        if output.stdout.len() > MAX_BOOTSTRAP_BYTES + 4 {
+        if output.len()>MAX_BOOTSTRAP_BYTES+4 {
             return Err("Desktop keyring credential response too large".into());
         }
-        Ok(output.stdout)
+        Ok(output)
     }
     pub fn load_kick(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let args = kick_args(profile);
