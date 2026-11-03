@@ -229,7 +229,8 @@ impl BossManager {
         self.view.original_hunt = original;
         self.view.warning = None;
         self.view.phase = "Traveling to Pokémon Center".into();
-        if !hunt.in_center { navigator.center(now); }
+        if hunt.in_center { navigator.cancel(); }
+        else { navigator.center(now); }
         Ok(())
     }
     pub fn stop(&mut self, navigator: &mut HuntNavigator) -> Option<GameCommand> {
@@ -263,6 +264,11 @@ impl BossManager {
             trip.ended = true;
             if trip.repeat {
                 commands.push(GameCommand::BossAuto { active: false, key: trip.key.clone() });
+            }
+        }
+        if self.trip.is_none() && self.view.auto {
+            if let Some(key) = self.view.auto_key.as_ref() {
+                commands.push(GameCommand::BossAuto { active: false, key: key.clone() });
             }
         }
         commands.push(GameCommand::BossExit);
