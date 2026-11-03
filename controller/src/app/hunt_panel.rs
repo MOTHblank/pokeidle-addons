@@ -3586,6 +3586,21 @@ mod tests {
         assert!(cache.get("a").is_none());
         assert_eq!(cache.get("b").unwrap().kills_h,250.0,
             "unaffected forecasts must remain cached");
+        // A completed geometry-only worker patches one row, not the full map.
+        let (tx,rx)=std::sync::mpsc::sync_channel(1);
+        cache.pending=Some((cache.generation,false,rx));
+        tx.send(std::collections::BTreeMap::from([
+            ("a".to_owned(),Some(simulated_forecast(175.0,false)))
+        ])).unwrap();
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.geometry_dirty.is_empty());
+        assert_eq!(cache.get("a").unwrap().kills_h,175.0);
+        assert_eq!(cache.get("b").unwrap().kills_h,250.0);
+        let refreshed=cache.refreshed;
+        view.geo_revisions=Arc::new((*view.geo_revisions).clone());
+        cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.refreshed,refreshed,
+            "a new map allocation without version changes is not invalidation");
     }
     #[test]
     fn combat_cache_does_not_recompute_by_age_or_hunt_switch(){
