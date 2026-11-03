@@ -6,14 +6,103 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_DAYS: u64 = 90;
 const SAVE_INTERVAL: Duration = Duration::from_secs(5);
 const FINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
-type WriteTask = (PathBuf,String,Option<mpsc::Sender<()>>);
+// The game worker never queues snapshots or serialized JSON. A single
+// generation counter represents all pending writes; bursts coalesce into
+// the latest live snapshot and cannot accumulate unbounded memory.
+#[derive(Default)]
+struct WriteState {
+    requested:u64,
+    completed:u64,
+    pending:bool,
+    stopping:bool,
+    last_error:Option<String>,
+}
+#[derive(Default)]
+struct WriteSignal {
+    state:Mutex<WriteState>,
+    wake:Condvar,
+}
+impl WriteSignal {
+    fn request(&self)->Result<u64,String> {
+        let mut state=self.state.lock()
+            .map_err(|_|"History save coordinator unavailable".to_owned())?;
+        if state.stopping {return Err("History writer already stopped".into())}
+        state.requested=state.requested.saturating_add(1);
+        state.pending=true;
+        let sequence=state.requested;
+        self.wake.notify_one();
+        Ok(sequence)
+    }
+    fn wait_written(&self,sequence:u64,timeout:Duration)->Result<(),String> {
+        let state=self.state.lock()
+            .map_err(|_|"History save coordinator unavailable".to_owned())?;
+        let (state,_)=self.wake.wait_timeout_while(state,timeout,
+            |state|state.completed<sequence)
+            .map_err(|_|"History save coordinator unavailable".to_owned())?;
+        if state.completed<sequence {
+            return Err("History final write was not acknowledged".into());
+        }
+        state.last_error.clone().map_or(Ok(()),Err)
+    }
+    fn stop(&self) {
+        if let Ok(mut state)=self.state.lock() {state.stopping=true;}
+        self.wake.notify_all();
+    }
+}
+
+// One writer per active native session, parked on a condvar when idle.
+// The writer owns cloning, JSON construction, serialization, and disk I/O;
+// it only briefly locks the live snapshot to obtain a stable copy.
+fn start_history_writer(
+    shared:Arc<Mutex<HistorySnapshot>>, path:PathBuf, nick:String
+)->Result<Arc<WriteSignal>,String> {
+    let signal=Arc::new(WriteSignal::default());
+    let worker_signal=Arc::clone(&signal);
+    thread::Builder::new().name("moth-native-history".into())
+        .spawn(move || loop {
+            let sequence={
+                let Ok(mut state)=worker_signal.state.lock() else{return};
+                while !state.pending {
+                    if state.stopping {return}
+                    state=match worker_signal.wake.wait(state) {
+                        Ok(next)=>next,Err(_)=>return,
+                    };
+                }
+                state.pending=false;
+                state.requested
+            };
+            let result=match shared.lock() {
+                Ok(snapshot)=>{
+                    let copy=snapshot.clone();
+                    drop(snapshot);
+                    // JSON creation and serialization never run on the game
+                    // socket worker or under the live-history mutex.
+                    write_atomic(&path,&copy.to_value(&nick).to_string())
+                }
+                Err(_)=>Err("History snapshot unavailable".into()),
+            };
+            if let Ok(mut snapshot)=shared.lock() {
+                snapshot.save_error=result.as_ref().err().cloned();
+            }
+            if let Err(error)=&result {
+                crate::logging::warn(&format!("Native history persistence: {error}"));
+            }
+            if let Ok(mut state)=worker_signal.state.lock() {
+                state.completed=sequence;
+                state.last_error=result.err();
+                worker_signal.wake.notify_all();
+            } else {return}
+        })
+        .map_err(|error|format!("Could not start history writer: {error}"))?;
+    Ok(signal)
+}
 #[derive(Clone, Debug, Default)]
 pub struct HistoryDay {
     pub day: u64,
@@ -317,17 +406,14 @@ pub fn load_offline(profile:GameProfile)->HistorySnapshot {
 }
 
 pub struct HistoryRecorder {
+    // A single authoritative snapshot; socket updates mutate it in place.
+    // No full-history clone is needed to publish current counters to the UI.
     pub shared: Arc<Mutex<HistorySnapshot>>,
-    snapshot: HistorySnapshot,
-    nick: String,
     last_hunt: Option<String>,
     last_kill:Option<(String,Instant)>,
     dirty:bool,
-    needs_publish:bool,
-    last_publish:Instant,
     last_flush:Instant,
-    writer:mpsc::Sender<WriteTask>,
-    path:Option<PathBuf>,
+    writer:Option<Arc<WriteSignal>>,
 }
 impl HistoryRecorder {
     pub fn new(profile:GameProfile,nick:String)->Self {
@@ -353,46 +439,40 @@ impl HistoryRecorder {
         };
         snapshot.owner=nick.clone();
         snapshot.retain_recent(unix_day());
-        let shared=Arc::new(Mutex::new(snapshot.clone()));
-        let (writer_tx,writer_rx)=mpsc::channel::<WriteTask>();
-        let writer_shared=Arc::clone(&shared);
-        thread::Builder::new().name("moth-native-history".into())
-            .spawn(move ||{
-                while let Ok((path,raw,ack))=writer_rx.recv(){
-                    let result=write_atomic(&path,&raw);
-                    if let Ok(mut snapshot)=writer_shared.lock() {
-                        snapshot.save_error=result.as_ref().err().cloned();
+        let shared=Arc::new(Mutex::new(snapshot));
+        let writer=path.and_then(|path| {
+            match start_history_writer(Arc::clone(&shared),path,nick.clone()) {
+                Ok(writer)=>Some(writer),
+                Err(error)=>{
+                    if let Ok(mut snapshot)=shared.lock() {
+                        snapshot.save_error=Some(error);
                     }
-                    if let Err(error)=result {
-                        crate::logging::warn(&format!("Native history persistence: {error}"));
-                    }
-                    if let Some(ack)=ack {let _=ack.send(());}
+                    None
                 }
-            }).ok();
-        Self {shared,snapshot,nick,last_hunt:None,last_kill:None,
-            dirty:false,needs_publish:false,
-            last_publish:Instant::now(),last_flush:Instant::now(),
-            writer:writer_tx,path}
+            }
+        });
+        Self {shared,last_hunt:None,last_kill:None,
+            dirty:false,last_flush:Instant::now(),writer}
     }
     pub fn record_forecast(&mut self,model:HistoryForecast){
         if model.day!=unix_day(){return}
-        if let Some(previous)=self.snapshot.forecasts.iter_mut()
+        let Ok(mut snapshot)=self.shared.lock() else{return};
+        if let Some(previous)=snapshot.forecasts.iter_mut()
             .find(|row|row.hour==model.hour && row.hunt==model.hunt){
             *previous=model;
         }else{
-            self.snapshot.forecasts.push(model);
+            snapshot.forecasts.push(model);
         }
         // Capturing only one model per hour/hunt prevents redraw-generated
         // history inflation. The async history writer owns persistence.
-        self.snapshot.retain_recent(unix_day());
+        snapshot.retain_recent(unix_day());
         // Never grow the 90-day journal beyond what the loader accepts.
-        if self.snapshot.forecasts.len()>5000 {
-            self.snapshot.forecasts.sort_by_key(|row|row.hour);
-            let extra=self.snapshot.forecasts.len()-5000;
-            self.snapshot.forecasts.drain(0..extra);
+        if snapshot.forecasts.len()>5000 {
+            snapshot.forecasts.sort_by_key(|row|row.hour);
+            let extra=snapshot.forecasts.len()-5000;
+            snapshot.forecasts.drain(0..extra);
         }
         self.dirty=true;
-        self.needs_publish=true;
     }
     #[cfg(test)]
     pub fn ingest(&mut self,raw:&str,hunt:Option<&str>) {
@@ -415,10 +495,14 @@ impl HistoryRecorder {
         if kind!=Some("batalha"){return}
         let Some(events)=frame.get("ev").and_then(Value::as_array) else{return};
         let day=unix_day();
+        let Ok(mut guard)=self.shared.lock() else{return};
+        // Work through a normal &mut reference so distinct fields (daily
+        // counters and lifetime totals) can be updated together safely.
+        let snapshot:&mut HistorySnapshot=&mut *guard;
         let mut slug=self.last_hunt.clone()
             .or_else(||hunt.filter(|s|s.len()<=128).map(str::to_owned))
             .unwrap_or_else(||"unknown".into());
-        let mut index=self.snapshot.days.iter().position(|row|
+        let mut index=snapshot.days.iter().position(|row|
             row.day==day && row.hunt==slug);
         for event in events {
             // Attribute server events to the hunt active at that exact point
@@ -429,7 +513,7 @@ impl HistoryRecorder {
                     slug=next.to_owned();
                     self.last_kill=None;
                     self.last_hunt=Some(slug.clone());
-                    index=self.snapshot.days.iter().position(|row|
+                    index=snapshot.days.iter().position(|row|
                         row.day==day && row.hunt==slug);
                 }
                 continue;
@@ -437,11 +521,11 @@ impl HistoryRecorder {
             if !matches!(event.get("k").and_then(Value::as_str),
                 Some("morte"|"bola"|"fugiu")) { continue; }
             let slot=*index.get_or_insert_with(||{
-                self.snapshot.days.push(HistoryDay{day,hunt:slug.clone(),..Default::default()});
-                self.snapshot.days.len()-1
+                snapshot.days.push(HistoryDay{day,hunt:slug.clone(),..Default::default()});
+                snapshot.days.len()-1
             });
-            if self.snapshot.days[slot].from_event(event) {
-                self.snapshot.lifetime.from_event(event);
+            if snapshot.days[slot].from_event(event) {
+                snapshot.lifetime.from_event(event);
                 if event.get("k").and_then(Value::as_str)==Some("morte")
                     && event.get("quem").and_then(Value::as_str)==Some("selvagem"){
                     // Only count elapsed monotonic time since an earlier kill of
@@ -452,7 +536,7 @@ impl HistoryRecorder {
                         if previous==&slug && (1..=120).contains(&seconds){
                             let xp=event.get("xpTreinador").and_then(Value::as_u64);
                             let pk=event.get("xpPokemon").and_then(Value::as_u64);
-                            for target in [&mut self.snapshot.days[slot],&mut self.snapshot.lifetime]{
+                            for target in [&mut snapshot.days[slot],&mut snapshot.lifetime]{
                                 target.observed_seconds=target.observed_seconds.saturating_add(seconds);
                                 target.timed_kills=target.timed_kills.saturating_add(1);
                                 if let Some(v)=xp{
@@ -473,42 +557,40 @@ impl HistoryRecorder {
         }
         self.last_hunt=Some(slug);
         if self.dirty{
-            self.snapshot.retain_recent(day);
-            self.needs_publish=true;
+            snapshot.retain_recent(day);
         }
     }
     pub fn maybe_flush(&mut self,force:bool) {
-        if self.needs_publish &&
-            (force || self.last_publish.elapsed()>=Duration::from_secs(1)) {
-            if let Ok(mut shared)=self.shared.lock() {
-                let mut snapshot=self.snapshot.clone();
-                snapshot.save_error=shared.save_error.clone();
-                *shared=snapshot;
-                self.needs_publish=false;
-            }
-            self.last_publish=Instant::now();
-        }
         if !force && (!self.dirty || self.last_flush.elapsed()<SAVE_INTERVAL){return}
-        if let Some(path)=self.path.as_ref(){
-            let raw=self.snapshot.to_value(&self.nick).to_string();
-            let (ack_tx,ack_rx)=mpsc::channel();
-            let ack=if force {Some(ack_tx)}else{None};
-            if self.writer.send((path.clone(),raw,ack)).is_ok(){
-                self.dirty=false;
-                if force && ack_rx.recv_timeout(FINAL_WRITE_TIMEOUT).is_err() {
-                    if let Ok(mut shared)=self.shared.lock() {
-                        shared.save_error=Some("History final write was not acknowledged".into());
+        if let Some(writer)=self.writer.as_ref() {
+            match writer.request() {
+                Ok(sequence)=>{
+                    self.dirty=false;
+                    // Only disconnect and shutdown wait for durability. Normal
+                    // saves merely wake the parked writer and return.
+                    if force {
+                        if let Err(error)=writer.wait_written(sequence,FINAL_WRITE_TIMEOUT) {
+                            if let Ok(mut snapshot)=self.shared.lock() {
+                                snapshot.save_error=Some(error);
+                            }
+                        }
                     }
                 }
-            } else if let Ok(mut shared)=self.shared.lock() {
-                shared.save_error=Some("History writer unavailable".into());
+                Err(error)=>{
+                    if let Ok(mut snapshot)=self.shared.lock() {
+                        snapshot.save_error=Some(error);
+                    }
+                }
             }
         }
         self.last_flush=Instant::now();
     }
 }
 impl Drop for HistoryRecorder {
-    fn drop(&mut self){self.maybe_flush(true);}
+    fn drop(&mut self){
+        self.maybe_flush(true);
+        if let Some(writer)=self.writer.as_ref(){writer.stop();}
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -517,13 +599,10 @@ mod tests {
     fn active_hunt_updates_from_welcome_and_ordered_battle_events() {
         // Keep unit tests entirely in memory; never touch a user's
         // production history directory.
-        let (writer,_receiver)=mpsc::channel();
-        let snapshot=HistorySnapshot::default();
         let mut history=HistoryRecorder{
-            shared:Arc::new(Mutex::new(snapshot.clone())),snapshot,
-            nick:"Test".into(),last_hunt:None,last_kill:None,dirty:false,needs_publish:false,
-            last_publish:Instant::now(),last_flush:Instant::now(),
-            writer,path:None
+            shared:Arc::new(Mutex::new(HistorySnapshot::default())),
+            last_hunt:None,last_kill:None,dirty:false,
+            last_flush:Instant::now(),writer:None
         };
         history.ingest(r#"{"t":"welcome","estado":{"huntSlug":"route-a"}}"#,None);
         history.ingest(r#"{"t":"batalha","ev":[
@@ -531,10 +610,50 @@ mod tests {
             {"k":"hunt","slug":"route-b"},
             {"k":"morte","quem":"selvagem","xpTreinador":10}
         ]}"#,Some("route-b"));
-        assert_eq!(history.snapshot.days.iter().find(|d|d.hunt=="route-a")
+        let snapshot=history.shared.lock().unwrap();
+        assert_eq!(snapshot.days.iter().find(|d|d.hunt=="route-a")
             .unwrap().trainer_xp,5);
-        assert_eq!(history.snapshot.days.iter().find(|d|d.hunt=="route-b")
+        assert_eq!(snapshot.days.iter().find(|d|d.hunt=="route-b")
             .unwrap().trainer_xp,10);
+    }
+    #[test]
+    fn pending_history_saves_coalesce_without_queuing_full_snapshots() {
+        let signal=WriteSignal::default();
+        for _ in 0..1_000 {signal.request().unwrap();}
+        let state=signal.state.lock().unwrap();
+        assert!(state.pending);
+        assert_eq!(state.requested,1_000);
+        assert_eq!(state.completed,0);
+        // There is only one pending flag, not a queue of 1,000 documents.
+    }
+    #[test]
+    fn final_history_save_writes_latest_counters_before_acknowledgement() {
+        // Real writer exercising the persisted legacy format, but only in a
+        // unique temporary test path (never a player's data directory).
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path=std::env::temp_dir().join(
+            format!("moth-history-writer-test-{}-{id}.json",std::process::id()));
+        let shared=Arc::new(Mutex::new(HistorySnapshot {
+            owner:"Test".into(),..Default::default()
+        }));
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .expect("start temporary history writer");
+        // Keep the live snapshot locked while requests flood in. The
+        // writer can only observe the newest state after the guard releases.
+        let mut snapshot=shared.lock().unwrap();
+        snapshot.lifetime.kills=1;
+        for _ in 0..100 {writer.request().unwrap();}
+        snapshot.lifetime.kills=17;
+        let final_generation=writer.request().unwrap();
+        drop(snapshot);
+        writer.wait_written(final_generation,FINAL_WRITE_TIMEOUT)
+            .expect("final snapshot acknowledged");
+        let raw=fs::read_to_string(&path).unwrap();
+        let recovered=HistorySnapshot::from_value(
+            &serde_json::from_str::<Value>(&raw).unwrap(),"Test").unwrap();
+        assert_eq!(recovered.lifetime.kills,17);
+        writer.stop();
+        fs::remove_file(path).unwrap();
     }
     #[test]
     fn roundtrip_daily_gameplay_totals_excluding_raw_tokens() {
