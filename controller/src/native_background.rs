@@ -517,8 +517,8 @@ fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
     observe_value(snapshot, &payload, desired);
 }
 fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
-    desired: &Arc<Mutex<Vec<String>>>) -> Option<Vec<crate::native_kick::OfficialKickChannel>> {
-    let mut changed_kick_roster=None;
+    desired: &Arc<Mutex<Vec<String>>>) -> bool {
+    let mut changed_kick_roster=false;
     let state = payload.get("estado");
     let twitch_rooms_updated = state.and_then(|value|value.get("twitch"))
         .is_some_and(|twitch|
@@ -562,9 +562,9 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
                 if status.kick_official_roster.as_ref()!=Some(&roster) {
                     status.kick_official_live=Some(roster.iter().filter(|entry|entry.live)
                         .map(|entry|entry.slug.clone()).collect());
-                    // Only clone the roster when its contents actually changed.
-                    // Unchanged game frames add no new allocations.
-                    changed_kick_roster=Some(roster.clone());
+                    // The observer only returns a flag. Publishing clones
+                    // the roster only if a Kick account is actually running.
+                    changed_kick_roster=true;
                     status.kick_official_roster=Some(roster);
                     status.kick_roster_revision=status.kick_roster_revision.wrapping_add(1);
                 }
@@ -608,11 +608,17 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
 
 fn publish_kick_roster(
     publisher:&Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
-    roster:Option<Vec<crate::native_kick::OfficialKickChannel>>
+    snapshot:&Arc<Mutex<NativeSnapshot>>,
+    changed:bool
 ) {
-    let Some(roster)=roster else{return};
-    if let Ok(publisher)=publisher.lock() {
-        if let Some(sender)=publisher.as_ref(){sender.publish(roster);}
+    if !changed {return}
+    // No Kick login means zero roster clones, channel messages or additional
+    // locks beyond this rare changed-roster notification.
+    let sender=publisher.lock().ok().and_then(|current|current.clone());
+    let Some(sender)=sender else{return};
+    if let Some(roster)=snapshot.lock().ok()
+        .and_then(|current|current.kick_official_roster.clone()) {
+        sender.publish(roster);
     }
 }
 
@@ -652,8 +658,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 // inspect borrowed values instead of deserializing it again.
                 let Ok(frame) = serde_json::from_str::<Value>(&welcome) else { continue };
                 let received_at = Instant::now();
-                publish_kick_roster(&kick_roster_publisher,
-                    observe_value(&snapshot, &frame, &desired));
+                let roster_changed=observe_value(&snapshot, &frame, &desired);
+                publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                 gameplay.ingest_value(&frame, received_at);
                 restock.ingest_value(&frame, received_at);
                 let mut market_cfg=market_rules.lock()
@@ -1073,8 +1079,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                         restock.status.last_order.as_deref().unwrap_or("purchase")
                                     ));
                                 }
-                                publish_kick_roster(&kick_roster_publisher,
-                                    observe_value(&snapshot, &frame, &desired));
+                                let roster_changed=observe_value(&snapshot, &frame, &desired);
+                                publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                             }
                         },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
@@ -1199,13 +1205,15 @@ mod tests {
         let desired=Arc::new(Mutex::new(Vec::new()));
         let frame=r#"{"t":"estado","estado":{"kick":{"oficiais":[
             {"slug":"sample","aoVivo":true}]}}}"#;
-        observe(&snapshot,frame,&desired);
+        let first_event=serde_json::from_str::<Value>(frame).unwrap();
+        assert!(observe_value(&snapshot,&first_event,&desired));
         let first=snapshot.lock().unwrap().kick_roster_revision;
         assert!(first>0);
-        observe(&snapshot,frame,&desired);
+        assert!(!observe_value(&snapshot,&first_event,&desired));
         assert_eq!(snapshot.lock().unwrap().kick_roster_revision,first);
-        observe(&snapshot,r#"{"t":"estado","estado":{"kick":{"oficiais":[
-            {"slug":"sample","aoVivo":false}]}}}"#,&desired);
+        let offline=serde_json::json!({"t":"estado","estado":{"kick":{"oficiais":[
+            {"slug":"sample","aoVivo":false}]}}});
+        assert!(observe_value(&snapshot,&offline,&desired));
         assert_eq!(snapshot.lock().unwrap().kick_roster_revision,first+1);
     }
     #[test]
