@@ -352,7 +352,7 @@ impl BossManager {
                             if let Some(trip) = self.trip.as_mut() {
                                 if trip.repeat && trip.stage == Stage::Running {
                                     if active { trip.confirmed = true; }
-                                    else {
+                                    else if trip.confirmed || trip.stop_pending {
                                         trip.ended = true;
                                         trip.stop_pending = false;
                                     }
@@ -384,7 +384,7 @@ impl BossManager {
             });
         }
         if trip.stage == Stage::Running && trip.ended && !trip.stop_pending &&
-            hunt.in_center && self.view.arena.is_none() {
+            !self.view.auto && hunt.in_center && self.view.arena.is_none() {
             if let Some(original) = trip.original.as_ref() {
                 if !hunt.catalog_ready || !hunt.hunts.iter().any(|entry| entry.slug == *original) {
                     self.view.warning = Some("Original hunt is no longer available; return manually".into());
@@ -420,6 +420,8 @@ impl BossManager {
             self.view.phase = "Boss trip interrupted".into();
         }
         self.view.original_hunt = None;
+        self.view.catalog_ready = false;
+        self.view.catalog.clear();
         self.view.auto = false;
         self.view.auto_key = None;
         self.view.arena = None;
