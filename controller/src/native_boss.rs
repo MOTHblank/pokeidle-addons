@@ -226,6 +226,10 @@ impl BossManager {
             return Err("Start from a regular hunt or the Pokémon Center".into());
         }
         let original = if hunt.in_center { None } else { hunt.hunt_slug.clone() };
+        if original.as_ref().is_some_and(|slug|
+            !hunt.catalog_ready || !hunt.hunts.iter().any(|entry| entry.slug == *slug)) {
+            return Err("Current hunt is not confirmed in the server's travel catalog".into());
+        }
         self.trip = Some(Trip {
             key: key.to_owned(), original: original.clone(), repeat,
             stage: Stage::GoingCenter, confirmed: false, ended: false,
@@ -382,6 +386,13 @@ impl BossManager {
         if trip.stage == Stage::Running && trip.ended && !trip.stop_pending &&
             hunt.in_center && self.view.arena.is_none() {
             if let Some(original) = trip.original.as_ref() {
+                if !hunt.catalog_ready || !hunt.hunts.iter().any(|entry| entry.slug == *original) {
+                    self.view.warning = Some("Original hunt is no longer available; return manually".into());
+                    self.view.phase = "Boss run complete; return destination unavailable".into();
+                    self.trip = None;
+                    self.view.original_hunt = None;
+                    return None;
+                }
                 navigator.select(original.clone(), now);
                 trip.stage = Stage::Returning;
                 self.view.phase = "Returning to saved hunt".into();
@@ -419,6 +430,7 @@ impl BossManager {
 mod tests {
     use super::*;
     use serde_json::json;
+    use crate::native_hunts::HuntEntry;
     fn manager() -> BossManager {
         let mut manager = BossManager {
             view: BossView::default(), trip: None, writer: None,
@@ -433,6 +445,8 @@ mod tests {
     fn hunt() -> HuntView {
         let mut view = HuntView::default();
         view.hunt_slug = Some("bulbasaur".into());
+        view.hunts = Arc::new(vec![HuntEntry { slug: "bulbasaur".into(), ..Default::default() }]);
+        view.catalog_ready = true;
         view.trainer_level = Some(22);
         view.items = Arc::new([(500,5)].into());
         view
