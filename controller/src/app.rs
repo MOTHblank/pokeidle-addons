@@ -35,6 +35,7 @@ mod runtime_panel;
 mod accounts_panel;
 mod status_widgets;
 mod account_state;
+mod account_runtime;
 mod connection_events;
 mod session_actions;
 
@@ -42,6 +43,7 @@ mod session_actions;
 use localization::{pt_br, localize_status, tr_dynamic, tr};
 use workspace_nav::{draw_header_actions, draw_account_switcher, draw_options_panel, draw_sidebar, draw_instance_section};
 use workspace_state::WorkspaceState;
+use account_runtime::AccountRuntime;
 use overview_panel::{OverviewAccountSample, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
 use automation_panel::draw_automation_panel;
 use automation_game::draw_game_automation_contents;
@@ -946,26 +948,19 @@ struct CaptureSavedEvent {
 }
 pub struct ControllerApp {
     workspace: WorkspaceState,
+    // Exactly four independently owned profiles; no parallel session arrays.
+    runtimes: [AccountRuntime; 4],
     lifecycle_ctx: egui::Context,
     native_handoff_tx: WakeSender<NativeHandoffEvent>,
     native_handoff_rx: Receiver<NativeHandoffEvent>,
-    native_handoff_busy: [bool; 4],
-    native_handoff_last_attempt: [Option<Instant>; 4],
     native_verified_tx: WakeSender<NativeVerifiedEvent>,
     native_verified_rx: Receiver<NativeVerifiedEvent>,
-    native_verifying: [bool; 4],
-    native_error: [Option<String>; 4],
     native_closed_tx: WakeSender<NativeBrowserClosedEvent>,
     native_closed_rx: Receiver<NativeBrowserClosedEvent>,
-    native_close_cancelled: [bool; 4],
     cached_native_tx: WakeSender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
-    cached_native_busy: [bool; 4],
     // Every asynchronous login stage carries the ID of its launch attempt.
     // Stop/restart invalidates it before another launch may be adopted.
-    auth_generations: [Arc<AtomicU64>; 4],
-    require_browser_login: [bool; 4],
-    games: [GameSlot; 4],
 
 
 
@@ -975,49 +970,28 @@ pub struct ControllerApp {
 
 
 
-    automation_drafts: [AutomationDraft;4],
-    market_drafts: [Option<crate::native_market::MarketRules>;4],
-    market_snatch_drafts: [crate::native_market::SnatchTarget;4],
-    market_imports: [String;4],
-    market_notices: [String;4],
-
-
-
-    offline_histories: [Option<crate::native_history::HistorySnapshot>;4],
 
 
 
 
 
 
-    hunt_action_error: [Option<String>;4],
-    hunt_estimate_cache: [hunt_panel::EstimateCache;4],
-    hunt_rankings: [hunt_panel::RankingsCache;4],
-    atlas_results: [hunt_panel::ExplorerCache;4],
-    atlas_filters: [hunt_panel::AtlasFilters;4],
-    atlas_scenarios: [hunt_panel::AtlasScenario;4],
+
+
+
 
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
     hunt_reference_tx: WakeSender<Result<AtlasReference,String>>,
     hunt_reference_rx: Receiver<Result<AtlasReference,String>>,
-    capture_drafts:[Option<CatchSettings>;4],
     // Restock has optimistic per-account editing state. Never rebuild the
     // picker from the last confirmed worker snapshot while a save is in flight.
-    restock_drafts:[Option<CatchSettings>;4],
-    restock_dirty:[bool;4],
-    restock_retries:[RestockSaveRetry;4],
     // Restock failures must not be hidden by an unrelated Auto Catch save.
-    restock_save_error:[Option<String>;4],
 
-    capture_save_busy:[bool;4],
     // A separate request ID rejects stale acknowledgements within a session.
-    capture_save_ids:[u64;4],
     // A monotonically increasing token identifies the native session that
     // began each vault write. Old completions cannot mutate a new session.
-    capture_generations:[Arc<std::sync::atomic::AtomicU64>;4],
-    capture_save_error:[Option<String>;4],
     capture_save_tx:WakeSender<CaptureSavedEvent>,
     capture_save_rx:Receiver<CaptureSavedEvent>,
 
@@ -1030,32 +1004,16 @@ pub struct ControllerApp {
     accounts: [AccountConfig; 4],
     /// Kick website sessions run independently per account. Bearer tokens
     /// are entered in masked fields and optionally stored in the OS vault.
-    kick_monitors: [Option<KickSupervisor>; 4],
-    kick_api_token_input: [String; 4],
-    kick_channels_input: [String; 4],
-    kick_stream_preferences: [KickStreamPreferences; 4],
     // Live official channels are discovered from the native PokéIdle socket,
     // not copied into the user's saved manual preferences.
-    kick_discovered_live: [Vec<String>; 4],
     // Only changes in the native official roster trigger Kick worker reconciliation.
-    kick_discovered_roster: [Option<Vec<crate::native_kick::OfficialKickChannel>>; 4],
-    kick_native_stamp: [Option<(Instant,u64)>; 4],
-    kick_sync_checked: [Option<Instant>; 4],
-    kick_display_cache: [kick_panel::KickDisplayCache; 4],
-    kick_discovery_available: [bool; 4],
-    kick_channel_new: [String; 4],
-    kick_saved_login: [bool; 4],
-    kick_remember_login: [bool; 4],
 
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
-    account_setup: [AccountSetup; 4],
     account_setup_checked_at: Option<Instant>,
 
 
-    idle_progress: [IdleProgressTracker; 4],
-    xp_rates: [XpRateTracker; 4],
 
     update_status: SharedUpdateStatus,
     #[cfg(windows)]
@@ -1095,27 +1053,25 @@ impl ControllerApp {
             }
         };
 
+        let mut kick_channels = Config::load_kick_channels().unwrap_or_else(|error| {
+            logging::warn(&error);
+            std::array::from_fn(|_| String::new())
+        });
+        let mut kick_preferences = Config::load_kick_stream_preferences()
+            .unwrap_or_else(|error| {
+                logging::warn(&error);
+                std::array::from_fn(|_| KickStreamPreferences::default())
+            });
+
         Self {
+            runtimes: std::array::from_fn(|index| AccountRuntime::new(
+                index,
+                std::mem::take(&mut kick_channels[index]),
+                std::mem::take(&mut kick_preferences[index]),
+            )),
             lifecycle_ctx: cc.egui_ctx.clone(),
             native_handoff_tx,
             native_handoff_rx,
-            native_handoff_busy: [false; 4],
-            native_handoff_last_attempt: [None; 4],
-            native_verified_tx,
-            native_verified_rx,
-            native_verifying: [false; 4],
-            native_error: std::array::from_fn(|_| None),
-            native_closed_tx,
-            native_closed_rx,
-            native_close_cancelled: [false; 4],
-            cached_native_tx,
-            cached_native_rx,
-            cached_native_busy: [false; 4],
-            auth_generations:std::array::from_fn(|_|Arc::new(AtomicU64::new(0))),
-            require_browser_login: [false; 4],
-            games: std::array::from_fn(|i| {
-                GameSlot::new(GameProfile::from_index(i).expect("valid profile slot"))
-            }),
             workspace: WorkspaceState::default(),
 
 
@@ -1129,94 +1085,23 @@ impl ControllerApp {
 
 
 
-            automation_drafts: std::array::from_fn(|_|AutomationDraft::default()),
-            market_drafts: std::array::from_fn(|_|None),
-            market_snatch_drafts: std::array::from_fn(|_|crate::native_market::SnatchTarget{
-                kind:"item".into(),currency:"gold".into(),..Default::default()
-            }),
-            market_imports: std::array::from_fn(|_|String::new()),
-            market_notices: std::array::from_fn(|_|String::new()),
-
-
-
-            offline_histories: std::array::from_fn(|_|None),
-
-
-
-
-
-
-            hunt_action_error: std::array::from_fn(|_|None),
-            hunt_estimate_cache: std::array::from_fn(|_|hunt_panel::EstimateCache::default()),
-            hunt_rankings: std::array::from_fn(|_|hunt_panel::RankingsCache::default()),
-            atlas_results: std::array::from_fn(|_|hunt_panel::ExplorerCache::default()),
-            atlas_filters: std::array::from_fn(|_|hunt_panel::AtlasFilters::default()),
-            atlas_scenarios: std::array::from_fn(|_|hunt_panel::AtlasScenario::default()),
-
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
             hunt_reference_tx,
             hunt_reference_rx,
-            capture_drafts:std::array::from_fn(|_|None),
-            restock_drafts:std::array::from_fn(|_|None),
-            restock_dirty:[false;4],
-            restock_retries:[RestockSaveRetry::default();4],
-            restock_save_error:std::array::from_fn(|_|None),
-
-            capture_save_busy:[false;4],
-            capture_save_ids:[0;4],
-            capture_generations:std::array::from_fn(|_|Arc::new(std::sync::atomic::AtomicU64::new(0))),
-            capture_save_error:std::array::from_fn(|_|None),
-            capture_save_tx,
-            capture_save_rx,
-
             inventory_catalog:None,
             visuals:VisualCache::default(),
             inventory_catalog_error:None,
             inventory_catalog_busy:false,
             inventory_catalog_tx,
             inventory_catalog_rx,
-            kick_monitors: std::array::from_fn(|_| None),
-            kick_api_token_input: std::array::from_fn(|_| String::new()),
-            kick_channels_input: Config::load_kick_channels().unwrap_or_else(|error| {
-                logging::warn(&error);
-                std::array::from_fn(|_| String::new())
-            }),
-            kick_stream_preferences: Config::load_kick_stream_preferences()
-                .unwrap_or_else(|error| {
-                    logging::warn(&error);
-                    std::array::from_fn(|_| KickStreamPreferences::default())
-                }),
-            kick_discovered_live: std::array::from_fn(|_| Vec::new()),
-            kick_discovered_roster: std::array::from_fn(|_| None),
-            kick_native_stamp: [None; 4],
-            kick_sync_checked: [None; 4],
-            kick_display_cache: std::array::from_fn(|_|kick_panel::KickDisplayCache::default()),
-            kick_discovery_available: [false; 4],
-            kick_channel_new: std::array::from_fn(|_| String::new()),
-            kick_saved_login: std::array::from_fn(|index| {
-                GameProfile::from_index(index).is_some_and(|profile|
-                    crate::native_auth::load_kick_token(profile)
-                        .ok().flatten().is_some())
-            }),
-            kick_remember_login: [true; 4],
-
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
-            account_setup: std::array::from_fn(|_| AccountSetup::default()),
             account_setup_checked_at: None,
 
 
-            idle_progress: std::array::from_fn(|_| IdleProgressTracker::default()),
-            xp_rates: std::array::from_fn(|_| XpRateTracker::default()),
-
-            update_status,
-            #[cfg(windows)]
-            tray,
-            #[cfg(windows)]
-            tray_hidden,
             accounts: Config::load_accounts().unwrap_or_else(|error| {
                 logging::warn(&format!("account configuration load failed: {error}"));
                 std::array::from_fn(|i| AccountConfig::default_for(GameProfile::from_index(i).expect("valid account slot")))
@@ -1227,16 +1112,7 @@ impl ControllerApp {
     // A session transition is serialized with in-flight encrypted writes.
     // Reset old UI acknowledgements only after the vault boundary is crossed.
     fn invalidate_capture_session(&mut self,index:usize) {
-        self.auth_generations[index].fetch_add(1,Ordering::AcqRel);
-        crate::native_auth::invalidate_capture_generation(&self.capture_generations[index]);
-        self.capture_save_busy[index]=false;
-        self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
-        self.capture_drafts[index]=None;
-        self.restock_drafts[index]=None;
-        self.restock_dirty[index]=false;
-        self.restock_retries[index]=RestockSaveRetry::default();
-        self.restock_save_error[index]=None;
-        self.capture_save_error[index]=None;
+        self.runtimes[index].invalidate_session();
     }
 
     // Native and Twitch recovery signals wake the control-plane pump directly.
@@ -1253,18 +1129,18 @@ impl ControllerApp {
             session.enable_background_forecasts(
                 Arc::clone(reference),self.ui_options.atlas_aoe_enabled[index]);
         }
-        self.games[index].native = Some(session);
+        self.runtimes[index].game.native = Some(session);
         // Native roster publications bypass the UI redraw cadence entirely.
         // Attach them even if Kick was already running before game login.
-        if let Some(kick)=self.kick_monitors[index].as_ref() {
-            if let Some(game)=self.games[index].native.as_ref() {
+        if let Some(kick)=self.runtimes[index].kick.kick_monitor.as_ref() {
+            if let Some(game)=self.runtimes[index].game.native.as_ref() {
                 game.set_kick_roster_publisher(kick.roster_publisher());
             }
         }
     }
 
     fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
-        let tracker = &mut self.idle_progress[index];
+        let tracker = &mut self.runtimes[index].telemetry.idle_progress;
         let eligible = health.telemetry_is_fresh()
             && health.game_ready
             && health.logged_in
@@ -1304,7 +1180,7 @@ impl Drop for ControllerApp {
             tray.shutdown();
         }
 
-        for slot in &mut self.games {
+        for slot in self.runtimes.iter_mut().map(|runtime| &mut runtime.game) {
             if let Some(mut child) = slot.child.take() {
                 let account_name = self.accounts[slot.profile.index()].name.clone();
                 logging::info(&format!(
@@ -1346,10 +1222,10 @@ impl eframe::App for ControllerApp {
         // Firefox's BiDi monitor may become ready without emitting a channel
         // reply. Give temporary sign-ins a lightweight progress heartbeat even
         // when the tray's ordinary display timer is 30 seconds.
-        let auth_in_progress = self.games.iter().enumerate().any(|(i,slot)|
+        let auth_in_progress = self.runtimes.iter().map(|runtime| &runtime.game).enumerate().any(|(i,slot)|
             self.accounts[i].enabled && slot.monitor.is_some() &&
             slot.native.is_none() && !slot.browser_only);
-        let native_detail = self.games.iter().any(|game| game.native.is_some())
+        let native_detail = self.runtimes.iter().map(|runtime| &runtime.game).any(|game| game.native.is_some())
             && (matches!(self.workspace.panel_tab, PanelTab::Hunts | PanelTab::Automation)
                 || self.workspace.panel_tab == PanelTab::Overview);
         // Multiple overview cards are costly to rebuild; one batched sample
@@ -1467,14 +1343,14 @@ impl eframe::App for ControllerApp {
             self.workspace.hunt_subtab==HuntSubtab::Explorer {
             Some(self.workspace.hunt_account)
         } else {None};
-        for (index,results) in self.atlas_results.iter_mut().enumerate() {
+        for (index,results) in self.runtimes.iter_mut().map(|runtime| &mut runtime.hunt.atlas_results).enumerate() {
             if active_explorer!=Some(index) {results.release();}
         }
         let active_rankings=if self.workspace.panel_tab==PanelTab::Hunts &&
             self.workspace.hunt_subtab==HuntSubtab::Recommendations {
             Some(self.workspace.hunt_account)
         } else {None};
-        for (index,results) in self.hunt_rankings.iter_mut().enumerate() {
+        for (index,results) in self.runtimes.iter_mut().map(|runtime| &mut runtime.hunt.hunt_rankings).enumerate() {
             if active_rankings!=Some(index) {results.release();}
         }
 
