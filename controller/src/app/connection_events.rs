@@ -3,10 +3,17 @@
 //! never determines when a native/Firefox authentication stage completes.
 use super::*;
 
-// Old native-session acknowledgements are never authority for a new
-// authenticated socket, even when both belong to the same account slot.
-fn capture_save_belongs_to_session(event:&CaptureSavedEvent,current:u64)->bool {
-    event.generation==current
+// Reject prior-session and superseded request completions before touching
+// their busy flags or editor/draft state.
+fn capture_save_is_current(
+    event:&CaptureSavedEvent, generation:u64, request_id:u64
+)->bool {
+    event.generation==generation && event.request_id==request_id
+}
+
+fn capture_fields_equal(a:&CatchSettings,b:&CatchSettings)->bool {
+    a.enabled==b.enabled && a.priorities==b.priorities &&
+        a.interval_ms==b.interval_ms && a.reserves==b.reserves
 }
 
 // Restock acknowledgements update only the restock fields of an open Capture
@@ -17,7 +24,13 @@ fn reconcile_capture_draft(
     origin: CaptureSaveOrigin,
 ) {
     match origin {
-        CaptureSaveOrigin::Editor => *draft=None,
+        CaptureSaveOrigin::Editor => {
+            // Newer local edits must survive an older save acknowledgement.
+            // Restock fields can change separately during an editor save.
+            if draft.as_ref().is_some_and(|current|capture_fields_equal(current,saved)) {
+                *draft=None;
+            }
+        },
         CaptureSaveOrigin::Toggle => {
             if let Some(draft)=draft.as_mut() { draft.enabled=saved.enabled; }
         }
@@ -54,6 +67,8 @@ impl ControllerApp {
                 Ok(Some(next)) => {
                     self.capture_save_error[index]=None;
                     self.capture_save_busy[index]=true;
+                    self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
+                    let request_id=self.capture_save_ids[index];
                     let profile=self.games[index].profile;
                     let tx=self.capture_save_tx.clone();
                     let generation_state=Arc::clone(&self.capture_generations[index]);
@@ -67,7 +82,8 @@ impl ControllerApp {
                             .unwrap_or_else(|_|
                                 Err("Encrypted restock save panicked".into()));
                         let _=tx.send(CaptureSavedEvent {
-                            index,generation,config:next,origin:CaptureSaveOrigin::Restock,result
+                            index,generation,request_id,config:next,
+                            origin:CaptureSaveOrigin::Restock,result
                         });
                     });
                 }
@@ -77,11 +93,13 @@ impl ControllerApp {
 
     pub(super) fn refresh_processes(&mut self) {
         while let Ok(event)=self.capture_save_rx.try_recv() {
-            self.capture_save_busy[event.index]=false;
-            // Do not apply an old save to a newly adopted native socket or
-            // acknowledge it by clearing a newer editor's pending changes.
-            if !capture_save_belongs_to_session(&event,
-                self.capture_generations[event.index].load(Ordering::Acquire)) {
+            // An old completion cannot clear a newer request's busy flag or
+            // overwrite drafts, even when the native session was replaced.
+            if !capture_save_is_current(
+                &event,
+                self.capture_generations[event.index].load(Ordering::Acquire),
+                self.capture_save_ids[event.index],
+            ) {
                 // A pending restock selection can be rebased on the new
                 // session's confirmed preferences by the regular save queue.
                 if event.origin==CaptureSaveOrigin::Restock &&
@@ -90,6 +108,7 @@ impl ControllerApp {
                 }
                 continue;
             }
+            self.capture_save_busy[event.index]=false;
             match event.result {
                 Ok(()) => {
                     // The encrypted save worker has already applied the
@@ -532,13 +551,14 @@ mod capture_save_reconciliation_tests {
     use super::*;
 
     #[test]
-    fn old_session_acknowledgement_does_not_belong_to_reauthenticated_slot() {
+    fn old_session_or_request_acknowledgement_cannot_clear_current_save() {
         let event=CaptureSavedEvent {
-            index:2,generation:7,config:CatchSettings::default(),
+            index:2,generation:7,request_id:3,config:CatchSettings::default(),
             origin:CaptureSaveOrigin::Toggle,result:Ok(())
         };
-        assert!(capture_save_belongs_to_session(&event,7));
-        assert!(!capture_save_belongs_to_session(&event,8));
+        assert!(capture_save_is_current(&event,7,3));
+        assert!(!capture_save_is_current(&event,8,3));
+        assert!(!capture_save_is_current(&event,7,4));
     }
 
     #[test]
@@ -562,6 +582,22 @@ mod capture_save_reconciliation_tests {
         assert_eq!(result.potion_id,203);
         assert_eq!(result.revive_id,206);
         assert!(result.restock_enabled);
+    }
+
+    #[test]
+    fn editor_save_does_not_discard_newer_unsaved_capture_changes() {
+        let mut saved=CatchSettings::default();
+        saved.interval_ms=500;
+        let mut newer=saved.clone();
+        newer.interval_ms=700;
+        let mut editor=Some(newer.clone());
+        reconcile_capture_draft(&mut editor,&saved,CaptureSaveOrigin::Editor);
+        assert_eq!(editor,Some(newer.clone()));
+        // Restock reconciliation must also preserve the newer throwing fields.
+        reconcile_capture_draft(&mut editor,&saved,CaptureSaveOrigin::Restock);
+        assert_eq!(editor.as_ref().unwrap().interval_ms,700);
+        reconcile_capture_draft(&mut editor,&newer,CaptureSaveOrigin::Editor);
+        assert!(editor.is_none());
     }
 
     #[test]
