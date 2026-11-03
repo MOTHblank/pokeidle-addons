@@ -124,6 +124,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(16.0);
             ui.separator();
             ui.heading(tr("Boss loot history"));
+            if let Some(error) = view.storage_warning.as_deref() {
+                ui.colored_label(super::WARN, tr(error));
+            }
             ui.label(format!("{}: {}",tr("Confirmed boss victories recorded"),view.log.len()));
             let mut totals = BTreeMap::<u64,u64>::new();
             for battle in view.log.iter() {
