@@ -743,6 +743,44 @@ mod tests {
         replacement.join().unwrap();
     }
     #[test]
+    fn delayed_writer_drains_before_replacement_reads_history() {
+        let id=SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path=std::env::temp_dir().join(
+            format!("moth-history-handoff-{}-{id}.json",std::process::id()));
+        let gate=Arc::new(HistoryGate::default());
+        let old_lease=gate.acquire();
+        let shared=Arc::new(Mutex::new(HistorySnapshot {
+            owner:"Test".into(),..Default::default()
+        }));
+        let writer=start_history_writer(Arc::clone(&shared),path.clone(),"Test".into())
+            .unwrap();
+        // Prevent the in-flight writer from copying its snapshot until after
+        // the replacement has tried to acquire the same profile's lease.
+        let mut locked=shared.lock().unwrap();
+        locked.lifetime.kills=42;
+        writer.request().unwrap();
+        let next_gate=Arc::clone(&gate);
+        let next_path=path.clone();
+        let (read_tx,read_rx)=std::sync::mpsc::channel();
+        let replacement=thread::spawn(move || {
+            let _lease=next_gate.acquire();
+            read_tx.send(fs::read_to_string(next_path).unwrap()).unwrap();
+        });
+        let stopping=thread::spawn(move || {
+            writer.stop_and_join();
+            drop(old_lease);
+        });
+        assert!(read_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(locked);
+        stopping.join().unwrap();
+        let raw=read_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        replacement.join().unwrap();
+        let recovered=HistorySnapshot::from_value(
+            &serde_json::from_str::<Value>(&raw).unwrap(),"Test").unwrap();
+        assert_eq!(recovered.lifetime.kills,42);
+        fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn pending_history_saves_coalesce_without_queuing_full_snapshots() {
         let signal=WriteSignal::default();
         for _ in 0..1_000 {signal.request().unwrap();}
