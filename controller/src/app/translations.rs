@@ -130,6 +130,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Stop all running accounts" => "Parar todas as contas em execução",
         "ACCOUNT" => "CONTA",
         "Stopping" => "Parando",
+        "Stop failed" => "Falha ao parar",
+        "Retry Stop" => "Tentar parar novamente",
         "Starting" => "Iniciando",
         "Current refresh mode" => "Modo atual de atualização",
         "Restore default performance settings" => "Restaurar o desempenho padrão",
