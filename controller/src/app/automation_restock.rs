@@ -349,6 +349,9 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
     }
     if *cfg != previous {
         app.restock_dirty[index] = true;
+        // An explicit new edit unblocks an exhausted/permanent save error.
+        app.restock_retries[index] = RestockSaveRetry::default();
+        app.capture_save_error[index] = None;
         ui.ctx().request_repaint();
     }
     if let Some(error) = app.capture_save_error[index].as_deref() {
