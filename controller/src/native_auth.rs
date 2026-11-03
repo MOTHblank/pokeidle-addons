@@ -157,7 +157,11 @@ pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
 // UI events may toggle Auto Catch and native Restock in rapid succession.
 // Serialize the read-modify-encrypt-write cycle so one toggle never silently
 // overwrites the other; no credentials are exposed outside OS vault storage.
-static PREFERENCE_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static PREFERENCE_WRITE: [std::sync::Mutex<()>;4] =
+    [const {std::sync::Mutex::new(())};4];
+fn preference_write(profile:GameProfile)->&'static std::sync::Mutex<()> {
+    &PREFERENCE_WRITE[profile.index()]
+}
 
 /// Keep each profile's controller-edited capture settings authoritative when
 /// Firefox is used again to refresh an expired or missing game login. A fresh
