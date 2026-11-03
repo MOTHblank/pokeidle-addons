@@ -52,8 +52,14 @@ impl ControllerApp {
 
     pub(super) fn launch_one_mode(&mut self, profile: GameProfile, headless: bool) {
         let index = Self::game_index(profile);
+        if self.games[index].stopping || self.games[index].shutdown_failed {
+            self.set_status(format!(
+                "{}: finish or retry Firefox Stop before starting this account",
+                self.account_name(profile)), true);
+            return;
+        }
         if self.games[index].is_running() || self.cached_native_busy[index] ||
-            self.native_handoff_busy[index] || self.games[index].stopping {
+            self.native_handoff_busy[index] {
             return;
         }
         // A new launch must not accept completion events from the old launch.
@@ -416,10 +422,13 @@ impl ControllerApp {
     pub(super) fn stop_all(&mut self) {
         // All four workers are queued independently; no per-account process
         // wait can delay starting shutdown for the remaining accounts.
+        let mut accepted = true;
         for profile in GameProfile::ALL {
-            self.stop_one(profile);
+            accepted &= self.stop_one(profile);
         }
-        if self.games.iter().any(|slot| slot.stopping) {
+        if !accepted {
+            self.set_status("Some Firefox shutdown workers could not start. Retry Stop.", true);
+        } else if self.games.iter().any(|slot| slot.stopping) {
             self.set_status("Stopping all accounts in the background.", false);
         }
     }
