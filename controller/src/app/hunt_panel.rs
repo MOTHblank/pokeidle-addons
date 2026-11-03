@@ -153,9 +153,9 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.horizontal_wrapped(|ui|{
                     let starting=app.runtimes[index].game.child.is_some()
                         || app.runtimes[index].game.orphaned_pid.is_some()
-                        || app.cached_native_busy[index]
-                        || app.native_verifying[index]
-                        || app.native_handoff_busy[index];
+                        || app.runtimes[index].session.cached_native_busy
+                        || app.runtimes[index].session.native_verifying
+                        || app.runtimes[index].session.native_handoff_busy;
                     if starting {
                         ui.label(RichText::new(tr("Account starting or waiting for sign-in"))
                             .size(11.0).color(WARN));
@@ -268,7 +268,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
                 HuntSubtab::Current => {
                     draw_atlas_current(ui,&view,app.hunt_reference.as_deref(),
-                        &runtime.hunt.hunt_estimate_cache,app.ui_options.atlas_aoe_enabled[index]);
+                        &runtime.hunt.hunt_estimate_cache,app.ui_options.atlas_aoe_enabled[index],live);
                 }
                 HuntSubtab::Session => {
                     draw_atlas_session(ui,&view,native,index,&mut app.workspace);
