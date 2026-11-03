@@ -760,6 +760,8 @@ mod tests {
             include_str!("automation_game.rs"),
             include_str!("automation_manager.rs"),
             include_str!("automation_details.rs"),
+            include_str!("automation_browser.rs"),
+            include_str!("automation_streams.rs"),
             include_str!("automation_capture.rs"),
             include_str!("automation_restock.rs"),
             include_str!("automation_widgets.rs"),

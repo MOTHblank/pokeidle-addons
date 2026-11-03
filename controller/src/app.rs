@@ -25,6 +25,8 @@ mod automation_panel;
 mod automation_game;
 mod automation_manager;
 mod automation_details;
+mod automation_browser;
+mod automation_streams;
 mod automation_capture;
 mod automation_restock;
 mod automation_widgets;
@@ -42,6 +44,8 @@ use overview_panel::{OverviewTotals, collect_overview_totals, draw_overview_tota
 use automation_panel::draw_automation_panel;
 use automation_game::draw_game_automation_contents;
 use automation_details::draw_game_details;
+use automation_browser::draw_browser_controls;
+use automation_streams::draw_stream_bonus_details;
 use automation_capture::{auto_catch_setting_label, draw_native_automation};
 use automation_restock::{restock_fields_equal, draw_overview_restock};
 use automation_widgets::{detail_stat_line, resource_chip, automation_badge, bonus_chip};
