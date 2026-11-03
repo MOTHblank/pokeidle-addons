@@ -48,7 +48,8 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             ui.label(RichText::new(tr_dynamic(app.runtimes[index].automation.market_notice.clone())).size(10.0).color(WARN));
         }
         draw_market_copy_controls(app,ui,index);
-        let Some(cfg)=app.runtimes[index].automation.market_draft.as_mut() else {return};
+        let automation = &mut app.runtimes[index].automation;
+        let Some(cfg)=automation.market_draft.as_mut() else {return};
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui|{
             ui.checkbox(&mut cfg.enabled,tr("Enable automatic buying"))
@@ -176,7 +177,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 tr("Enter the offer ID and the highest price you will pay per unit. Before buying, Snatch checks the seller, quantity, currency, price and unlock time. It will not buy an offer it cannot verify.")
             ).size(10.0).color(DIM));
             ui.horizontal_wrapped(|ui|{
-                let t=&mut app.runtimes[index].automation.market_snatch_draft;
+                let t=&mut automation.market_snatch_draft;
                 egui::ComboBox::from_id_salt(("snatch-kind",index))
                     .selected_text(if t.kind=="pokemon"{"Pokémon"}else{tr("Item")})
                     .show_ui(ui,|ui|{
@@ -198,14 +199,14 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     target.arm();
                     if target.id==0 || target.max_price==0 ||
                         (target.kind=="item" && target.item_id==0) {
-                        app.runtimes[index].automation.market_notice=
+                        automation.market_notice=
                             tr("Enter a real listing ID, item ID (for items), and maximum price.").into();
                     } else if cfg.snatch_targets.iter().any(|old|old.id==target.id) {
-                        app.runtimes[index].automation.market_notice=
+                        automation.market_notice=
                             tr("This offer is already in your Snatch list.").into();
                     } else {
                         cfg.snatch_targets.push(target);
-                        app.runtimes[index].automation.market_notice=tr("Offer added to Snatch and saved for this account.").into();
+                        automation.market_notice=tr("Offer added to Snatch and saved for this account.").into();
                         save=true;
                     }
                 }
@@ -239,7 +240,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             }
             if let Some(i)=remove {
                 cfg.snatch_targets.remove(i);
-                app.runtimes[index].automation.market_notice=tr("Offer removed from Snatch.").into();
+                automation.market_notice=tr("Offer removed from Snatch.").into();
                 save=true;
             }
             if let Some(status)=live_status.as_ref() {
@@ -279,7 +280,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         if !cfg.snatch_targets.iter().any(|t|t.id==target.id) &&
                             cfg.snatch_targets.len()<40 {
                             cfg.snatch_targets.push(target);
-                            app.runtimes[index].automation.market_notice=tr("Offer added to your Snatch list.").into();
+                            automation.market_notice=tr("Offer added to your Snatch list.").into();
                             save=true;
                         }
                     }
@@ -304,16 +305,16 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             ui.label(RichText::new(
                 "To import old Moth Watch rules, open Firefox developer tools and copy the result of localStorage.getItem('moth-pokeidle-market-bot-config-v1'). Paste it below. Imported rules stay disabled until you review and save them."
             ).size(10.0).color(DIM));
-            ui.add(egui::TextEdit::multiline(&mut app.runtimes[index].automation.market_import)
+            ui.add(egui::TextEdit::multiline(&mut automation.market_import)
                 .hint_text(tr("Paste Moth Watch JSON settings…"))
                 .desired_rows(3).desired_width(f32::INFINITY));
             if ui.small_button(tr("Import settings into editor")).clicked() {
-                match MarketRules::import_watch(&app.runtimes[index].automation.market_import) {
+                match MarketRules::import_watch(&automation.market_import) {
                     Ok(imported)=>{
                         *cfg=imported;
-                        app.runtimes[index].automation.market_notice=tr("Rules imported. Review and save them to use automatic buying.").into();
+                        automation.market_notice=tr("Rules imported. Review and save them to use automatic buying.").into();
                     }
-                    Err(error)=>app.runtimes[index].automation.market_notice=format!("Import rejected: {error}"),
+                    Err(error)=>automation.market_notice=format!("Import rejected: {error}"),
                 }
             }
         });
@@ -321,8 +322,8 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             if ui.button(tr("Save market rules")).clicked(){save=true;}
             if ui.small_button(tr("Revert unsaved changes")).clicked(){
                 match MarketRules::load(profile) {
-                    Ok(saved)=>{*cfg=saved;app.runtimes[index].automation.market_notice=tr("Reloaded saved market rules.").into();}
-                    Err(error)=>app.runtimes[index].automation.market_notice=error,
+                    Ok(saved)=>{*cfg=saved;automation.market_notice=tr("Reloaded saved market rules.").into();}
+                    Err(error)=>automation.market_notice=error,
                 }
             }
             ui.label(RichText::new(tr("Changes take effect only after Save.")).size(10.0).color(DIM));
