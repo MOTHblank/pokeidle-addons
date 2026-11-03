@@ -967,18 +967,31 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // prioritizing each queued listing's first attempt. Exact
                     // market.anuncio verifications never wait behind ordinary
                     // rule-scanning, and share the same authenticated socket.
+                    let snatch_started=Instant::now();
                     let snatch_payloads=market.snatch_actions(&market_cfg,Instant::now());
                     let mut snatch_send_failed=false;
+                    let mut snatch_buys_sent=false;
                     for payload in snatch_payloads {
+                        let buying=payload.get("t").and_then(Value::as_str)==Some("market.comprar");
                         if socket.send(Message::Text(payload.to_string().into())).is_err() {
                             market.send_failed();
                             snatch_send_failed=true;
                             break;
                         }
+                        snatch_buys_sent|=buying;
+                    }
+                    if snatch_buys_sent {
+                        // Real pre-dispatch batch cost, including the single
+                        // durable journal commit and all actual socket sends.
+                        market.record_dispatch_latency(true,snatch_started.elapsed());
                     }
                     if snatch_send_failed {break;}
+                    let rule_started=Instant::now();
                     if let Some(payload)=market.next(&market_cfg,Instant::now()) {
-                        if socket.send(Message::Text(payload.to_string().into())).is_err() {
+                        let buying=payload.get("t").and_then(Value::as_str)==Some("market.comprar");
+                        let failed=socket.send(Message::Text(payload.to_string().into())).is_err();
+                        if buying {market.record_dispatch_latency(false,rule_started.elapsed());}
+                        if failed {
                             market.send_failed();
                             break;
                         }
@@ -1081,6 +1094,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             last_snatch_status_publish=Instant::now();
                         }
                         restock.publish_status();
+                        // Aggregate latency statistics are emitted only after
+                        // the critical Snatch window, once every five minutes.
+                        market.maybe_report_latency(&market_cfg);
                         update(&snapshot, |s| {
                             s.native_automation = automation_writer.status.clone();
                             s.native_auto_catch = gameplay.status.auto_catch;
@@ -1109,7 +1125,11 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                 // hunt/history work) loses release-time races.
                                 if frame.get("t").and_then(Value::as_str)==Some("market") {
                                     if let Some(buy)=market.next_ready_buy(&market_cfg,received_at) {
-                                        if socket.send(Message::Text(buy.to_string().into())).is_err() {
+                                        let failed=socket.send(Message::Text(buy.to_string().into())).is_err();
+                                        // Includes market frame processing,
+                                        // journal persistence and socket send.
+                                        market.record_dispatch_latency(false,received_at.elapsed());
+                                        if failed {
                                             market.send_failed();
                                             break;
                                         }
