@@ -410,6 +410,7 @@ pub(super) fn draw_overview_card(
             ui.horizontal_wrapped(|ui| {
                 // Native and Firefox are mutually exclusive launch options.
                 let action = tr(if app.games[index].stopping { "Stopping" }
+                    else if app.games[index].shutdown_failed { "Retry Stop" }
                     else if !running { "Start account" }
                     else if app.games[index].native.is_some() { "Stop" }
                     else if app.games[index].browser_only { "Stop Firefox" }
