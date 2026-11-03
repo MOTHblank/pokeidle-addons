@@ -240,6 +240,8 @@ impl ControllerApp {
         // Cancel the authority of any asynchronous Capture/Restock write
         // from the previous login before closing or replacing its socket.
         self.capture_generations[index].fetch_add(1,Ordering::AcqRel);
+        self.capture_save_busy[index]=false;
+        self.capture_save_ids[index]=self.capture_save_ids[index].wrapping_add(1);
         // A stopped account must not keep an independent Kick worker alive.
         self.stop_kick_account(index);
         let account_name = self.account_name(profile);
