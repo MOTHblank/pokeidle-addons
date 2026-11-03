@@ -12,6 +12,9 @@ pub(super) fn draw_browser_controls(
     account_name: &str,
     health: &Health,
 ) {
+            // The extracted browser-only panel still uses the managed
+            // Firefox process state to distinguish closed from stale tabs.
+            let running=app.games[index].is_running();
             // Browser-only controls are irrelevant after successful native
             // takeover. The runtime and saved session now own game + IRC.
             if app.games[index].native.is_none() {

@@ -81,6 +81,10 @@ impl Default for WorkspaceState {
 // The caller persists any edited account name before changing the selection.
 // This transition is purely UI state and never touches a game session.
 impl WorkspaceState {
+    pub(super) fn account_selection_matches(&self, index: usize) -> bool {
+        self.hunt_account == index && self.automation_account == index
+    }
+
     pub(super) fn select_account(&mut self, index: usize) {
         self.history_rows_limit = 100;
         self.dashboard_show_history = false;
@@ -90,5 +94,34 @@ impl WorkspaceState {
         }
         self.automation_account = index;
         self.hunt_page = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selecting_account_synchronizes_automation_when_hunt_already_matches() {
+        let mut workspace=WorkspaceState::default();
+        workspace.hunt_account=2;
+        workspace.automation_account=1;
+        assert!(!workspace.account_selection_matches(2));
+        workspace.select_account(2);
+        assert_eq!(workspace.hunt_account,2);
+        assert_eq!(workspace.automation_account,2);
+        assert!(workspace.account_selection_matches(2));
+    }
+
+    #[test]
+    fn selecting_account_synchronizes_hunt_when_automation_already_matches() {
+        let mut workspace=WorkspaceState::default();
+        workspace.hunt_account=0;
+        workspace.automation_account=3;
+        assert!(!workspace.account_selection_matches(3));
+        workspace.select_account(3);
+        assert_eq!(workspace.hunt_account,3);
+        assert_eq!(workspace.automation_account,3);
+        assert!(workspace.account_selection_matches(3));
     }
 }

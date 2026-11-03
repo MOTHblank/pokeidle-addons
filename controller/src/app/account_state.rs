@@ -45,7 +45,7 @@ impl ControllerApp {
 
     /// Switching accounts changes the workspace selection, not a live session.
     pub(super) fn select_workspace_account(&mut self, index: usize) {
-        if index >= self.games.len() || index == self.workspace.hunt_account { return; }
+        if index >= self.games.len() || self.workspace.account_selection_matches(index) { return; }
         self.save_dirty_account_names();
         self.workspace.select_account(index);
     }
