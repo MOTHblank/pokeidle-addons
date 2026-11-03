@@ -122,6 +122,9 @@ pub(super) struct EstimateCache {
     full_required:bool,
     live: bool,
     refreshed: Option<Instant>,
+    // Changes on invalidation as well as publication. A timestamp alone
+    // cannot distinguish multiple invalidations while forecasts are pending.
+    revision:u64,
     failed_at:Option<Instant>,
     last_archived:Option<(String,Instant)>,
     // Retain the receiver until the old calculation exits. Each worker
@@ -192,6 +195,7 @@ impl EstimateCache {
             self.bonus_signature=bonus_signature;
             self.live=live;
             self.refreshed=None;
+            self.revision=self.revision.wrapping_add(1);
             self.failed_at=None;
             // Keep the current-hunt archival throttle when only an unrelated
             // destination learned new geometry.
@@ -231,6 +235,7 @@ impl EstimateCache {
                         }
                     }
                     self.refreshed=Some(Instant::now());
+                    self.revision=self.revision.wrapping_add(1);
                     self.failed_at=None;
                 }
             }
@@ -397,7 +402,7 @@ pub(super) struct RankingsCache {
     rows:Vec<CachedRankingRow>,
     catalog:Option<Arc<Vec<native_hunts::HuntEntry>>>,
     reference:Option<Arc<AtlasReference>>,
-    forecast_at:Option<Instant>,
+    forecast_revision:u64,
     ranking:Option<HuntRanking>,
     query:String,
     region:String,
@@ -443,7 +448,7 @@ impl RankingsCache {
         let changed=!self.initialized ||
             self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
             self.reference.as_ref().map(Arc::as_ptr)!=reference.map(Arc::as_ptr) ||
-            self.forecast_at!=estimates.refreshed ||
+            self.forecast_revision!=estimates.revision ||
             self.ranking!=Some(ranking) || self.live!=live ||
             self.query!=query || self.region!=region ||
             self.species_type!=species_type ||
@@ -469,7 +474,7 @@ impl RankingsCache {
                 Self::fallback_signature(view,ranking,live));
             self.catalog=Some(Arc::clone(&view.hunts));
             self.reference=reference.cloned();
-            self.forecast_at=estimates.refreshed;
+            self.forecast_revision=estimates.revision;
             self.ranking=Some(ranking);
             self.live=live;
             self.query=query.to_owned();
@@ -1138,7 +1143,7 @@ pub(super) struct ExplorerCache {
     scenario:Option<AtlasScenario>,
     catalog:Option<Arc<Vec<native_hunts::HuntEntry>>>,
     reference_ptr:usize,
-    forecast_at:Option<Instant>,
+    forecast_revision:u64,
     model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     trainer_level:Option<u32>,
     outland_catalog:Option<[(u32,f64);8]>,
@@ -1203,7 +1208,7 @@ impl ExplorerCache {
             self.scenario.as_ref()!=Some(&key_scenario) ||
             self.catalog.as_ref().is_none_or(|old|!Arc::ptr_eq(old,&view.hunts)) ||
             self.reference_ptr!=reference_ptr ||
-            self.forecast_at!=estimates.refreshed ||
+            self.forecast_revision!=estimates.revision ||
             self.model_signature!=estimates.active_signature ||
             self.trainer_level!=view.trainer_level ||
             self.outland_catalog!=view.outland_catalog ||
@@ -1218,7 +1223,7 @@ impl ExplorerCache {
             self.scenario=Some(key_scenario);
             self.catalog=Some(Arc::clone(&view.hunts));
             self.reference_ptr=reference_ptr;
-            self.forecast_at=estimates.refreshed;
+            self.forecast_revision=estimates.revision;
             self.model_signature=estimates.active_signature.clone();
             self.trainer_level=view.trainer_level;
             self.outland_catalog=view.outland_catalog;
@@ -3663,9 +3668,49 @@ mod tests {
         assert_eq!(results.rebuilds,1);
         results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"A","","");
         assert_eq!(results.rebuilds,2,"filter edits must invalidate rankings");
-        estimates.refreshed=Some(Instant::now()+Duration::from_secs(1));
+        estimates.revision=estimates.revision.wrapping_add(1);
         results.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"A","","");
         assert_eq!(results.rebuilds,3,"new forecasts must invalidate rankings");
+    }
+    #[test]
+    fn repeated_invalidation_refreshes_rankings_even_without_a_completed_forecast() {
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"a".into(),name:"A".into(),..Default::default()
+        }]);
+        let mut estimates=EstimateCache::default();
+        estimates.refresh(0,&view,None,true,false);
+        estimates.values.insert("a".into(),Some(simulated_forecast(250.0,false)));
+        estimates.refreshed=None;
+        let mut ranked=RankingsCache::default();
+        let mut explorer=ExplorerCache::default();
+        let filters=AtlasFilters::default();
+        let scenario=AtlasScenario::default();
+        ranked.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        explorer.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(ranked.rebuilds,1);
+        assert_eq!(explorer.rebuilds,1);
+        let baseline=estimates.revision;
+        view.geo_revisions=Arc::new(std::collections::BTreeMap::from([
+            ("a".into(),1)
+        ]));
+        estimates.refresh(0,&view,None,true,false);
+        assert!(estimates.get("a").is_none());
+        assert!(estimates.refreshed.is_none());
+        assert_ne!(baseline,estimates.revision);
+        ranked.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        explorer.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(ranked.rebuilds,2);
+        assert_eq!(explorer.rebuilds,2);
+        let mut newer=(*view.geo_revisions).clone();
+        newer.insert("a".into(),2);
+        view.geo_revisions=Arc::new(newer);
+        estimates.refresh(0,&view,None,true,false);
+        assert!(estimates.refreshed.is_none());
+        ranked.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
+        explorer.update(&view,None,&estimates,&filters,&scenario);
+        assert_eq!(ranked.rebuilds,3);
+        assert_eq!(explorer.rebuilds,3);
     }
     #[test]
     fn rankings_cache_tracks_live_fallback_when_forecast_is_missing(){
