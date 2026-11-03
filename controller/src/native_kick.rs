@@ -338,19 +338,30 @@ impl KickSupervisor {
                 // Start() already validated and selected these channels.
                 let mut last_selected=initial_selected;
                 let mut last_official=Vec::<String>::new();
-                while let Ok(event)=receiver.recv() {
+                'coordinator: while let Ok(event)=receiver.recv() {
                     if worker_stop.load(Ordering::Acquire){break}
-                    match event {
-                        KickReconcileEvent::Roster(roster) => authoritative=Some(roster),
-                        KickReconcileEvent::Preferences{
-                            manual:next_manual,fallback_live:next_live,prefs:next_prefs
-                        } => {
-                            manual=next_manual;
-                            fallback_live=next_live;
-                            prefs=next_prefs;
+                    // Coalesce a burst of live/offline announcements and user
+                    // edits before touching any viewer worker. This prevents
+                    // starting streams that were immediately deselected.
+                    let mut next=event;
+                    loop {
+                        match next {
+                            KickReconcileEvent::Roster(roster)=>authoritative=Some(roster),
+                            KickReconcileEvent::Preferences{
+                                manual:next_manual,fallback_live:next_live,prefs:next_prefs
+                            }=>{
+                                manual=next_manual;
+                                fallback_live=next_live;
+                                prefs=next_prefs;
+                            }
+                            KickReconcileEvent::Stop=>break 'coordinator,
                         }
-                        KickReconcileEvent::Stop=>break,
+                        match receiver.try_recv() {
+                            Ok(latest)=>next=latest,
+                            Err(_)=>break,
+                        }
                     }
+                    if worker_stop.load(Ordering::Acquire){break}
                     let Some(monitor)=weak.upgrade() else {break};
                     let (selected,official)=if let Some(roster)=authoritative.as_ref() {
                         roster_choices(roster,&manual,&prefs)
@@ -378,9 +389,14 @@ impl KickSupervisor {
                             last_selected=selected_sorted;
                             last_official=official;
                         }
-                        Err(error)=>crate::logging::warn(&format!(
-                            "Kick roster reconciliation failed: {error}"
-                        )),
+                        Err(error)=>{
+                            crate::logging::warn(&format!(
+                                "Kick roster reconciliation failed: {error}"
+                            ));
+                            if let Ok(mut state)=monitor.snapshot.lock() {
+                                state.error=Some(error);
+                            }
+                        }
                     }
                 }
             })
