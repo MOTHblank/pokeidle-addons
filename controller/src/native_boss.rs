@@ -70,6 +70,7 @@ pub struct BossView {
     pub auto_key: Option<String>,
     pub arena: Option<String>,
     pub busy: bool,
+    pub can_stop: bool,
     pub phase: String,
     pub original_hunt: Option<String>,
     pub warning: Option<String>,
@@ -85,6 +86,7 @@ struct Trip {
     stage: Stage,
     confirmed: bool,
     ended: bool,
+    stop_pending: bool,
 }
 
 #[derive(Default)]
@@ -198,6 +200,8 @@ impl BossManager {
         if let Ok(mut state) = shared.lock() {
             *state = self.view.clone();
             state.busy = self.trip.is_some();
+            state.can_stop = self.view.auto || self.trip.as_ref().is_some_and(|trip|
+                trip.repeat || trip.stage == Stage::GoingCenter);
         }
     }
     pub fn start(&mut self, key: &str, repeat: bool, hunt: &HuntView,
@@ -225,6 +229,7 @@ impl BossManager {
         self.trip = Some(Trip {
             key: key.to_owned(), original: original.clone(), repeat,
             stage: Stage::GoingCenter, confirmed: false, ended: false,
+            stop_pending: false,
         });
         self.view.original_hunt = original;
         self.view.warning = None;
@@ -248,8 +253,10 @@ impl BossManager {
             self.view.phase = "Boss trip cancelled before entry".into();
             return None;
         }
+        if !trip.repeat { return None; }
+        trip.stop_pending = true;
         self.view.phase = "Stopping boss repetition; waiting for the arena to clear".into();
-        trip.repeat.then(|| GameCommand::BossAuto { active: false, key: trip.key.clone() })
+        Some(GameCommand::BossAuto { active: false, key: trip.key.clone() })
     }
     pub fn leave(&mut self, navigator: &mut HuntNavigator) -> Vec<GameCommand> {
         let mut commands = Vec::new();
@@ -290,7 +297,10 @@ impl BossManager {
             if let Some(trip) = self.trip.as_mut() {
                 if trip.stage == Stage::Running && trip.repeat {
                     if self.view.auto { trip.confirmed = true; }
-                    if trip.confirmed && !self.view.auto { trip.ended = true; }
+                    if trip.confirmed && !self.view.auto {
+                        trip.ended = true;
+                        trip.stop_pending = false;
+                    }
                 }
             }
         }
@@ -338,7 +348,10 @@ impl BossManager {
                             if let Some(trip) = self.trip.as_mut() {
                                 if trip.repeat && trip.stage == Stage::Running {
                                     if active { trip.confirmed = true; }
-                                    else { trip.ended = true; }
+                                    else {
+                                        trip.ended = true;
+                                        trip.stop_pending = false;
+                                    }
                                 }
                             }
                         }
@@ -366,7 +379,7 @@ impl BossManager {
                 GameCommand::BossEnter(trip.key.clone())
             });
         }
-        if trip.stage == Stage::Running && trip.ended &&
+        if trip.stage == Stage::Running && trip.ended && !trip.stop_pending &&
             hunt.in_center && self.view.arena.is_none() {
             if let Some(original) = trip.original.as_ref() {
                 navigator.select(original.clone(), now);
