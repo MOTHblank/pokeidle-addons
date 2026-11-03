@@ -448,8 +448,11 @@ impl Drop for KickSupervisor {
 }
 
 fn update_channel(snapshot: &Arc<Mutex<KickSnapshot>>, slug: &str,
-                  action: impl FnOnce(&mut ChannelStatus)) {
+                  stop: &AtomicBool, action: impl FnOnce(&mut ChannelStatus)) {
     if let Ok(mut state) = snapshot.lock() {
+        // The slug can be removed and re-added while an old HTTP request is
+        // completing. Never let that retired worker update the new row.
+        if stop.load(Ordering::Acquire) { return; }
         state.last_checked = Some(Instant::now());
         if let Some(channel) = state.channels.iter_mut().find(|item| item.slug == slug) {
             action(channel);
@@ -479,28 +482,29 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
     let client = match native_kick_viewer::new_client(&token) {
         Ok(client) => client,
         Err(error) => {
-            update_channel(&snapshot, &slug, |c| c.error = Some(error));
+            update_channel(&snapshot, &slug, &stop, |c| c.error = Some(error));
             return;
         }
     };
     let public_client = match native_kick_viewer::new_public_client() {
         Ok(client) => client,
         Err(error) => {
-            update_channel(&snapshot, &slug, |c| c.error = Some(error));
+            update_channel(&snapshot, &slug, &stop, |c| c.error = Some(error));
             return;
         }
     };
     let mut failures = 0_u32;
     while !stop.load(Ordering::Relaxed) {
         if auth.denied() {
-            update_channel(&snapshot, &slug, |c| c.error = Some(
+            update_channel(&snapshot, &slug, &stop, |c| c.error = Some(
                 "Kick auth rejected by viewer API (401/403); retries stopped".into()));
             return;
         }
         match native_kick_viewer::channel_meta(&public_client, &slug) {
             Ok(meta) => {
+                if stop.load(Ordering::Acquire) { return; }
                 failures = 0;
-                update_channel(&snapshot, &slug, |c| {
+                update_channel(&snapshot, &slug, &stop, |c| {
                     c.live = Some(meta.is_live);
                     c.title = meta.title.clone();
                     c.viewers = meta.viewers;
@@ -538,7 +542,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     }
                 }
                 if auth.denied() {
-                    update_channel(&snapshot, &slug, |c| {
+                    update_channel(&snapshot, &slug, &stop, |c| {
                         c.error = Some("Kick private API denied authentication; requests paused".into());
                     });
                     return;
@@ -559,7 +563,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 // Public metadata requests cannot prove that an account's
                 // saved login has expired. A 401/403 can also be a network
                 // challenge, so retain errors and retry with backoff.
-                update_channel(&snapshot, &slug, |c| {
+                update_channel(&snapshot, &slug, &stop, |c| {
                     c.error = Some(error);
                     c.live = None;
                     c.viewers = None;
