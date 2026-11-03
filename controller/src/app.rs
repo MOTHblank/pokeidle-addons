@@ -3,7 +3,7 @@ use crate::icon;
 use crate::config::{AccountConfig, Config, GameProfile, KickStreamPreferences, UiOptions};
 use crate::firefox;
 use crate::kick::KickStream;
-use crate::native_kick::KickMonitor;
+use crate::native_kick::KickSupervisor;
 use crate::logging;
 use crate::native_background::NativeSession;
 use crate::native_gameplay::GameCommand;
@@ -932,7 +932,7 @@ pub struct ControllerApp {
     accounts: [AccountConfig; 4],
     /// Kick website sessions run independently per account. Bearer tokens
     /// are entered in masked fields and optionally stored in the OS vault.
-    kick_monitors: [Option<KickMonitor>; 4],
+    kick_monitors: [Option<KickSupervisor>; 4],
     kick_api_token_input: [String; 4],
     kick_channels_input: [String; 4],
     kick_stream_preferences: [KickStreamPreferences; 4],
@@ -1126,6 +1126,13 @@ impl ControllerApp {
         let ctx = self.lifecycle_ctx.clone();
         session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
         self.games[index].native = Some(session);
+        // Native roster publications bypass the UI redraw cadence entirely.
+        // Attach them even if Kick was already running before game login.
+        if let Some(kick)=self.kick_monitors[index].as_ref() {
+            if let Some(game)=self.games[index].native.as_ref() {
+                game.set_kick_roster_publisher(kick.roster_publisher());
+            }
+        }
     }
 
     fn idle_warning_for(&mut self, index: usize, health: &Health) -> bool {
