@@ -181,16 +181,17 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
     if !app.workspace.restock_open[index] { return; }
     request_item_catalog(app);
     app.visuals.poll(ui.ctx());
-    let Some(native) = app.runtimes[index].game.native.as_ref() else {
+    let runtime = &mut app.runtimes[index];
+    let Some(native) = runtime.game.native.as_ref() else {
         ui.label(RichText::new(tr("Start this account to configure restock"))
             .size(10.0).color(WARN));
         return;
     };
     let current = native.capture_settings();
-    if app.runtimes[index].capture.restock_draft.is_none() {
-        app.runtimes[index].capture.restock_draft = Some(current.clone());
+    if runtime.capture.restock_draft.is_none() {
+        runtime.capture.restock_draft = Some(current.clone());
     }
-    let cfg = app.runtimes[index].capture.restock_draft.as_mut().expect("restock draft initialized");
+    let cfg = runtime.capture.restock_draft.as_mut().expect("restock draft initialized");
     let previous = cfg.clone();
     {
     let restock_status=native.snapshot().native_restock;
@@ -348,26 +349,26 @@ pub(super) fn draw_overview_restock(app: &mut ControllerApp, ui: &mut egui::Ui, 
     });
     }
     if *cfg != previous {
-        app.runtimes[index].capture.restock_dirty = true;
+        runtime.capture.restock_dirty = true;
         // An explicit new edit unblocks an exhausted/permanent save error.
-        app.runtimes[index].capture.restock_retries = RestockSaveRetry::default();
-        app.runtimes[index].capture.restock_save_error = None;
+        runtime.capture.restock_retries = RestockSaveRetry::default();
+        runtime.capture.restock_save_error = None;
         ui.ctx().request_repaint();
     }
-    if let Some(error) = app.runtimes[index].capture.restock_save_error.as_deref() {
+    if let Some(error) = runtime.capture.restock_save_error.as_deref() {
         ui.label(RichText::new(error).size(10.0).color(WARN));
     }
-    if app.runtimes[index].capture.restock_dirty && app.runtimes[index].capture.restock_retries.blocked {
+    if runtime.capture.restock_dirty && runtime.capture.restock_retries.blocked {
         ui.label(RichText::new(tr(
             "Restock selection not saved. Change a setting to try again."
         )).size(10.0).color(WARN));
     }
-    if app.runtimes[index].capture.capture_save_busy {
-        ui.label(RichText::new(if app.runtimes[index].capture.restock_dirty {
+    if runtime.capture.capture_save_busy {
+        ui.label(RichText::new(if runtime.capture.restock_dirty {
             tr("Restock changes queued; saving previous selection...")
         } else {
             tr("Saving encrypted preferences...")
-        }).size(10.0).color(if app.runtimes[index].capture.restock_dirty { WARN } else { DIM }));
+        }).size(10.0).color(if runtime.capture.restock_dirty { WARN } else { DIM }));
     }
     // The save queue is dispatched by refresh_processes, never from the
     // rendered picker. It continues after navigation or closing this panel.
