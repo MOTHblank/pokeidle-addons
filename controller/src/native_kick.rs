@@ -597,6 +597,19 @@ pub fn normalize_channels(input: &str) -> Result<Vec<String>, String> {
 mod tests {
     use super::*;
     #[test]
+    fn native_roster_publication_is_delivered_without_a_ui_frame() {
+        let (sender,receiver)=mpsc::channel();
+        let publisher=KickRosterPublisher{sender};
+        let worker=publisher.clone();
+        std::thread::spawn(move ||worker.publish(vec![
+            OfficialKickChannel{slug:"alpha".into(),live:true}
+        ])).join().unwrap();
+        let KickReconcileEvent::Roster(roster)=receiver.try_recv().unwrap()
+            else{panic!("expected native roster publication")};
+        assert_eq!(roster.len(),1);
+        assert_eq!(roster[0].slug,"alpha");
+    }
+    #[test]
     fn roster_selection_respects_favorites_and_preserves_offline_accounts() {
         let prefs=KickStreamPreferences{
             max_streams:2,favorites:vec!["beta".into(),"offline".into()],
