@@ -71,6 +71,16 @@ mod capture_handoff_tests {
     }
 
     #[test]
+    fn capture_vault_save_rejects_a_superseded_session() {
+        use std::sync::atomic::{AtomicU64,Ordering};
+        let generation=AtomicU64::new(4);
+        assert!(capture_generation_is_current(&generation,4));
+        generation.fetch_add(1,Ordering::AcqRel);
+        assert!(!capture_generation_is_current(&generation,4));
+        assert!(capture_generation_is_current(&generation,5));
+    }
+
+    #[test]
     fn first_login_imports_the_browser_settings() {
         let firefox=json!({"autocatch":{"enabled":true,"ballPriority":["ultra"]}});
         assert_eq!(preserve_native_capture_preferences(&firefox,None),firefox);
@@ -149,15 +159,31 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
 
 /// Persist the complete validated capture configuration atomically, preserving
 /// the encrypted authenticated session and unrelated bootstrap fields.
+fn capture_generation_is_current(
+    generation:&std::sync::atomic::AtomicU64, expected:u64
+)->bool {
+    generation.load(std::sync::atomic::Ordering::Acquire)==expected
+}
+
+// A session change cancels any uncommitted old-session settings save.
+// Validate again *under the vault writer mutex*, not just when the UI
+// schedules the job, so slow keyring operations cannot accidentally commit
+// outdated preferences after a restart/relogin.
 pub fn set_capture_settings(profile: GameProfile,
-    config: &crate::native_capture_config::CatchSettings) -> Result<(),String> {
+    config: &crate::native_capture_config::CatchSettings,
+    generation:&std::sync::atomic::AtomicU64, expected:u64) -> Result<(),String> {
+    let valid=||capture_generation_is_current(generation,expected);
     config.validate()?;
+    if !valid(){return Err("Capture settings save canceled: session changed".into())}
     let _guard=PREFERENCE_WRITE.lock()
         .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    if !valid(){return Err("Capture settings save canceled: session changed".into())}
     let Some(mut saved)=load(profile)? else {
         return Err("Native credential cache unavailable; authenticate again to save preferences".into());
     };
+    if !valid(){return Err("Capture settings save canceled: session changed".into())}
     saved["autocatch"]=config.as_value();
+    if !valid(){return Err("Capture settings save canceled: session changed".into())}
     save(profile,&saved)
 }
 

@@ -358,8 +358,70 @@ fn pokemon_scan_rows<'a>(frame: &'a Value, currency: &str, page: u64) -> Option<
     }
     Some(rows)
 }
+// Constant-space timing windows: instrumentation never writes a trace per
+// purchase, allocates per idle frame, or retains identifiable order details.
+#[derive(Default)]
+struct LatencyWindow {
+    observations:VecDeque<u64>,
+    count:u64,
+    maximum_us:u64,
+}
+impl LatencyWindow {
+    fn record(&mut self,duration:Duration) {
+        let us=duration.as_micros().min(u64::MAX as u128) as u64;
+        self.count=self.count.saturating_add(1);
+        self.maximum_us=self.maximum_us.max(us);
+        if self.observations.len()==128 {self.observations.pop_front();}
+        self.observations.push_back(us);
+    }
+    fn summarize(&self)->Option<String> {
+        if self.count==0 {return None}
+        let mut sample=self.observations.iter().copied().collect::<Vec<_>>();
+        sample.sort_unstable();
+        let at=|p:usize|{
+            let index=(sample.len()*p).div_ceil(100).saturating_sub(1)
+                .min(sample.len()-1);
+            format!("{:.3}",sample[index] as f64/1000.0)
+        };
+        Some(format!("n={} p50={}ms p95={}ms max={:.3}ms",
+            self.count,at(50),at(95),self.maximum_us as f64/1000.0))
+    }
+}
+struct MarketTimings {
+    persistence:LatencyWindow,
+    rule_dispatch:LatencyWindow,
+    snatch_dispatch:LatencyWindow,
+    last_report:Instant,
+}
+impl Default for MarketTimings {
+    fn default()->Self {
+        Self{persistence:LatencyWindow::default(),
+            rule_dispatch:LatencyWindow::default(),
+            snatch_dispatch:LatencyWindow::default(),last_report:Instant::now()}
+    }
+}
+impl MarketTimings {
+    fn report_if_due(&mut self,profile:GameProfile,critical:bool) {
+        // Printing from the 4-second Snatch lottery is worse than delaying
+        // diagnostics; collect samples and report after it ends.
+        if critical || self.last_report.elapsed()<Duration::from_secs(300) {return}
+        let messages=[
+            ("journal",self.persistence.summarize()),
+            ("rule dispatch",self.rule_dispatch.summarize()),
+            ("Snatch batch dispatch",self.snatch_dispatch.summarize())
+        ].into_iter().filter_map(|(kind,data)|data.map(|s|format!("{kind}: {s}")))
+            .collect::<Vec<_>>();
+        if !messages.is_empty() {
+            crate::logging::info(&format!(
+                "Market latency {} (last five minutes; samples capped at 128 per category): {}",
+                profile.label(),messages.join("; ")));
+        }
+        *self=Self::default();
+    }
+}
 pub struct MarketBuyer {
     profile: GameProfile, session: u64, journal: Journal,
+    timings:MarketTimings,
     last_housekeeping: Option<Instant>,
     last_snatch_maintenance: Option<Instant>,
     pub status: MarketStatus, nick: String, balances: [Option<u64>;2],
@@ -394,7 +456,8 @@ impl MarketBuyer {
         for o in &mut journal.orders {
             if o.status=="submitted" {o.status="unknown".into();}
         }
-        Self { profile, session: clock_ms(), journal, last_housekeeping: None,
+        Self { profile, session: clock_ms(), journal, timings:MarketTimings::default(),
+            last_housekeeping: None,
             last_snatch_maintenance: None,
             status: MarketStatus {error:error.clone(),..Default::default()},
             nick:String::new(), balances:[None,None], server_offset_ms:0, offers:vec![],
@@ -430,10 +493,25 @@ impl MarketBuyer {
     fn persist(&mut self) -> bool {
         // Record every spend exposure before network dispatch; old days were
         // pruned at startup, never while a pending vector index is live.
-        match write_json(self.profile, "orders", &self.journal) {
+        // Real production latency is measured *without* changing the durable
+        // write-before-send contract.
+        let start=Instant::now();
+        let result=write_json(self.profile,"orders",&self.journal);
+        self.timings.persistence.record(start.elapsed());
+        match result {
             Ok(()) => true,
             Err(e) => { self.failed_closed=true; self.status.error=Some(e); false }
         }
+    }
+    /// Called after the socket send attempt. Includes market decision, the
+    /// durable journal write, serialization and the transport send operation.
+    pub fn record_dispatch_latency(&mut self,snatch:bool,elapsed:Duration) {
+        if snatch {self.timings.snatch_dispatch.record(elapsed);}
+        else {self.timings.rule_dispatch.record(elapsed);}
+    }
+    /// Flush aggregate diagnostics outside time-critical release windows.
+    pub fn maybe_report_latency(&mut self,cfg:&MarketRules) {
+        self.timings.report_if_due(self.profile,self.snatch_critical(cfg));
     }
     fn compact(&mut self) {
         // Mirror Watch's rolling journal: retain pending/current attempts,
@@ -1264,6 +1342,18 @@ impl MarketBuyer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn market_latency_samples_are_bounded_and_percentiles_cover_actual_observations() {
+        let mut samples=LatencyWindow::default();
+        for micros in 1..=256 {
+            samples.record(Duration::from_micros(micros));
+        }
+        assert_eq!(samples.observations.len(),128);
+        let summary=samples.summarize().unwrap();
+        assert!(summary.contains("n=256"));
+        assert!(summary.contains("p95="));
+        assert!(summary.contains("max=0.256ms"));
+    }
     #[test] fn native_snatch_requires_explicit_listing_identity_and_price() {
         let mut t=SnatchTarget {kind:"item".into(),currency:"gold".into(),
             id:317,item_id:42,max_price:120,..Default::default()};
