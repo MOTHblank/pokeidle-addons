@@ -185,6 +185,27 @@ fn notify_phase_change(wake: &PhaseWake) {
     if let Some(callback) = callback { callback(); }
 }
 
+/// Cloneable control-plane handle: encrypted settings writes can update the
+/// live game worker without waiting for an egui frame, even in the tray.
+/// This contains no socket ownership and does not run gameplay on the UI.
+#[derive(Clone)]
+pub struct CaptureSettingsUpdater {
+    config: Arc<Mutex<CatchSettings>>,
+    auto_catch: Arc<AtomicBool>,
+    restock_enabled: Arc<AtomicBool>,
+}
+impl CaptureSettingsUpdater {
+    pub fn apply(&self, settings: CatchSettings) -> Result<(), String> {
+        settings.validate()?;
+        let mut current = self.config.lock()
+            .map_err(|_| "Capture preferences currently unavailable".to_owned())?;
+        *current = settings.clone();
+        self.auto_catch.store(settings.enabled, Ordering::Relaxed);
+        self.restock_enabled.store(settings.restock_enabled, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
 pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
     created_at: Instant,
@@ -368,14 +389,15 @@ impl NativeSession {
     pub fn capture_settings(&self)->CatchSettings {
         self.capture_config.lock().map(|g|g.clone()).unwrap_or_default()
     }
+    pub fn capture_settings_updater(&self) -> CaptureSettingsUpdater {
+        CaptureSettingsUpdater {
+            config: Arc::clone(&self.capture_config),
+            auto_catch: Arc::clone(&self.auto_catch),
+            restock_enabled: Arc::clone(&self.restock_enabled),
+        }
+    }
     pub fn set_capture_settings(&self, settings:CatchSettings)->Result<(),String> {
-        settings.validate()?;
-        let mut current=self.capture_config.lock()
-            .map_err(|_|"Capture preferences currently unavailable".to_owned())?;
-        *current=settings.clone();
-        self.auto_catch.store(settings.enabled,Ordering::Relaxed);
-        self.restock_enabled.store(settings.restock_enabled,Ordering::Relaxed);
-        Ok(())
+        self.capture_settings_updater().apply(settings)
     }
     pub fn twitch_snapshot(&self) -> TwitchSnapshot {
         self.twitch.snapshot()
@@ -1361,5 +1383,32 @@ mod tests {
         let parsed = Credentials::parse(&input).expect("valid bootstrap");
         assert_eq!(parsed.cookies, "session=private");
         assert!(Credentials::parse(&json!({"bootstrap":{"url":"wss://pokeidle.io/ws","hello":"{}"}})).is_err());
+    }
+}
+
+// Validate the control path without constructing a window, repaint timer, or
+// authenticated socket. The game loop observes the shared settings directly.
+#[cfg(test)]
+mod background_capture_settings_tests {
+    use super::*;
+    #[test]
+    fn saved_settings_reach_worker_with_no_ui_frames() {
+        let config = Arc::new(Mutex::new(CatchSettings::default()));
+        let auto_catch = Arc::new(AtomicBool::new(false));
+        let restock_enabled = Arc::new(AtomicBool::new(false));
+        let updater = CaptureSettingsUpdater {
+            config: Arc::clone(&config),
+            auto_catch: Arc::clone(&auto_catch),
+            restock_enabled: Arc::clone(&restock_enabled),
+        };
+        let mut desired = CatchSettings::default();
+        desired.enabled = true;
+        desired.restock_enabled = true;
+        let expected = desired.clone();
+        std::thread::spawn(move || updater.apply(desired))
+            .join().expect("settings worker panicked").expect("valid settings");
+        assert_eq!(*config.lock().unwrap(), expected);
+        assert!(auto_catch.load(Ordering::Relaxed));
+        assert!(restock_enabled.load(Ordering::Relaxed));
     }
 }
