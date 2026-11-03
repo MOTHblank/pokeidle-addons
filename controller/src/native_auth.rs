@@ -71,12 +71,13 @@ mod capture_handoff_tests {
     }
 
     #[test]
-    fn save_generation_checker_rejects_stale_session_epoch() {
+    fn capture_vault_save_rejects_a_superseded_session() {
         use std::sync::atomic::{AtomicU64,Ordering};
-        let epoch=AtomicU64::new(4);
-        let captured=epoch.load(Ordering::Acquire);
-        epoch.fetch_add(1,Ordering::AcqRel);
-        assert_ne!(epoch.load(Ordering::Acquire),captured);
+        let generation=AtomicU64::new(4);
+        assert!(capture_generation_is_current(&generation,4));
+        generation.fetch_add(1,Ordering::AcqRel);
+        assert!(!capture_generation_is_current(&generation,4));
+        assert!(capture_generation_is_current(&generation,5));
     }
 
     #[test]
@@ -158,6 +159,12 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
 
 /// Persist the complete validated capture configuration atomically, preserving
 /// the encrypted authenticated session and unrelated bootstrap fields.
+fn capture_generation_is_current(
+    generation:&std::sync::atomic::AtomicU64, expected:u64
+)->bool {
+    generation.load(std::sync::atomic::Ordering::Acquire)==expected
+}
+
 // A session change cancels any uncommitted old-session settings save.
 // Validate again *under the vault writer mutex*, not just when the UI
 // schedules the job, so slow keyring operations cannot accidentally commit
@@ -165,8 +172,7 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value)
 pub fn set_capture_settings(profile: GameProfile,
     config: &crate::native_capture_config::CatchSettings,
     generation:&std::sync::atomic::AtomicU64, expected:u64) -> Result<(),String> {
-    use std::sync::atomic::Ordering;
-    let valid=||generation.load(Ordering::Acquire)==expected;
+    let valid=||capture_generation_is_current(generation,expected);
     config.validate()?;
     if !valid(){return Err("Capture settings save canceled: session changed".into())}
     let _guard=PREFERENCE_WRITE.lock()
