@@ -72,7 +72,7 @@ pub struct BossView {
     pub phase: String,
     pub original_hunt: Option<String>,
     pub warning: Option<String>,
-    pub log: Vec<BossLoot>,
+    pub log: Arc<Vec<BossLoot>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,7 +190,7 @@ pub struct BossManager {
 impl BossManager {
     pub fn new(profile: GameProfile, nick: &str) -> Result<Self, String> {
         let (writer, log) = LootWriter::start(profile, nick)?;
-        Ok(Self { view: BossView { log, ..Default::default() },
+        Ok(Self { view: BossView { log: Arc::new(log), ..Default::default() },
             trip: None, writer: Some(writer) })
     }
     pub fn publish(&self, shared: &Arc<Mutex<BossView>>) {
@@ -299,8 +299,9 @@ impl BossManager {
                                 .unwrap_or("Boss").to_owned(),
                             drops,
                         };
-                        self.view.log.push(entry.clone());
-                        if self.view.log.len() > MAX_LOOT { self.view.log.remove(0); }
+                        let log = Arc::make_mut(&mut self.view.log);
+                        log.push(entry.clone());
+                        if log.len() > MAX_LOOT { log.remove(0); }
                         if let Some(writer) = &self.writer { writer.append(entry); }
                         if let Some(trip) = self.trip.as_mut() {
                             if !trip.repeat && trip.stage == Stage::Running {
