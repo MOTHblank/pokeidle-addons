@@ -12,6 +12,14 @@ pub enum GameCommand {
     OutlandTier(u8),
     Center,
     GiveUp,
+    /// UI intents, handled by the native socket worker rather than sent raw.
+    BossStart { key: String, repeat: bool },
+    BossStop,
+    BossLeave,
+    /// Server commands emitted by the boss coordinator.
+    BossEnter(String),
+    BossAuto { active: bool, key: String },
+    BossExit,
     AutoSet(serde_json::Map<String, Value>),
     SetAutomation { field: String, value: Value },
     // Kept for the guarded Pokémon-sale command path and future UI controls.
@@ -27,6 +35,10 @@ impl GameCommand {
             Self::OutlandTier(tier) => json!({"t":"outland.tier","tier":tier}),
             Self::Center => json!({"t":"centro.ir"}),
             Self::GiveUp => json!({"t":"centro.desistir"}),
+            Self::BossStart { .. } | Self::BossStop | Self::BossLeave => Value::Null,
+            Self::BossEnter(key) => json!({"t":"boss.entrar","key":key}),
+            Self::BossAuto { active, key } => json!({"t":"boss.auto","ativo":active,"key":key}),
+            Self::BossExit => json!({"t":"boss.sair"}),
             Self::AutoSet(fields) => {
                 let mut fields=fields.clone();
                 fields.insert("t".into(),Value::String("auto.set".into()));
@@ -45,7 +57,10 @@ impl GameCommand {
             Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             Self::OutlandTier(tier) => (1..=8).contains(tier),
-            Self::Center | Self::GiveUp => true,
+            Self::Center | Self::GiveUp | Self::BossStop | Self::BossLeave | Self::BossExit => true,
+            Self::BossStart { key, .. } | Self::BossEnter(key) |
+            Self::BossAuto { key, .. } => !key.is_empty() && key.len() <= 128 &&
+                key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             Self::AutoSet(fields) => fields.len()<128 && !fields.contains_key("t"),
             Self::SetAutomation {field,value} =>
                 crate::native_automation::AutomationWriter::valid(field,value),
@@ -508,6 +523,18 @@ mod protocol_command_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn boss_commands_use_upstream_wire_payloads() {
+        assert_eq!(GameCommand::BossEnter("bronze".into()).wire(),
+            json!({"t":"boss.entrar","key":"bronze"}));
+        assert_eq!(GameCommand::BossAuto { active:true, key:"bronze".into() }.wire(),
+            json!({"t":"boss.auto","ativo":true,"key":"bronze"}));
+        assert_eq!(GameCommand::BossAuto { active:false, key:"bronze".into() }.wire(),
+            json!({"t":"boss.auto","ativo":false,"key":"bronze"}));
+        assert_eq!(GameCommand::BossExit.wire(), json!({"t":"boss.sair"}));
+        assert!(!GameCommand::BossStart { key:"".into(),repeat:true }.is_valid());
+        assert!(GameCommand::BossStart { key:"bronze".into(),repeat:true }.is_valid());
+    }
     #[test]
     fn repeated_throws_do_not_wait_for_results_or_inventory() {
         let now=Instant::now();

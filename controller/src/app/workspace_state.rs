@@ -42,6 +42,8 @@ pub(super) struct WorkspaceState {
     pub(super) history_rows_limit: usize,
     pub(super) hunt_subtab: HuntSubtab,
     pub(super) hunt_page: usize,
+    pub(super) boss_selected: [String;4],
+    pub(super) boss_leave_confirm: [bool;4],
     pub(super) selected_details: Option<usize>,
     pub(super) restock_open: [bool;4],
     pub(super) session_reset_confirm: [bool;4],
@@ -66,6 +68,8 @@ impl Default for WorkspaceState {
             history_rows_limit: 100,
             hunt_subtab: HuntSubtab::Explorer,
             hunt_page: 0,
+            boss_selected: std::array::from_fn(|_| String::new()),
+            boss_leave_confirm: [false;4],
             selected_details: None,
             restock_open: [false;4],
             session_reset_confirm: [false;4],
@@ -94,6 +98,7 @@ impl WorkspaceState {
         }
         self.automation_account = index;
         self.hunt_page = 0;
+        self.boss_leave_confirm[index] = false;
     }
 }
 

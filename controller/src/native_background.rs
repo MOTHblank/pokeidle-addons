@@ -10,6 +10,7 @@ use crate::native_capture_config::CatchSettings;
 use crate::native_gameplay::GameplayStatus;
 use crate::native_hunts::{HuntIntel, HuntView};
 use crate::native_hunt_navigation::HuntNavigator;
+use crate::native_boss::{BossManager, BossView};
 use crate::native_history::{HistoryRecorder, HistorySnapshot, HistoryForecast};
 use crate::native_atlas::{self, Reference as AtlasReference};
 use crate::config::GameProfile;
@@ -220,6 +221,7 @@ pub struct NativeSession {
     market_rules_revision: Arc<AtomicU64>,
     session_reset: Arc<AtomicBool>,
     hunts: Arc<Mutex<HuntView>>,
+    boss: Arc<Mutex<BossView>>,
     history: Arc<Mutex<HistorySnapshot>>,
     forecast_tx:mpsc::SyncSender<HistoryForecast>,
     background_forecast_reference: Arc<Mutex<Option<(Arc<AtlasReference>, bool)>>>,
@@ -259,8 +261,11 @@ impl NativeSession {
         let nick = serde_json::from_str::<Value>(&credentials.hello).ok()
             .and_then(|hello| hello.get("nick").and_then(Value::as_str).map(str::to_owned))
             .filter(|name| !name.is_empty()).unwrap_or_else(||profile.name().to_owned());
-        let history_recorder = HistoryRecorder::new(profile, nick);
+        let history_recorder = HistoryRecorder::new(profile, nick.clone());
         let history = Arc::clone(&history_recorder.shared);
+        let boss_manager = BossManager::new(profile, &nick)?;
+        let boss = Arc::new(Mutex::new(boss_manager.view.clone()));
+        let worker_boss = Arc::clone(&boss);
         let hunts = Arc::new(Mutex::new(hunt_intel.view.clone()));
         let worker_hunts = Arc::clone(&hunts);
         let restock_enabled = Arc::new(AtomicBool::new(restock.status.enabled));
@@ -289,7 +294,7 @@ impl NativeSession {
                         worker_restock_enabled, worker_capture_config,
                         worker_market_rules, worker_rules_revision, worker_session_reset,
                         Arc::clone(&worker_phase_wake), worker_kick_roster_publisher,
-                        hunt_intel, worker_hunts,
+                        hunt_intel, worker_hunts, boss_manager, worker_boss,
                         history_recorder,forecast_rx,worker_forecast_reference,
                         background_forecast_tx);
                 }));
@@ -305,7 +310,7 @@ impl NativeSession {
             .map_err(|error| format!("Could not start the PokéIdle connection: {error}"))?;
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, market_rules, market_rules_revision, session_reset, hunts, history, forecast_tx,
+            capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
             background_forecast_reference, phase_wake, kick_roster_publisher
         })
     }
@@ -366,6 +371,9 @@ impl NativeSession {
     }
     pub fn hunt_snapshot(&self) -> HuntView {
         self.hunts.lock().map(|view| view.clone()).unwrap_or_default()
+    }
+    pub fn boss_snapshot(&self) -> BossView {
+        self.boss.lock().map(|view| view.clone()).unwrap_or_default()
     }
     pub fn history_snapshot(&self) -> HistorySnapshot {
         self.history.lock().map(|data|data.clone()).unwrap_or_default()
@@ -691,6 +699,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
     mut hunt_intel: HuntIntel,
     hunts: Arc<Mutex<HuntView>>,
+    mut boss_manager: BossManager,
+    boss: Arc<Mutex<BossView>>,
     mut history_recorder: HistoryRecorder,
     forecast_rx:mpsc::Receiver<HistoryForecast>,
     background_forecast_reference:Arc<Mutex<Option<(Arc<AtlasReference>,bool)>>>,
@@ -726,6 +736,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     restock.merge_item_metadata(catalog);
                 }
                 hunt_intel.ingest_value(&frame, received_at);
+                boss_manager.ingest(&frame);
+                boss_manager.publish(&boss);
                 let mut navigator = HuntNavigator::default();
                 navigator.observe(&frame, &hunt_intel.view, received_at);
                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
@@ -782,6 +794,45 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // browser or replay unconfirmed writes after reconnect.
                     let mut send_failed = false;
                     while let Ok(command) = command_rx.try_recv() {
+                        if let GameCommand::BossStart {key,repeat} = &command {
+                            match boss_manager.start(key, *repeat,
+                                &hunt_intel.view, &mut navigator, Instant::now()) {
+                                Ok(()) => {
+                                    if hunt_intel.view.in_center { hunt_intel.cancel_hunt_intent(); }
+                                    else { hunt_intel.queue_center(); }
+                                }
+                                Err(error) => {
+                                    boss_manager.view.warning = Some(error.clone());
+                                    crate::logging::warn(&format!("Boss manager: {error}"));
+                                }
+                            }
+                            boss_manager.publish(&boss);
+                            continue;
+                        }
+                        if matches!(command, GameCommand::BossStop | GameCommand::BossLeave) {
+                            let actions = if matches!(command, GameCommand::BossLeave) {
+                                boss_manager.leave(&mut navigator)
+                            } else {
+                                boss_manager.stop(&mut navigator).into_iter().collect()
+                            };
+                            for action in actions {
+                                if socket.send(Message::Text(action.wire().to_string().into())).is_err() {
+                                    send_failed = true;
+                                    break;
+                                }
+                            }
+                            if !boss_manager.active() { hunt_intel.cancel_hunt_intent(); }
+                            boss_manager.publish(&boss);
+                            if send_failed { break; }
+                            continue;
+                        }
+                        if boss_manager.active() && matches!(command,
+                            GameCommand::Hunt(_) | GameCommand::Center | GameCommand::GiveUp) {
+                            boss_manager.view.warning = Some(
+                                "Finish or cancel the boss trip before choosing another destination".into());
+                            boss_manager.publish(&boss);
+                            continue;
+                        }
                         if let GameCommand::SetAutomation {field,value} = &command {
                             if let Err(error) = automation_writer.queue(field.clone(),value.clone()) {
                                 crate::logging::warn(&format!(
@@ -869,6 +920,18 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         }
                     }
                     if send_failed { break; }
+                    let boss_phase = boss_manager.view.phase.clone();
+                    if let Some(command) = boss_manager.next_action(
+                        &hunt_intel.view, &mut navigator, Instant::now()) {
+                        if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
+                            boss_manager.view.warning = Some("Boss command failed to send".into());
+                            boss_manager.publish(&boss);
+                            break;
+                        }
+                    }
+                    if boss_manager.view.phase != boss_phase {
+                        boss_manager.publish(&boss);
+                    }
                     // 60 ms worker wake, rather than a one-shot select followed
                     // by a 20-second timeout, catches narrow 3-second openings.
                     if let Some(command) = navigator.next_action(&hunt_intel.view, Instant::now()) {
@@ -1153,6 +1216,14 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     }
                                 }
                                 hunt_intel.ingest_value(&frame, received_at);
+                                boss_manager.ingest(&frame);
+                                if frame.get("t").and_then(Value::as_str) == Some("welcome") ||
+                                    frame.get("estado").and_then(|s| s.get("boss")).is_some() ||
+                                    frame.get("ev").and_then(Value::as_array).is_some_and(|ev|
+                                        ev.iter().any(|e| e.get("k").and_then(Value::as_str)
+                                            .is_some_and(|k| k.starts_with("boss")))) {
+                                    boss_manager.publish(&boss);
+                                }
                                 navigator.observe(&frame, &hunt_intel.view, received_at);
                                 hunt_intel.view.pending_center = navigator.center_pending();
                                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
@@ -1228,6 +1299,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     automation_writer.on_disconnect();
                     pending_sale=None;
                     hunt_intel.on_disconnect();
+                    boss_manager.on_disconnect();
+                    boss_manager.publish(&boss);
                     if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                     update(&snapshot, |s| {
                         s.phase = "Reconnecting".into();

@@ -3,6 +3,58 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Boss Manager" => "Gerenciador de Bosses",
+        "Server-native Boss Manager" => "Gerenciador de Bosses (servidor)",
+        "Start this account to manage server-native boss farming" =>
+            "Inicie esta conta para gerenciar o farm de bosses no servidor",
+        "The game server repeats the chosen boss, heals and spends its entry tokens. Moth travels to the Pokémon Center and restores your original hunt when the run ends. It never uses Give Up automatically." =>
+            "O servidor repete o boss escolhido, cura a equipe e consome os tokens de entrada. O Moth vai ao Centro Pokémon e retorna à hunt original quando a sequência terminar. Nunca usa Desistir automaticamente.",
+        "Waiting for the server's playable boss catalog." =>
+            "Aguardando o catálogo de bosses jogáveis do servidor.",
+        "No playable boss arenas are currently advertised by the server." =>
+            "O servidor não disponibilizou nenhuma arena de boss jogável.",
+        "Entry" => "Entrada",
+        "Inventory" => "Inventário",
+        "Trainer level" => "Nível do treinador",
+        "Required level" => "Nível necessário",
+        "Possible entries" => "Entradas possíveis",
+        "Farm until tokens run out" => "Farmar até acabar os tokens",
+        "Fight once" => "Lutar uma vez",
+        "Boss entry requires sufficient tokens and trainer level." =>
+            "A entrada exige tokens suficientes e o nível necessário.",
+        "Boss status" => "Status do boss",
+        "Return destination" => "Hunt de retorno",
+        "Server repeating" => "Repetição no servidor",
+        "Stop repetition and return" => "Parar repetição e retornar",
+        "Leave boss encounter" => "Sair da batalha de boss",
+        "Leaving an active boss encounter may forfeit its entry. Confirm?" =>
+            "Sair da batalha de boss pode perder a entrada. Confirmar?",
+        "Confirm leave" => "Confirmar saída",
+        "Boss loot history" => "Histórico de loot dos bosses",
+        "Confirmed boss victories recorded" => "Vitórias confirmadas registradas",
+        "Items acquired (retained history)" => "Itens obtidos (histórico preservado)",
+        "No confirmed boss item drops recorded yet." =>
+            "Nenhum item de boss confirmado foi registrado.",
+        "No items" => "Sem itens",
+        "Showing the latest 60 victories (up to 500 are retained per account)." =>
+            "Exibindo as últimas 60 vitórias (até 500 são preservadas por conta).",
+        "Boss command queued" => "Comando de boss enviado à fila",
+        "Traveling to Pokémon Center" => "Indo ao Centro Pokémon",
+        "Server farming requested" => "Farm de boss solicitado ao servidor",
+        "Boss battle requested" => "Batalha de boss solicitada",
+        "Returning to saved hunt" => "Retornando à hunt salva",
+        "Boss run complete at Pokémon Center" => "Sequência de boss concluída no Centro Pokémon",
+        "Boss run complete; original hunt restored" =>
+            "Sequência de boss concluída; hunt original restaurada",
+        "Boss trip cancelled before entry" => "Viagem cancelada antes da entrada",
+        "Boss trip cancelled" => "Viagem para o boss cancelada",
+        "Stopping boss repetition; waiting for the arena to clear" =>
+            "Parando a repetição; aguardando a arena ficar livre",
+        "Stopping server boss repetition" => "Parando repetição de boss no servidor",
+        "Leaving boss arena; return to hunt pending" =>
+            "Saindo da arena; retorno à hunt pendente",
+        "Boss trip interrupted" => "Viagem ao boss interrompida",
+        "Idle" => "Parado",
         "Restock selection not saved. Change a setting to try again." =>
             "Seleção de reposição não salva. Altere uma configuração para tentar novamente.",
         "Loading Pokémon data..." => "Carregando dados dos Pokémon...",
