@@ -1125,6 +1125,12 @@ impl ControllerApp {
     fn adopt_native_session(&mut self, index: usize, session: NativeSession) {
         let ctx = self.lifecycle_ctx.clone();
         session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
+        // Historical forecasts remain dormant for users who have never opened
+        // Hunt Atlas; reuse the already-loaded guide if it exists.
+        if let Some(reference)=self.hunt_reference.as_ref() {
+            session.enable_background_forecasts(
+                Arc::clone(reference),self.ui_options.atlas_aoe_enabled[index]);
+        }
         self.games[index].native = Some(session);
         // Native roster publications bypass the UI redraw cadence entirely.
         // Attach them even if Kick was already running before game login.

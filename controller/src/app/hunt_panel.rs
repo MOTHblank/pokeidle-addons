@@ -2120,6 +2120,14 @@ fn draw_atlas_aoe_checkbox(app:&mut ControllerApp,ui:&mut egui::Ui){
         let mut next=app.ui_options;
         next.atlas_aoe_enabled[index]=aoe_enabled;
         app.save_ui_options(next);
+        // Keep the background history model consistent with the account's
+        // explicit AoE preference; no additional simulation is started here.
+        if app.ui_options.atlas_aoe_enabled[index]==aoe_enabled {
+            if let (Some(native),Some(reference))=(
+                app.games[index].native.as_ref(),app.hunt_reference.as_ref()) {
+                native.enable_background_forecasts(Arc::clone(reference),aoe_enabled);
+            }
+        }
         ui.ctx().request_repaint();
     }
 }

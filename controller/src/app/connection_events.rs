@@ -121,7 +121,18 @@ impl ControllerApp {
                         "Native Hunt Atlas reference ready: {} species",
                         reference.species.len()
                     ));
-                    self.hunt_reference = Some(Arc::new(reference));
+                    let reference=Arc::new(reference);
+                    // The public Atlas guide is already in memory. Pass the
+                    // same Arc to active accounts for one low-frequency
+                    // current-hunt history sample, with no new downloads.
+                    for index in 0..self.games.len() {
+                        if let Some(native)=self.games[index].native.as_ref() {
+                            native.enable_background_forecasts(
+                                Arc::clone(&reference),
+                                self.ui_options.atlas_aoe_enabled[index]);
+                        }
+                    }
+                    self.hunt_reference = Some(reference);
                     self.hunt_reference_error = None;
                 }
                 Err(error) => {
