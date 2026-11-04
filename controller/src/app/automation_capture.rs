@@ -99,7 +99,9 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                         let generation_state=Arc::clone(&runtime.capture.capture_generation);
                         let generation=generation_state.load(Ordering::Acquire);
                         let updater=native.capture_settings_updater();
-                        std::thread::spawn(move || {
+                        std::thread::Builder::new()
+                            .name(format!("moth-capture-save-{}",profile.name()))
+                            .spawn(move || {
                             let result=std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(||
                                     crate::native_auth::persist_and_apply_capture_settings(
@@ -110,7 +112,7 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                                 origin:CaptureSaveOrigin::Toggle,result
                             });
 
-                        });
+                        }).expect("could not start capture settings save worker");
                     }
                 }
                 if runtime.capture.capture_save_busy {
@@ -316,7 +318,9 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                     let generation_state=Arc::clone(&runtime.capture.capture_generation);
                     let generation=generation_state.load(Ordering::Acquire);
                     let updater=native.capture_settings_updater();
-                    std::thread::spawn(move || {
+                    std::thread::Builder::new()
+                        .name(format!("moth-capture-save-{}",profile.name()))
+                        .spawn(move || {
                         let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
                                 crate::native_auth::persist_and_apply_capture_settings(
