@@ -147,6 +147,7 @@ impl ControllerApp {
                 self.runtimes[index].kick.kick_token_revision =
                     self.runtimes[index].kick.kick_token_revision.wrapping_add(1);
                 self.runtimes[index].kick.kick_token_checked = false;
+                self.runtimes[index].kick.kick_token_loading = false;
             } else if !login_done {
                 self.runtimes[index].kick.kick_login_done_seen = false;
             }
@@ -313,6 +314,7 @@ impl ControllerApp {
                     state.kick_token_cached = Some(token.clone());
                     state.kick_token_revision = state.kick_token_revision.wrapping_add(1);
                     state.kick_token_checked = true;
+                    state.kick_token_loading = false;
                 },
                 Err(reason) => {
                     error = true;
@@ -354,6 +356,7 @@ impl ControllerApp {
                 self.runtimes[index].kick.kick_saved_login = false;
                 self.runtimes[index].kick.kick_token_cached = None;
                 self.runtimes[index].kick.kick_token_checked = true;
+                self.runtimes[index].kick.kick_token_loading = false;
                 self.runtimes[index].kick.kick_token_revision =
                     self.runtimes[index].kick.kick_token_revision.wrapping_add(1);
                 self.runtimes[index].kick.kick_login_done_seen = false;
