@@ -297,10 +297,12 @@ impl MonitorHandle {
         let stop_worker = Arc::clone(&stop);
         let command_queue = Arc::clone(&commands);
 
-        thread::spawn(move || {
-            monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker,
-                bootstrap_worker, game_close_worker, game_restore_worker, pace_worker);
-        });
+        let _ = thread::Builder::new()
+            .name(format!("moth-firefox-monitor-{port}"))
+            .spawn(move || {
+                monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker,
+                    bootstrap_worker, game_close_worker, game_restore_worker, pace_worker);
+            });
 
         Self { health, stop, commands, close_request, bootstrap_request,
             game_close_request, game_restore_request, pace }
