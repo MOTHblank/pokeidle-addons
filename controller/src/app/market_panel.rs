@@ -47,6 +47,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
         if !app.runtimes[index].automation.market_notice.is_empty() {
             ui.label(RichText::new(tr_dynamic(app.runtimes[index].automation.market_notice.clone())).size(10.0).color(WARN));
         }
+        ui.label(RichText::new(tr("An enabled Any item rule may buy items even when a matching Specific item rule is off.")).size(10.0).color(MUTED));
         draw_market_copy_controls(app,ui,index);
         let automation = &mut app.runtimes[index].automation;
         let Some(cfg)=automation.market_draft.as_mut() else {return};
@@ -129,7 +130,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                 .show_ui(ui,|ui|{
                                     for (value,label) in [
                                         ("item",tr("Specific item")),("any_item",tr("Any item")),
-                                        ("pokemon_any",tr("Any Pokémon")),("pokemon_p5",tr("P5 Pokémon")),
+                                        ("pokemon_any",tr("Any Pokémon")),("pokemon_normal",tr("Non-shiny Pokémon")),("pokemon_p5",tr("P5 Pokémon")),
                                         ("pokemon_shiny",tr("Shiny Pokémon"))] {
                                         ui.selectable_value(&mut rule.kind,value.into(),label);
                                     }
@@ -144,6 +145,27 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                             if rule.kind=="item"{field(ui,tr("Item ID"),&mut rule.item_id);}
                             field(ui,tr("Max unit price"),&mut rule.buy_max);
                         });
+                        if rule.kind.starts_with("pokemon_") {
+                            ui.label(RichText::new(tr("Pokémon potency (0 = any, 1–5)"))
+                                .size(10.0).color(MUTED));
+                            ui.horizontal_wrapped(|ui|{
+                                ui.label(tr("Minimum"));
+                                ui.add(egui::DragValue::new(&mut rule.min_potency).range(0..=5));
+                                ui.label(tr("Maximum"));
+                                ui.add(egui::DragValue::new(&mut rule.max_potency).range(0..=5));
+                            });
+                        } else {
+                            ui.horizontal_wrapped(|ui|{
+                                ui.label(RichText::new(tr("Minimum listing units (0 = any)"))
+                                    .size(10.0).color(MUTED));
+                                ui.add(egui::DragValue::new(&mut rule.min_listing_quantity)
+                                    .range(0..=1_000_000_000));
+                                ui.label(RichText::new(tr("Maximum units per purchase (0 = all affordable)"))
+                                    .size(10.0).color(MUTED));
+                                ui.add(egui::DragValue::new(&mut rule.max_units_per_buy)
+                                    .range(0..=1_000_000_000));
+                            });
+                        }
                         ui.collapsing(tr("Per-rule limits (0 = unlimited)"),|ui|{
                             ui.horizontal_wrapped(|ui|{
                                 field(ui,tr("Spend / session"),&mut rule.max_spend_session);
@@ -439,7 +461,7 @@ fn field(ui:&mut egui::Ui,label:&str,value:&mut u64){
 fn kind_label(kind:&str)->&'static str {
     match kind {
         "item"=>tr("Specific item"),"any_item"=>tr("Any item"),
-        "pokemon_any"=>tr("Any Pokémon"),"pokemon_p5"=>tr("P5 Pokémon"),
+        "pokemon_any"=>tr("Any Pokémon"),"pokemon_normal"=>tr("Non-shiny Pokémon"),"pokemon_p5"=>tr("P5 Pokémon"),
         "pokemon_shiny"=>tr("Shiny Pokémon"),_=>tr("Invalid rule")
     }
 }
