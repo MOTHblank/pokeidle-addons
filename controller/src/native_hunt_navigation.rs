@@ -87,6 +87,7 @@ impl SwitchGate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Destination {
     Hunt(String),
+    Boss { key: String, repeat: bool },
     Center,
 }
 
@@ -104,6 +105,25 @@ impl HuntNavigator {
         self.target = Some(destination);
         self.started = Some(now);
         self.last_select = None;
+    }
+    /// Boss entry is a destination change just like Hunt Atlas. Keeping it
+    /// inside this navigator gives it the same gate, retry cadence and blocked
+    /// travel warning instead of a second, subtly different queue.
+    pub fn boss(&mut self, key: String, repeat: bool, now: Instant) {
+        let destination = Destination::Boss { key, repeat };
+        if self.target.as_ref() == Some(&destination) { return; }
+        self.target = Some(destination);
+        self.started = Some(now);
+        self.last_select = None;
+    }
+    pub fn boss_pending(&self) -> bool {
+        matches!(self.target, Some(Destination::Boss { .. }))
+    }
+    pub fn confirm_boss(&mut self, key: &str) {
+        if matches!(self.target.as_ref(),
+            Some(Destination::Boss { key: pending, .. }) if pending == key) {
+            self.cancel();
+        }
     }
     pub fn center(&mut self, now: Instant) {
         if self.target == Some(Destination::Center) { return; }
@@ -128,6 +148,7 @@ impl HuntNavigator {
         let arrived = match self.target.as_ref() {
             Some(Destination::Hunt(slug)) =>
                 !view.in_center && view.hunt_slug.as_deref() == Some(slug.as_str()),
+            Some(Destination::Boss { .. }) => false,
             Some(Destination::Center) => view.in_center,
             None => false,
         };
@@ -168,6 +189,7 @@ impl HuntNavigator {
                     return None;
                 }
             }
+            Destination::Boss { .. } => {}
             Destination::Center if view.in_center => {
                 self.cancel();
                 return None;
@@ -183,6 +205,13 @@ impl HuntNavigator {
         self.last_select = Some(now);
         Some(match target {
             Destination::Hunt(slug) => GameCommand::Hunt(slug),
+            Destination::Boss { key, repeat } => {
+                if repeat {
+                    GameCommand::BossAuto { active: true, key }
+                } else {
+                    GameCommand::BossEnter(key)
+                }
+            }
             Destination::Center => GameCommand::Center,
         })
     }
@@ -252,6 +281,27 @@ mod tests {
         assert!(!nav.switch_open(&state, at));
         assert!(!nav.switch_open(&state, at + Duration::from_millis(2999)));
         assert!(nav.switch_open(&state, at + Duration::from_millis(3000)));
+    }
+    #[test]
+    fn boss_destination_uses_the_exact_hunt_switch_gate_and_retry() {
+        let at = Instant::now();
+        let mut nav = HuntNavigator::default();
+        let state = view();
+        nav.observe(&json!({"t":"estado","estado":{
+            "servidorAgora":1000000,"centroLivreEm":1003000,
+            "trocaHuntLivreEm":1000000}}), &state, at);
+        nav.boss("bronze".into(), false, at);
+        assert!(nav.boss_pending());
+        assert_eq!(kind(nav.next_action(&state, at)), "none");
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_millis(2999))), "none");
+        assert!(matches!(nav.next_action(&state, at + Duration::from_millis(3000)),
+            Some(GameCommand::BossEnter(key)) if key == "bronze"));
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_millis(3100))), "none");
+        assert!(matches!(nav.next_action(&state, at + Duration::from_millis(3350)),
+            Some(GameCommand::BossEnter(key)) if key == "bronze"));
+        nav.confirm_boss("bronze");
+        assert!(!nav.boss_pending());
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_millis(3700))), "none");
     }
     #[test]
     fn normal_center_uses_same_gate_and_retry_as_hunt() {
