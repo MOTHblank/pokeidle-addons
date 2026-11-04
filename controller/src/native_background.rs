@@ -17,6 +17,7 @@ use crate::native_restock::{Restock, RestockStatus};
 use crate::native_automation::{AutomationWriter, AutomationStatus};
 use crate::native_pvp::{PvpAutomation, PvpAction, PvpStatus};
 use crate::native_market::{MarketBuyer, MarketRules, MarketStatus};
+use crate::native_twitch_miner::{TwitchMinerControl, TwitchMinerSession};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
@@ -286,6 +287,7 @@ pub struct NativeSession {
     background_forecast_reference: Arc<Mutex<Option<(Arc<AtlasReference>, bool)>>>,
     phase_wake:PhaseWake,
     kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
+    twitch_miner:TwitchMinerSession,
 }
 impl NativeSession {
     /// Establish the verified game WebSocket before handing ownership away
@@ -293,9 +295,13 @@ impl NativeSession {
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
-        Self::spawn(profile, credentials, Some(initial), bootstrap.get("autocatch").cloned())
+        let twitch_miner = TwitchMinerSession::start_optional(
+            bootstrap.get("twitch").filter(|value| !value.is_null())
+        );
+        Self::spawn(profile, credentials, twitch_miner, Some(initial),
+            bootstrap.get("autocatch").cloned())
     }
-    fn spawn(profile: GameProfile, credentials: Credentials,
+    fn spawn(profile: GameProfile, credentials: Credentials, twitch_miner:TwitchMinerSession,
         initial: Option<(GameSocket, Value)>, settings: Option<Value>) -> Result<Self, String> {
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
@@ -350,11 +356,12 @@ impl NativeSession {
         let worker_phase_wake=Arc::clone(&phase_wake);
         let kick_roster_publisher=Arc::new(Mutex::new(None));
         let worker_kick_roster_publisher=Arc::clone(&kick_roster_publisher);
+        let twitch_miner_control=twitch_miner.control();
         let worker = thread::Builder::new().name("moth-native-game".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
-                        Arc::clone(&worker_stop), initial,
+                        Arc::clone(&worker_stop), twitch_miner_control, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_pvp_preference,
                         worker_pvp_toggle_epoch, worker_capture_config,
@@ -378,7 +385,7 @@ impl NativeSession {
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, stop, command_tx, auto_catch, restock_enabled,
             pvp_preference, pvp_toggle_epoch, capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
-            background_forecast_reference, phase_wake, kick_roster_publisher
+            background_forecast_reference, phase_wake, kick_roster_publisher, twitch_miner
         })
     }
     /// Changes take effect on the socket worker even when egui is minimized.
@@ -537,8 +544,12 @@ impl NativeSession {
         // A worker can expire while its initial handoff is still in flight.
         if self.snapshot().phase=="NeedsLogin" { wake(); }
     }
+    pub fn twitch_miner_snapshot(&self) -> Option<moth_twitch::MinerSnapshot> {
+        self.twitch_miner.snapshot()
+    }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.twitch_miner.stop();
     }
 }
 impl Drop for NativeSession {
@@ -708,6 +719,12 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool
     changed_kick_roster
 }
 
+fn sync_twitch_miner_targets(control:&TwitchMinerControl,payload:&Value) {
+    if let Some(channels)=crate::native_twitch_miner::official_live_channels(payload) {
+        control.set_channels(channels);
+    }
+}
+
 fn publish_kick_roster(
     publisher:&Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
     snapshot:&Arc<Mutex<NativeSnapshot>>,
@@ -737,7 +754,7 @@ fn current_background_hunt(view:&HuntView)->Option<crate::native_hunts::HuntEntr
 
 fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
-    first_session: Option<(GameSocket, Value)>,
+    twitch_miner:TwitchMinerControl, first_session: Option<(GameSocket, Value)>,
     mut gameplay: Gameplay, mut restock: Restock,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
@@ -779,6 +796,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 // The handshake already parsed this frame; all consumers borrow it.
                 let received_at = Instant::now();
                 let roster_changed=observe_value(&snapshot, &frame);
+                sync_twitch_miner_targets(&twitch_miner,&frame);
                 publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                 gameplay.ingest_value(&frame, received_at);
                 restock.ingest_value(&frame, received_at);
@@ -1383,6 +1401,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     ));
                                 }
                                 let roster_changed=observe_value(&snapshot, &frame);
+                sync_twitch_miner_targets(&twitch_miner,&frame);
                                 publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                             }
                         },
