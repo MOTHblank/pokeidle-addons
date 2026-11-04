@@ -1,6 +1,6 @@
 //! Runtime information and controller credits presentation.
-use super::{egui, localize_status, runtime_chip, tr, update, Align, Color32,
-    ControllerApp, FontId, Layout, Margin, PanelTab, RichText, SharedUpdateStatus,
+use super::{egui, localize_status, runtime_chip, tr, update, Align,
+    ControllerApp, FontId, Layout, Margin, PanelTab, RichText,
     Stroke, BAD, BORDER, DIM, GOOD, MONITOR_HEARTBEAT_INTERVAL,
     MONITOR_POLL_INTERVAL, MONITOR_TAB_INTERVAL, MUTED, PANEL, PANEL_ALT,
     TEXT, UI_REPAINT_INTERVAL, WARN};
@@ -99,8 +99,22 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 }
 
 
-pub(super) fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) -> bool {
-    let mut open_updates = false;
+pub(super) fn draw_credits(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    let (latest_version, _notes_url, checking, downloading, staged_version, failure) =
+        match app.update_status.lock() {
+            Ok(status) => (
+                status.latest_version.clone(),
+                status.release_notes_url.clone(),
+                status.checking,
+                status.downloading,
+                status.staged_version.clone(),
+                status.last_error.clone(),
+            ),
+            Err(_) => (None, None, false, false, None, Some("Update status unavailable".into())),
+        };
+    let newer = latest_version.as_deref()
+        .is_some_and(|latest| update::is_newer_version(latest, env!("CARGO_PKG_VERSION")));
+
     egui::Frame::new()
         .fill(PANEL_ALT)
         .stroke(Stroke::new(1.0, BORDER))
@@ -116,15 +130,8 @@ pub(super) fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus
                 );
 
                 ui.add_space(3.0);
+                ui.label(RichText::new(tr("by MOTHblank")).size(10.0).color(MUTED));
 
-                ui.label(
-                    RichText::new(tr("by MOTHblank"))
-                        .size(10.0)
-                        .color(MUTED),
-                );
-
-                // Keep the links in aligned rows. A wrapped run of independent
-                // separators and default-sized hyperlinks breaks in narrow sidebars.
                 egui::Grid::new("sidebar_credits_links")
                     .num_columns(2)
                     .spacing([10.0, 4.0])
@@ -151,45 +158,127 @@ pub(super) fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus
                     });
 
                 ui.add_space(5.0);
-                ui.label(
-                    RichText::new(format!("{} {}", tr("Version"), env!("CARGO_PKG_VERSION")))
-                        .size(9.0)
-                        .color(DIM),
-                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} {}", tr("Version"), env!("CARGO_PKG_VERSION")))
+                            .size(9.0)
+                            .color(DIM),
+                    );
 
-                let latest_version = update_status
-                    .lock()
-                    .ok()
-                    .and_then(|state| state.latest_version.clone());
-                if let Some(latest_version) = latest_version
-                    .filter(|latest| update::is_newer_version(latest, env!("CARGO_PKG_VERSION")))
-                {
-                    ui.add_space(4.0);
-                    egui::Frame::new()
-                        .fill(Color32::from_rgb(57, 255, 20))
-                        .corner_radius(5.0)
-                        .inner_margin(Margin::symmetric(6, 3))
-                        .show(ui, |ui| {
-                            if ui.add(
-                                egui::Label::new(
-                                    RichText::new(format!(
-                                        "{} · v{}",
-                                        tr("Update available"),
-                                        latest_version
-                                    ))
-                                    .size(10.0)
-                                    .strong()
-                                    .color(Color32::from_rgb(12, 38, 10)),
-                                )
-                                .sense(egui::Sense::click()),
-                            ).on_hover_text(tr("Open update options")).clicked() {
-                                open_updates = true;
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let status = if checking {
+                            tr("Checking for updates...").to_owned()
+                        } else if downloading {
+                            tr("Downloading update...").to_owned()
+                        } else if let Some(version) = staged_version.as_ref() {
+                            format!("✓ v{version}")
+                        } else if let Some(version) = latest_version.as_ref().filter(|_| newer) {
+                            format!("↑ v{version}")
+                        } else if latest_version.is_some() {
+                            tr("Up to date").to_owned()
+                        } else {
+                            String::new()
+                        };
+                        if !status.is_empty() {
+                            ui.label(
+                                RichText::new(status)
+                                    .size(8.5)
+                                    .color(if staged_version.is_some() {
+                                        GOOD
+                                    } else if newer {
+                                        WARN
+                                    } else {
+                                        DIM
+                                    }),
+                            );
+                        }
+                    });
+                });
+
+                ui.add_space(3.0);
+                ui.horizontal(|ui| {
+                    let mut automatic = app.preferences.check_updates_on_start;
+                    let automatic_response = ui.add(
+                        egui::Checkbox::new(&mut automatic, RichText::new("Auto").size(9.0))
+                    ).on_hover_text(tr("Check for new versions on startup"));
+                    if automatic_response.changed() {
+                        let mut next = app.preferences;
+                        next.check_updates_on_start = automatic;
+                        app.save_app_preferences(next);
+                    }
+
+                    let check_response = ui.add_enabled(
+                        !checking && !downloading,
+                        egui::Button::new(RichText::new("↻").size(10.0)),
+                    ).on_hover_text(tr("Check now"));
+                    if check_response.clicked() {
+                        match update::check_now(&app.update_status) {
+                            Ok(_) => app.set_status(tr("Update check started"), false),
+                            Err(error) => app.set_status(error, true),
+                        }
+                        ui.ctx().request_repaint();
+                    }
+
+                    #[cfg(windows)]
+                    {
+                        if staged_version.is_some() {
+                            let active = app.accounts_have_live_work();
+                            let response = ui.add_enabled(
+                                !active,
+                                egui::Button::new(
+                                    RichText::new(tr("Restart & install")).size(9.0)
+                                ),
+                            );
+                            let response = if active {
+                                response.on_hover_text(tr(
+                                    "Stop all active accounts before restarting to install it."
+                                ))
+                            } else {
+                                response
+                            };
+                            if response.clicked() {
+                                match update::request_restart_and_install(&app.update_status) {
+                                    Ok(_) => {
+                                        app.set_status(tr("Restarting to install update"), false);
+                                        app.tray_exit_requested.store(
+                                            true,
+                                            std::sync::atomic::Ordering::Release,
+                                        );
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                    Err(error) => app.set_status(error, true),
+                                }
                             }
-                        });
-                }
+                        } else if newer && !downloading {
+                            let response = ui.add_enabled(
+                                !checking,
+                                egui::Button::new(
+                                    RichText::new(tr("Download")).size(9.0)
+                                ),
+                            );
+                            if response.clicked() {
+                                match update::download_update(&app.update_status) {
+                                    Ok(_) => app.set_status(tr("Update download started"), false),
+                                    Err(error) => app.set_status(error, true),
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    }
+
+                    #[cfg(not(windows))]
+                    if newer {
+                        ui.hyperlink_to(
+                            RichText::new(tr("Release notes")).size(9.0),
+                            _notes_url.as_deref().unwrap_or(update::RELEASES_URL),
+                        );
+                    }
+
+                    if let Some(error) = failure.as_ref() {
+                        ui.label(RichText::new("!").size(10.0).strong().color(BAD))
+                            .on_hover_text(error.as_str());
+                    }
+                });
             });
         });
-    open_updates
 }
-
-
