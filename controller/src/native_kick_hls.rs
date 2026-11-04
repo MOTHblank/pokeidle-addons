@@ -65,6 +65,19 @@ impl AccountBandwidth {
             traffic.recent.pop_front();
         }
     }
+    /// Nonblocking diagnostics-only read. Retention is maintained by the
+    /// existing writers and usage() path; this read never mutates or waits.
+    pub fn diagnostics_usage(&self) -> Option<BandwidthUsage> {
+        let traffic = self.traffic.try_lock().ok()?;
+        let now = Instant::now();
+        Some(BandwidthUsage {
+            bytes: traffic.bytes,
+            last_minute: traffic.recent.iter()
+                .filter(|(at, _)| now.saturating_duration_since(*at) < Duration::from_secs(60))
+                .fold(0u64, |sum, (_, bytes)| sum.saturating_add(*bytes)),
+        })
+    }
+
     pub fn usage(&self) -> BandwidthUsage {
         let Ok(mut traffic) = self.traffic.lock() else { return BandwidthUsage::default() };
         let now = Instant::now();
