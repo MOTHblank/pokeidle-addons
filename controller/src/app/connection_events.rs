@@ -503,8 +503,12 @@ impl ControllerApp {
             }
             if event.existing_firefox {
                 // A stale managed Firefox process still owns this profile.
-                // Do not create a competing native game socket from cache.
-                // Adopt its BiDi session and let the two-phase handoff close it.
+                // This is process ownership protection, not evidence that the
+                // PokéIdle login expired. Adopt that browser rather than create
+                // a competing game socket from the valid native cache.
+                logging::info(&format!(
+                    "{} browser handoff required because its Firefox profile is already running",
+                    self.account_name(profile)));
                 self.runtimes[event.index].session.require_browser_login = true;
                 self.launch_firefox_bootstrap(profile, false);
                 continue;
@@ -530,11 +534,26 @@ impl ControllerApp {
                     self.launch_firefox_bootstrap(profile, false);
                 }
                 Err(error) => {
-                    self.runtimes[event.index].session.require_browser_login = true;
-                    self.set_status(format!(
-                        "{}: saved login unavailable: {error}",
-                        self.account_name(profile)), true);
-                    self.launch_firefox_bootstrap(profile, false);
+                    if event.browser_required {
+                        self.runtimes[event.index].session.require_browser_login = true;
+                        logging::info(&format!(
+                            "{} saved PokéIdle login requires browser refresh: {}",
+                            self.account_name(profile), error));
+                        self.set_status(format!(
+                            "{}: saved login expired or unavailable; opening Firefox",
+                            self.account_name(profile)), true);
+                        self.launch_firefox_bootstrap(profile, false);
+                    } else {
+                        // A transient DNS/TCP/TLS/welcome failure does not
+                        // invalidate credentials that the server may still accept.
+                        // Keep the fast native path available on the next Start.
+                        logging::warn(&format!(
+                            "{} saved PokéIdle login verification failed without authentication rejection: {}",
+                            self.account_name(profile), error));
+                        self.set_status(format!(
+                            "{}: could not connect with saved login: {error}. Firefox was not opened; retry Start.",
+                            self.account_name(profile)), true);
+                    }
                 }
             }
         }
