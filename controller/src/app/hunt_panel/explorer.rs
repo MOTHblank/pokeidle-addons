@@ -662,11 +662,11 @@ pub(super) fn atlas_first_unlocked(row:&AtlasSpeciesRow)->Option<&AtlasDestinati
 pub(super) fn draw_atlas_destination(
     ui:&mut egui::Ui,dest:&AtlasDestination,view:&HuntView,
     native:&NativeSession,live:bool,error:&mut Option<String>,
-    pending_ui:&mut Option<String>,aoe_enabled:bool,
+    pending_ui:&mut Option<(String, Instant)>,aoe_enabled:bool,
 ){
     let current=view.hunt_slug.as_deref()==Some(dest.hunt.slug.as_str());
     let pending=view.pending_hunt_slug.as_deref()==Some(dest.hunt.slug.as_str())
-        || pending_ui.as_deref()==Some(dest.hunt.slug.as_str());
+        || pending_ui.as_ref().is_some_and(|(slug,_)| slug == &dest.hunt.slug);
     egui::Frame::new()
         .fill(if pending{WARN.linear_multiply(0.07)}else{PANEL_ALT})
         .stroke(Stroke::new(1.0,if pending{WARN.linear_multiply(0.65)}else{BORDER}))
@@ -722,7 +722,7 @@ pub(super) fn draw_atlas_species(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow,sort:AtlasSort,
     view:&HuntView,reference:Option<&AtlasReference>,
     filters:&AtlasFilters,native:&NativeSession,live:bool,
-    error:&mut Option<String>,pending_ui:&mut Option<String>,
+    error:&mut Option<String>,pending_ui:&mut Option<(String, Instant)>,
     aoe_enabled:bool,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
@@ -798,7 +798,7 @@ pub(super) fn draw_atlas_species(
                                 ==Some(target.hunt.slug.as_str());
                             let pending=view.pending_hunt_slug.as_deref()
                                 ==Some(target.hunt.slug.as_str())
-                                || pending_ui.as_deref()==Some(target.hunt.slug.as_str());
+                                || pending_ui.as_ref().is_some_and(|(slug,_)| slug == &target.hunt.slug);
                             if draw_hunt_switch_action(ui,current,pending,live) {
                                 request_hunt_with_feedback(
                                     native,&target.hunt.slug,error,pending_ui);
@@ -927,7 +927,7 @@ pub(super) fn draw_atlas_explorer(
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
     results:&mut ExplorerCache,
     command_error:&mut Option<String>,
-    command_pending:&mut Option<String>,
+    command_pending:&mut Option<(String, Instant)>,
 ){
     atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
