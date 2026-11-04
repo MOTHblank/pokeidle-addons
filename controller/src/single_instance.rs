@@ -121,9 +121,6 @@ mod windows {
         fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
         fn GetLastError() -> u32;
         fn CloseHandle(handle: Handle) -> i32;
-        fn FindWindowW(class_name: *const u16, window_name: *const u16) -> Handle;
-        fn ShowWindow(window: Handle, command: i32) -> i32;
-        fn SetForegroundWindow(window: Handle) -> i32;
     }
 
     fn wide(text: &str) -> Vec<u16> {
@@ -132,6 +129,9 @@ mod windows {
 
     #[link(name = "user32")]
     unsafe extern "system" {
+        fn FindWindowW(class_name: *const u16, window_name: *const u16) -> Handle;
+        fn ShowWindow(window: Handle, command: i32) -> i32;
+        fn SetForegroundWindow(window: Handle) -> i32;
         fn MessageBoxW(window: Handle, message: *const u16, caption: *const u16,
             options: u32) -> i32;
     }
