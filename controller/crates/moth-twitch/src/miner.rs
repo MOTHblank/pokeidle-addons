@@ -206,6 +206,7 @@ struct ChannelCache {
     points_gained: u64,
     last_watch: Option<Instant>,
     last_media_activity: Option<Instant>,
+    last_media_error: Option<String>,
     last_watch_attempt: Option<Instant>,
     watch_failures: u8,
     watch_reward_count: u8,
@@ -229,6 +230,7 @@ struct ChannelCache {
 
 /// Two persistent watch slots. A slot keeps its broadcast identity so an
 /// offline/restarted stream never inherits the prior stream's streak window.
+#[derive(Clone)]
 struct WatchSlot {
     login: String,
     broadcast_id: String,
@@ -272,6 +274,7 @@ fn clear_stream_state(channel:&mut ChannelCache) {
     channel.streak_priority_exhausted=false;
     channel.last_watch=None;
     channel.last_media_activity=None;
+    channel.last_media_error=None;
 }
 
 /// Hold two candidate broadcasts through the reference miner's streak
@@ -323,6 +326,32 @@ fn refresh_watch_slots(
             login:name.clone(),broadcast_id,entered:now,streak_limit
         });
     }
+}
+
+fn watch_release_reason(
+    login:&str,
+    broadcast_id:&str,
+    live:&[String],
+    cache:&HashMap<String,ChannelCache>,
+    now:Instant,
+)->String {
+    let Some(channel)=cache.get(login) else{return "channel removed".into()};
+    if live.binary_search_by(|candidate|candidate.as_str().cmp(login)).is_err() {
+        return "stream offline".into();
+    }
+    if channel.broadcast_id.as_deref()!=Some(broadcast_id) {
+        return "broadcast changed".into();
+    }
+    if watch_backed_off(channel,now) {
+        return "watch failures; backing off".into();
+    }
+    if channel.streak_confirmed==Some(true) {
+        return "streak confirmed".into();
+    }
+    if channel.streak_priority_exhausted {
+        return "streak priority window ended".into();
+    }
+    "watch rotation".into()
 }
 
 fn notify(wake: &PhaseWake) {
@@ -530,6 +559,7 @@ fn run(
     let (pubsub_tx,pubsub_rx)=mpsc::channel();
     let mut pubsub_started=false;
     let mut pending_pubsub=VecDeque::new();
+    let mut last_auth_warning:Option<String>=None;
     let interval = config.poll_interval.max(MIN_POLL_INTERVAL);
 
     while !stop.load(Ordering::Acquire) {
@@ -537,27 +567,44 @@ fn run(
             match gql.authenticate() {
                 Ok(viewer) => {
                     watch.set_session(gql.oauth_token(),&viewer.user_id);
+                    let reference_client=gql.reference_client();
                     if let Ok(mut current)=snapshot.lock() {
-                        current.reference_client=gql.reference_client();
+                        current.reference_client=reference_client;
                     }
+                    let login=viewer.login.clone();
                     identity = Some(viewer);
+                    last_auth_warning=None;
                     set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
-                    push_event(&events, MinerEvent::Connected);
+                    push_event(&events, MinerEvent::Connected {login,reference_client});
                 }
                 Err(error) if error.is_auth() => {
+                    let message=error.user_message();
+                    if last_auth_warning.as_deref()!=Some(message.as_str()) {
+                        push_event(&events,MinerEvent::Warning(format!(
+                            "authentication: {message}"
+                        )));
+                        last_auth_warning=Some(message.clone());
+                    }
                     set_phase(
                         &snapshot,
                         &phase_wake,
                         MinerPhase::NeedsLogin,
-                        Some(error.user_message()),
+                        Some(message),
                     );
                 }
                 Err(error) => {
+                    let message=error.user_message();
+                    if last_auth_warning.as_deref()!=Some(message.as_str()) {
+                        push_event(&events,MinerEvent::Warning(format!(
+                            "authentication: {message}"
+                        )));
+                        last_auth_warning=Some(message.clone());
+                    }
                     set_phase(
                         &snapshot,
                         &phase_wake,
                         MinerPhase::Reconnecting,
-                        Some(error.user_message()),
+                        Some(message),
                     );
                 }
             }
