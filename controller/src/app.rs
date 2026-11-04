@@ -1306,8 +1306,14 @@ impl eframe::App for ControllerApp {
         // The clock is not even queried outside active diagnostics. Starting
         // here includes process refresh, connection work and all UI panels.
         let diagnostics_frame_start = (self.workspace.panel_tab == PanelTab::Diagnostics
-            && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused))
-            .then(Instant::now);
+            && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
+            && {
+                #[cfg(windows)]
+                let hidden = self.tray_hidden.load(Ordering::Relaxed);
+                #[cfg(not(windows))]
+                let hidden = false;
+                should_sample(true, hidden, ui.ctx().input(|input| input.viewport().focused))
+            }).then(Instant::now);
         self.refresh_processes();
         self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
