@@ -270,6 +270,20 @@ pub fn load_for_auth(profile:GameProfile,
     Ok(cached)
 }
 
+/// Remove legacy Twitch material from the PokéIdle credential cache after
+/// moving it to Twitch's dedicated protected vault. This never changes the
+/// in-memory bootstrap currently being used for a handoff.
+pub fn scrub_legacy_twitch_from_game_cache(profile: GameProfile) -> Result<(), String> {
+    let _guard=preference_write(profile).lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    let Some(mut cached)=load(profile)? else{return Ok(())};
+    let Some(object)=cached.as_object_mut() else{return Ok(())};
+    let changed=object.remove("twitch").is_some() |
+        object.remove("twitchProbeVersion").is_some();
+    if changed {save(profile,&cached)?;}
+    Ok(())
+}
+
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
 /// same write lock as native UI edits. Return the merged bootstrap for the
 /// imminent game connection as well as for future cached starts.
@@ -291,7 +305,12 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value,
     if !capture_generation_is_current(generation,expected) {
         return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
     }
-    let saved=save(profile,&merged);
+    let mut persisted=merged.clone();
+    if let Some(object)=persisted.as_object_mut() {
+        object.remove("twitch");
+        object.remove("twitchProbeVersion");
+    }
+    let saved=save(profile,&persisted);
     // Stop may overtake a slow vault operation. Do not leave credentials
     // from the canceled attempt visible to a later cached native launch.
     if saved.is_ok() && !capture_generation_is_current(generation,expected) {
