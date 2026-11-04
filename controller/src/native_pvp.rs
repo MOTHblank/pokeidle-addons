@@ -94,6 +94,7 @@ impl PvpAutomation {
                 self.cooldown_until = Some(now + Duration::from_millis(ms));
             }
             self.warning = Some("PokéIdle refused the PvP queue request; checking eligibility before retrying".into());
+            self.queue_known = false;
             self.next_info_at = Some(now + REFUSAL_BACKOFF);
         }
         if frame.get("partida").is_some_and(|p| !p.is_null()) {
@@ -167,6 +168,12 @@ impl PvpAutomation {
                     return Some(PvpAction::SetVipAuto(wanted));
                 }
             }
+            // A VIP queue can also run with the PvP page closed. Query its
+            // status occasionally, but never submit a client-side Join.
+            if enabled && self.next_info_at.is_none_or(|due| now >= due) {
+                self.next_info_at = Some(now + INFO_INTERVAL);
+                return Some(PvpAction::Info);
+            }
             return None;
         }
         if !enabled { return None; }
@@ -178,12 +185,12 @@ impl PvpAutomation {
             self.queue_known = false;
             self.next_info_at = None;
         }
-        if !self.queue_known ||
-            self.next_info_at.is_none_or(|due| now >= due) &&
-                (self.queued || self.team_ready.is_none()) {
+        if self.next_info_at.is_none_or(|due| now >= due)
+            && (!self.queue_known || self.queued || self.team_ready.is_none()) {
             self.next_info_at = Some(now + INFO_INTERVAL);
             return Some(PvpAction::Info);
         }
+        if !self.queue_known { return None; }
         if self.queued || self.owned_queue { return None; }
         if self.team_ready != Some(true) ||
             self.min_level.is_none_or(|min| level.is_none_or(|lv| lv < min)) {
@@ -222,7 +229,7 @@ mod tests {
         let t = Instant::now();
         let mut p = PvpAutomation::default();
         assert_eq!(p.next(Some(true), false, None, Some(25), t), Some(PvpAction::Info));
-        assert_eq!(p.next(Some(true), false, None, Some(25), t), Some(PvpAction::Info));
+        assert_eq!(p.next(Some(true), false, None, Some(25), t), None);
         p.on_frame(&json!({"t":"pvp","time":[7],"regras":{"nivelMin":10},
             "fila":{"na":false,"cooldownMs":0}}),t);
         assert_eq!(p.next(Some(true), false, None, Some(25), t), Some(PvpAction::Join));
@@ -258,7 +265,7 @@ mod tests {
     fn vip_inherits_server_setting_and_never_client_joins() {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
-        assert_eq!(p.next(None,true,Some(true),Some(30),t),None);
+        assert_eq!(p.next(None,true,Some(true),Some(30),t),Some(PvpAction::Info));
         assert!(p.status(None,true,Some(true),t).enabled);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
             Some(PvpAction::SetVipAuto(false)));
