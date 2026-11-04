@@ -469,7 +469,7 @@ fn draw_boss_history_card(
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.label(
-                RichText::new(tr("Boss battle history"))
+                RichText::new(tr("Boss victories & loot"))
                     .size(13.0)
                     .strong()
                     .color(TEXT),
@@ -726,22 +726,30 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 );
             }
             ui.add_space(10.0);
-            ui.columns(2, |cols| {
-                egui::ScrollArea::vertical()
-                    .id_salt(("boss-status-top", index))
-                    .max_height(300.0)
-                    .auto_shrink([false, false])
-                    .show(&mut cols[0], |ui| {
-                        draw_boss_status_card(app, ui, index, &view, &hunt, live, &mut action);
+            // Keep the two panels beside each other even in a narrow window:
+            // pan horizontally instead of crushing buttons and history rows.
+            egui::ScrollArea::horizontal()
+                .id_salt(("boss-summary-horizontal", index))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width().max(700.0));
+                    ui.columns(2, |cols| {
+                        egui::ScrollArea::vertical()
+                            .id_salt(("boss-status-top", index))
+                            .max_height(300.0)
+                            .auto_shrink([false, false])
+                            .show(&mut cols[0], |ui| {
+                                draw_boss_status_card(app, ui, index, &view, &hunt, live, &mut action);
+                            });
+                        egui::ScrollArea::vertical()
+                            .id_salt(("boss-history-top", index))
+                            .max_height(300.0)
+                            .auto_shrink([false, false])
+                            .show(&mut cols[1], |ui| {
+                                draw_boss_history_card(app, ui, index, &view, now);
+                            });
                     });
-                egui::ScrollArea::vertical()
-                    .id_salt(("boss-history-top", index))
-                    .max_height(300.0)
-                    .auto_shrink([false, false])
-                    .show(&mut cols[1], |ui| {
-                        draw_boss_history_card(app, ui, index, &view, now);
-                    });
-            });
+                });
             ui.add_space(10.0);
 
             // Hunt Atlas-style master/detail selection: boss cards on the

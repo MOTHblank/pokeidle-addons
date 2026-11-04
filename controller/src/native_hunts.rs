@@ -81,6 +81,12 @@ fn species_id_from_hunt_name(name: &str) -> Option<u64> {
         .map(|(_, id)| *id)
 }
 
+/// Resolve a named boss to the same bundled game species-art catalog
+/// already used for Hunt Atlas. No network or UI reference load required.
+pub fn game_species_id_by_name(name: &str) -> Option<u64> {
+    species_id_from_hunt_name(name)
+}
+
 /// A hunt represents one species. Use the game's ID directly, rather than
 /// treating its spawn list as a weighted draw or reading the current enemy.
 pub fn representative_hunt_species(hunt: &HuntEntry) -> Option<u64> {
