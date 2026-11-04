@@ -595,13 +595,9 @@ impl NativeSession {
     pub fn set_twitch_favorites(&self, channels: Vec<String>) {
         self.twitch_miner.set_favorites(channels);
     }
-    pub fn refresh_twitch_login(&self) -> Result<bool, String> {
-        let Some(token)=crate::native_auth::load_twitch_token(self.profile)? else {
-            self.twitch_miner.clear_login();
-            return Ok(false);
-        };
+    pub fn refresh_twitch_token(&self, token:&str) -> Result<(), String> {
         let wake=self.phase_wake.lock().ok().and_then(|slot|slot.clone());
-        self.twitch_miner.replace_token(&token,wake)?;
+        self.twitch_miner.replace_token(token,wake)?;
 
         // Reapply the latest server-derived targeting immediately instead of
         // waiting for another PokéIdle frame after a successful Firefox login.
@@ -614,7 +610,7 @@ impl NativeSession {
             control.set_live_channels(channels);
         }
         control.set_expected_login(state.twitch_login.clone());
-        Ok(true)
+        Ok(())
     }
     pub fn forget_twitch_login(&self) {
         self.twitch_miner.clear_login();
