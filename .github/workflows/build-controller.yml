@@ -107,8 +107,8 @@ jobs:
   windows:
     name: Windows x86_64
     needs: versao
-    # After publication, source changes are covered by the validation workflow.
-    # Manual dispatch still produces preview binaries when publishing is disabled.
+    # Automated tests/builds run only when this workflow is publishing a release.
+    # Manual dispatch can still produce preview binaries when publishing is disabled.
     if: needs.versao.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     permissions:
