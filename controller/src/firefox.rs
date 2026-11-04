@@ -116,7 +116,7 @@ fn twitch_login_command(config: &Config) -> Command {
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
-        .arg("about:blank")
+        .arg("https://www.twitch.tv/")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -170,7 +170,7 @@ fn twitch_probe_command(config: &Config) -> Command {
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
-        .arg("https://www.twitch.tv/")
+        .arg("about:blank")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
