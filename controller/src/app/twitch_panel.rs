@@ -318,14 +318,14 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(label(br, "Twitch connection", "Conexão Twitch"))
                 .size(13.0).strong().color(TEXT));
             ui.label(RichText::new(if connected {
-                label(br, "Authenticated. Twitch credentials are stored separately from PokéIdle; the miner runs without keeping a Twitch browser tab open.",
-                    "Autenticado. As credenciais da Twitch são salvas separadamente do PokéIdle; o minerador funciona sem manter uma aba da Twitch aberta.")
+                label(br, "Authenticated. Moth uses the same Twitch client identity and device-code flow as the reference channel-points miner; Firefox import remains available as a fallback.",
+                    "Autenticado. O Moth usa a mesma identidade de cliente Twitch e fluxo por código de dispositivo do minerador de referência; a importação pelo Firefox continua disponível como alternativa.")
             } else if has_game {
-                label(br, "Moth checks this account's Firefox profile directly for an existing Twitch login. A new Firefox sign-in is imported and applied to the running miner automatically; no PokéIdle restart is needed.",
-                    "O Moth verifica diretamente o perfil Firefox desta conta em busca de um login Twitch existente. Um novo login pelo Firefox é importado e aplicado ao minerador em execução automaticamente; não é necessário reiniciar o PokéIdle.")
+                label(br, "Recommended: sign in with Twitch's device code, matching the reference miner. Firefox import is available when you want to reuse an existing browser session.",
+                    "Recomendado: entre com o código de dispositivo da Twitch, igual ao minerador de referência. A importação pelo Firefox fica disponível para reutilizar uma sessão existente do navegador.")
             } else {
-                label(br, "Existing Twitch login is imported directly from this account's Firefox profile and stored in Moth's protected credential vault. Start PokéIdle afterward to receive the official streamer roster.",
-                    "Um login Twitch existente é importado diretamente do perfil Firefox desta conta e salvo no cofre protegido do Moth. Depois, inicie o PokéIdle para receber a lista oficial de streamers.")
+                label(br, "Sign in with Twitch's device code first. The token is stored in Moth's protected credential vault; start PokéIdle afterward to receive the official streamer roster.",
+                    "Primeiro entre com o código de dispositivo da Twitch. O token é salvo no cofre protegido do Moth; depois inicie o PokéIdle para receber a lista oficial de streamers.")
             }).size(11.0).color(MUTED));
             if let Some(state)=snapshot.as_ref() {
                 let pubsub_text=if state.pubsub_connected {
@@ -342,26 +342,46 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             }
             ui.add_space(5.0);
-            ui.horizontal_wrapped(|ui| {
-                let busy=matches!(login_status,crate::native_twitch_login::LoginStatus::Running);
-                if busy {
-                    ui.label(RichText::new(label(br,
-                        "Complete sign-in in Firefox…","Conclua o login no Firefox…"))
-                        .size(11.0).color(WARN));
+            let busy=matches!(login_status,crate::native_twitch_login::LoginStatus::Running);
+            if busy {
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(code)=crate::native_twitch_login::activation_code(profile) {
+                        ui.label(RichText::new(format!(
+                            "{}: {code}",
+                            label(br,"Enter at twitch.tv/activate","Digite em twitch.tv/activate")
+                        )).size(12.0).strong().color(WARN));
+                    } else {
+                        ui.label(RichText::new(label(br,
+                            "Complete the Twitch sign-in…","Conclua o login da Twitch…"))
+                            .size(11.0).color(WARN));
+                    }
                     if ui.small_button(label(br,"Cancel","Cancelar")).clicked() {
                         crate::native_twitch_login::cancel(profile);
                     }
-                } else {
-                    let has_login=snapshot.is_some() ||
-                        matches!(login_status,crate::native_twitch_login::LoginStatus::Done);
+                });
+            } else {
+                let has_login=snapshot.is_some() ||
+                    matches!(login_status,crate::native_twitch_login::LoginStatus::Done);
+                ui.horizontal_wrapped(|ui| {
                     if ui.button(label(br,
-                        if has_login {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
-                        if has_login {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
+                        if has_login {"Refresh with Twitch code"} else {"Sign in with Twitch code"},
+                        if has_login {"Renovar com código Twitch"} else {"Entrar com código Twitch"}
+                    )).on_hover_text(label(br,
+                        "Recommended. Uses Twitch's Android TV device-code flow, matching the reference channel-points miner.",
+                        "Recomendado. Usa o fluxo de código de dispositivo Android TV da Twitch, igual ao minerador de referência."
                     )).clicked() {
-                        // A cached Firefox cookie can complete before the next UI
-                        // pump observes LoginStatus::Running. Mark this user action
-                        // as a fresh generation immediately so Done is never
-                        // mistaken for the previous login completion.
+                        app.runtimes[index].twitch.login_done_seen=false;
+                        if let Err(error)=crate::native_twitch_login::start_reference(profile) {
+                            app.set_status(error,true);
+                        }
+                    }
+                    if ui.button(label(br,
+                        "Import Firefox login",
+                        "Importar login do Firefox"
+                    )).on_hover_text(label(br,
+                        "Reuses the auth-token already stored in this account's Firefox profile.",
+                        "Reutiliza o auth-token já salvo no perfil Firefox desta conta."
+                    )).clicked() {
                         app.runtimes[index].twitch.login_done_seen=false;
                         let result=if has_login {
                             crate::native_twitch_login::start_fresh(profile)
@@ -372,29 +392,26 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             app.set_status(error,true);
                         }
                     }
-                    if ui.button(label(br,
-                        "Alternative sign-in (BiDi)",
-                        "Login alternativo (BiDi)"
+                    if ui.small_button(label(br,
+                        "Firefox BiDi fallback",
+                        "Alternativa Firefox BiDi"
                     )).on_hover_text(label(br,
-                        "Uses Firefox's browser protocol to read the Twitch auth cookie instead of reading cookies.sqlite directly.",
-                        "Usa o protocolo do Firefox para ler o cookie de autenticação da Twitch em vez de acessar cookies.sqlite diretamente."
+                        "Reads the same Firefox auth cookie through the browser protocol when direct cookies.sqlite access is troublesome.",
+                        "Lê o mesmo cookie de autenticação pelo protocolo do navegador quando o acesso direto ao cookies.sqlite apresenta problemas."
                     )).clicked() {
                         app.runtimes[index].twitch.login_done_seen=false;
                         if let Err(error)=crate::native_twitch_login::start_alternative(profile) {
                             app.set_status(error,true);
                         }
                     }
-                }
-                if (snapshot.is_some() ||
-                    matches!(login_status,crate::native_twitch_login::LoginStatus::Done)) &&
-                    !busy && ui.small_button(label(br,"Forget login","Esquecer login")).clicked()
-                {
-                    app.forget_twitch_account(index);
-                }
-            });
+                    if has_login && ui.small_button(label(br,"Forget login","Esquecer login")).clicked() {
+                        app.forget_twitch_account(index);
+                    }
+                });
+            }
             ui.label(RichText::new(label(br,
-                "If the normal method has trouble reading Firefox cookies, try the BiDi alternative.",
-                "Se o método normal tiver dificuldade para ler os cookies do Firefox, tente a alternativa BiDi."
+                "Device-code sign-in gives Moth the same Twitch Client-ID/token pairing used by the reference miner. Firefox methods are compatibility fallbacks.",
+                "O login por código fornece ao Moth o mesmo par Client-ID/token usado pelo minerador de referência. Os métodos Firefox são alternativas de compatibilidade."
             )).size(10.0).color(MUTED));
                         if let crate::native_twitch_login::LoginStatus::Error(error)=&login_status {
                 ui.label(RichText::new(localize_status(error.clone())).size(10.0)
