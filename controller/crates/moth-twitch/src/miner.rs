@@ -96,7 +96,7 @@ impl MinerControl {
 
 pub struct Miner {
     snapshot: Arc<Mutex<MinerSnapshot>>,
-    events: EventBus,
+    events: Arc<Mutex<VecDeque<MinerEvent>>>,
     control: MinerControl,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
