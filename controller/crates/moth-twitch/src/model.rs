@@ -77,6 +77,8 @@ pub struct StreamerState {
     pub login: String,
     pub channel_id: Option<String>,
     pub points: Option<u64>,
+    /// A successful telemetry HTTP acknowledgement, not confirmed reward credit.
+    pub last_watch_signal: Option<Instant>,
     pub last_update: Option<Instant>,
     pub error: Option<String>,
 }
@@ -86,6 +88,7 @@ pub struct MinerSnapshot {
     pub phase: MinerPhase,
     pub desired: usize,
     pub active: usize,
+    pub watch_signals: u64,
     pub points_gained: u64,
     pub bonuses_claimed: u64,
     pub last_received: Option<Instant>,
@@ -99,6 +102,7 @@ impl Default for MinerSnapshot {
             phase: MinerPhase::Connecting,
             desired: 0,
             active: 0,
+            watch_signals: 0,
             points_gained: 0,
             bonuses_claimed: 0,
             last_received: None,
