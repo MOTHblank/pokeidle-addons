@@ -5,6 +5,7 @@
 
 use moth_twitch::{Credentials, Miner, MinerConfig, MinerControl, MinerSnapshot};
 use serde_json::Value;
+use std::sync::Arc;
 
 #[derive(Clone, Default)]
 pub struct TwitchMinerControl {
@@ -55,6 +56,12 @@ impl TwitchMinerSession {
 
     pub fn snapshot(&self) -> Option<MinerSnapshot> {
         self.miner.as_ref().map(Miner::snapshot)
+    }
+
+    pub fn set_phase_waker(&self, wake:Arc<dyn Fn() + Send + Sync>) {
+        if let Some(miner)=self.miner.as_ref() {
+            miner.set_phase_waker(wake);
+        }
     }
 
     pub fn stop(&self) {
