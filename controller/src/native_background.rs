@@ -66,7 +66,6 @@ pub fn finish_game_workers_after_window() {
     }
 }
 
-#[derive(Clone, Debug)]
 /// Minimal queue metrics for the opt-in Diagnostics page. Never clone the
 /// larger market, roster, or gameplay snapshots just to read queue lengths.
 #[derive(Clone, Debug)]
@@ -79,6 +78,7 @@ pub struct NativeDiagnosticsSnapshot {
     pub restock_pending: bool,
 }
 
+#[derive(Clone, Debug)]
 pub struct NativeSnapshot {
     pub phase: String,
     pub last_received: Option<Instant>,
