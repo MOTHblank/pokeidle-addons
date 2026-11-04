@@ -1106,7 +1106,6 @@ pub(super) fn dynamic(mut english: String) -> String {
         (" with evolution-stage input", " com dados do estágio evolutivo"),
         (" spawn slots", " espaços de spawn"),
         ("Wild: ", "Selvagem: "),
-        (" Twitch channels", " canais da Twitch"),
     ] {
         if english.contains(from) {
             english = english.replace(from, to);
