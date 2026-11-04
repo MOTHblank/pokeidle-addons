@@ -507,6 +507,9 @@ fn run(
             match gql.authenticate() {
                 Ok(viewer) => {
                     watch.set_session(gql.oauth_token(),&viewer.user_id);
+                    if let Ok(mut current)=snapshot.lock() {
+                        current.reference_client=gql.reference_client();
+                    }
                     identity = Some(viewer);
                     set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
                     push_event(&events, MinerEvent::Connected);
