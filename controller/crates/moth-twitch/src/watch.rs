@@ -101,10 +101,10 @@ fn extract_settings_url(page: &str) -> Option<String> {
         "https://static.twitchcdn.net/config/settings",
         "https://assets.twitch.tv/config/settings",
     ] {
-        let start = page.find(prefix)?;
+        let Some(start) = page.find(prefix) else { continue };
         let rest = &page[start..];
-        let end = rest.find(".js")? + 3;
-        return Some(rest[..end].to_owned());
+        let Some(end) = rest.find(".js") else { continue };
+        return Some(rest[..end + 3].to_owned());
     }
     None
 }
@@ -145,7 +145,7 @@ mod tests {
         let script = r#"x={"spade_url":"https:\/\/spade.twitch.tv\/track"};"#;
         assert_eq!(
             extract_json_string(script, "\"spade_url\":\""),
-            Some("https:\/\/spade.twitch.tv\/track")
+            Some(r#"https:\/\/spade.twitch.tv\/track"#)
         );
     }
 }
