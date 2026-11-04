@@ -558,7 +558,7 @@ impl BossManager {
                     Some("bossEntrou") => {
                         if let Some(trip) = self.trip.as_mut() {
                             if event.get("key").and_then(Value::as_str)
-                                .is_none_or(|key| key == trip.key) {
+                                .map_or(true, |key| key == trip.key) {
                                 trip.confirmed = true;
                             }
                         }
