@@ -43,12 +43,12 @@ pub(super) fn draw_hunt_switch_action(
 
 pub(super) fn request_hunt_with_feedback(
     native:&NativeSession,slug:&str,error:&mut Option<String>,
-    pending:&mut Option<String>,
+    pending:&mut Option<(String, Instant)>,
 ) {
     match native.send_command(GameCommand::Hunt(slug.to_owned())) {
         Ok(()) => {
             *error=None;
-            *pending=Some(slug.to_owned());
+            *pending=Some((slug.to_owned(), Instant::now()));
         }
         Err(message) => {
             *pending=None;
