@@ -489,10 +489,15 @@ fn poll_channels(
             match gql.streak(id) {
                 Ok(milestone) => {
                     channel.streak_length=milestone.length;
-                    channel.streak_confirmed=channel.stream_started.as_deref()
-                        .zip(milestone.achieved_at.as_deref())
-                        .and_then(|(started,achieved)|
-                            crate::streak::milestone_for_current_broadcast(started,achieved));
+                    channel.streak_confirmed=match (
+                        channel.stream_started.as_deref(),
+                        milestone.achieved_at.as_deref()
+                    ) {
+                        (Some(started),Some(achieved)) =>
+                            crate::streak::milestone_for_current_broadcast(started,achieved),
+                        (Some(_),None) if milestone.length.is_some() => Some(false),
+                        _ => None,
+                    };
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
@@ -599,6 +604,7 @@ fn update_streamer(
             state.streak_confirmed=cache.streak_confirmed;
             state.streak_length=cache.streak_length;
             state.streak_checked=cache.streak_checked;
+            state.streak_watch_attempts=cache.watch_attempts;
             state.last_update = cache.last_points_checked;
             state.error = error;
         }
@@ -610,6 +616,7 @@ fn update_streamer(
             streak_confirmed:cache.streak_confirmed,
             streak_length:cache.streak_length,
             streak_checked:cache.streak_checked,
+            streak_watch_attempts:cache.watch_attempts,
             live:false,
             last_update: cache.last_points_checked,
             error,
