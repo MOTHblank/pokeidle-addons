@@ -13,7 +13,8 @@ mod streak;
 mod watch;
 
 pub use client::{
-    random_hex, random_string, ANDROID_TV_USER_AGENT, DEFAULT_CLIENT_VERSION,
+    encode_reference_credential, random_hex, random_string, ANDROID_TV_USER_AGENT,
+    DEFAULT_CLIENT_VERSION,
     DEVICE_FLOW_SCOPES, LINUX_FIREFOX_USER_AGENT, REFERENCE_CLIENT_ID,
 };
 pub use miner::{Miner, MinerControl};
