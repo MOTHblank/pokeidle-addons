@@ -139,7 +139,13 @@ impl Default for MinerSnapshot {
 
 #[derive(Clone, Debug)]
 pub enum MinerEvent {
-    Connected,
+    Connected { login: String, reference_client: bool },
+    PubSubConnected,
+    StreamOnline { channel: String, balance: Option<u64> },
+    StreamOffline { channel: String },
+    WatchSlotStarted { channel: String, slot: usize, active: usize },
+    WatchActive { channel: String },
+    WatchSlotStopped { channel: String, reason: String, active: usize },
     PointsGained { channel: String, amount: u64, balance: u64 },
     BonusClaimed { channel: String },
     StreakConfirmed { channel: String, reason: String },
