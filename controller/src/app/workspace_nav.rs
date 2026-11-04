@@ -136,18 +136,19 @@ pub(super) fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 }
 
 fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.label(RichText::new(tr("Performance and updates"))
+    ui.label(RichText::new(tr("Background performance"))
         .size(17.0).strong().color(TEXT));
     ui.add_space(5.0);
-    ui.label(RichText::new(tr("Choose when Moth Controller uses fewer resources in the background."))
-        .size(11.0).color(MUTED));
+    ui.label(RichText::new(tr(
+        "Control how often the controller redraws its window and checks Firefox in the background."
+    )).size(11.0).color(MUTED));
     ui.add_space(12.0);
 
     let mut next = app.ui_options;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .stroke(Stroke::new(1.0, BORDER))
         .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
-            ui.label(RichText::new(tr("Background refresh"))
+            ui.label(RichText::new(tr("Refresh behavior"))
                 .size(13.0).strong().color(TEXT));
             ui.add_space(8.0);
 
@@ -156,47 +157,80 @@ fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 tr("Reduce updates when the window is not focused"),
             );
             ui.label(RichText::new(tr(
-                "When enabled, refresh this window less often while you use other apps. The game keeps running normally."
+                "Reduces window redraws and Firefox monitoring while another app is focused."
             )).size(10.0).color(MUTED));
 
-            ui.add_space(10.0);
-            ui.checkbox(
-                &mut next.reduce_updates_in_tray,
-                tr("Reduce updates when minimized to the system tray"),
-            );
-            ui.label(RichText::new(tr(
-                "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden."
-            )).size(10.0).color(MUTED));
+            // The controller only implements a system tray on Windows.
+            // Do not advertise a nonfunctional preference on Linux.
+            #[cfg(windows)]
+            {
+                ui.add_space(10.0);
+                ui.checkbox(
+                    &mut next.reduce_updates_in_tray,
+                    tr("Reduce updates when minimized to the system tray"),
+                );
+                ui.label(RichText::new(tr(
+                    "Reduces window redraws and Firefox monitoring while hidden in the system tray."
+                )).size(10.0).color(MUTED));
+            }
 
             ui.add_space(10.0);
             ui.separator();
             ui.label(RichText::new(tr(
-                "PokéIdle and Twitch keep running normally. These options only change how often the window and Firefox update."
+                "PokéIdle, Twitch and automation run independently of these display and Firefox monitoring settings."
             )).size(10.0).color(DIM));
         });
 
     if next != app.ui_options {
-        // The change is applied only after a successful disk write. If the
-        // options directory is unavailable, keep the previous live setting.
+        // Keep the active setting unchanged until the disk write succeeds.
         app.save_ui_options(next);
         ui.ctx().request_repaint();
     }
 
+    if let Some((retry, error)) = app.workspace.options_failed_save.clone() {
+        ui.add_space(12.0);
+        egui::Frame::new().fill(PANEL).corner_radius(8.0)
+            .stroke(Stroke::new(1.0, BAD.linear_multiply(0.6)))
+            .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+                ui.label(RichText::new(tr(
+                    "Could not save options. Previous settings are still active."
+                )).size(11.0).color(BAD));
+                ui.label(RichText::new(error).size(10.0).color(MUTED));
+                if ui.small_button(tr("Retry saving options")).clicked() {
+                    app.save_ui_options(retry);
+                    ui.ctx().request_repaint();
+                }
+            });
+    }
+
     ui.add_space(12.0);
-    let slowed=app.controller_in_background(ui.ctx());
+    let slowed = app.controller_in_background(ui.ctx());
     ui.label(RichText::new(format!("{}: {}",
         tr("Current refresh mode"),
-        tr(if slowed {"Reduced background updates"} else {"Normal foreground updates"})))
-        .size(11.0).color(if slowed { WARN } else { GOOD }));
-    if ui.small_button(tr("Restore default performance settings")).clicked() {
-        // Performance reset must not wipe per-account Hunt Atlas choices.
-        app.save_ui_options(UiOptions {
-            atlas_aoe_enabled: app.ui_options.atlas_aoe_enabled,
-            ..UiOptions::default()
-        });
-    }
-    ui.label(RichText::new(tr("Changes are saved automatically and restored on the next launch."))
-        .size(11.0).color(DIM));
+        tr(if slowed { "Reduced background updates" } else { "Normal updates" })))
+        .size(11.0).color(if slowed { GOOD } else { MUTED }));
+
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        if ui.small_button(tr("Restore default performance settings")).clicked() {
+            // Performance reset must not wipe per-account Hunt Atlas choices.
+            app.save_ui_options(UiOptions {
+                atlas_aoe_enabled: app.ui_options.atlas_aoe_enabled,
+                ..UiOptions::default()
+            });
+        }
+        if ui.small_button(tr("Open performance diagnostics")).clicked() {
+            // Sampling is still strictly opt-in on the focused Diagnostics page.
+            app.workspace.panel_tab = PanelTab::Diagnostics;
+            ui.ctx().request_repaint();
+        }
+    });
+    ui.label(RichText::new(tr(
+        "Diagnostics only samples while its screen is visible and focused."
+    )).size(10.0).color(DIM));
+    ui.label(RichText::new(tr(
+        "Changes take effect after a successful save and are restored on the next launch."
+    )).size(11.0).color(DIM));
 }
 
 pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
