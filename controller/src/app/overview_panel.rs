@@ -1273,7 +1273,21 @@ fn history_day_label(day:u64)->String {
 }
 #[cfg(test)]
 mod history_ui_tests {
-    use super::history_day_label;
+    use super::{history_day_label, overview_boss, overview_boss_key};
+    use crate::native_boss::BossView;
+
+    #[test]
+    fn active_boss_remains_visible_without_playable_catalog() {
+        let view = BossView {
+            state_known: true,
+            arena: Some("rayquaza".into()),
+            catalog_ready: false,
+            ..Default::default()
+        };
+        assert_eq!(overview_boss_key(&view), Some("rayquaza"));
+        assert!(overview_boss(&view).is_none(),
+            "the UI must use the authoritative arena even if metadata is missing");
+    }
     #[test]
     fn utc_epoch_date_and_leap_day_are_stable() {
         assert_eq!(history_day_label(0),"1970-01-01");
