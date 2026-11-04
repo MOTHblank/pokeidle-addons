@@ -197,8 +197,8 @@ impl DiagnosticsSampler {
         *self = Self { paused, inspect_threads, recording, ..Self::default() };
     }
 
-    /// Detailed collection is deliberately more expensive and exists only
-    /// inside a user-created RecordingSession, never for ordinary users.
+    /// Developer recordings opt into detailed thread collection by default.
+    /// Live diagnostics can enable the same probe explicitly from its checkbox.
     pub(crate) fn for_recording() -> Self {
         Self { recording: true, inspect_threads: true, ..Self::default() }
     }
