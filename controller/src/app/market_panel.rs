@@ -154,6 +154,14 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                 ui.label(tr("Maximum"));
                                 ui.add(egui::DragValue::new(&mut rule.max_potency).range(0..=5));
                             });
+                            ui.horizontal_wrapped(|ui|{
+                                ui.label(tr("Species ID (0 = any)"));
+                                ui.add(egui::DragValue::new(&mut rule.species_id).range(0..=1_000_000));
+                                ui.label(tr("Minimum level (0 = any)"));
+                                ui.add(egui::DragValue::new(&mut rule.min_level).range(0..=1_000_000));
+                                ui.label(tr("Minimum IV sum (0 = any)"));
+                                ui.add(egui::DragValue::new(&mut rule.min_iv).range(0..=192));
+                            });
                         } else {
                             ui.horizontal_wrapped(|ui|{
                                 ui.label(RichText::new(tr("Minimum listing units (0 = any)"))
