@@ -71,8 +71,8 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 }).size(10.0).color(if channel.live {GOOD}else{MUTED}));
                 if channel.watching {
                     ui.label(RichText::new(label(br,
-                        "● Selected for watching", "● Selecionado para assistir"))
-                        .size(10.0).color(GOOD));
+                        "▶ MINING SLOT", "▶ VAGA MINERANDO"))
+                        .size(10.0).strong().color(GOOD));
                 }
                 ui.label(RichText::new(if recent {
                     label(br, "● Watch signal sent", "● Sinal enviado")
@@ -241,6 +241,20 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             let confirmed=eligible.filter(|channel|channel.streak_confirmed==Some(true)).count();
             (confirmed,live)
         }).unwrap_or((0,0));
+        let mut live_names=game_state.as_ref()
+            .and_then(|state|state.twitch_official_live.clone())
+            .unwrap_or_else(||snapshot.as_ref().map(|state|
+                state.streamers.iter().filter(|channel|channel.live)
+                    .map(|channel|channel.login.clone()).collect::<Vec<_>>()
+            ).unwrap_or_default());
+        live_names.sort_unstable();
+        live_names.dedup();
+        let mut mining_names=snapshot.as_ref().map(|state|
+            state.streamers.iter().filter(|channel|channel.watching)
+                .map(|channel|channel.login.clone()).collect::<Vec<_>>()
+        ).unwrap_or_default();
+        mining_names.sort_unstable();
+        mining_names.dedup();
 
         egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, BORDER))
             .corner_radius(9.0).inner_margin(12.0).show(ui, |ui| {
@@ -250,17 +264,40 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new(status).size(10.0).color(tone));
             });
             ui.add_space(8.0);
-            ui.columns(3, |cols| {
-                metric(&mut cols[0], label(br, "Channels checked", "Canais consultados"),
-                    format!("{available}/{desired}"), if available > 0 { GOOD } else { TEXT });
-                metric(&mut cols[1], label(br, "Streaks confirmed", "Sequências confirmadas"),
+            ui.columns(4, |cols| {
+                metric(&mut cols[0], label(br, "Live now", "Ao vivo agora"),
+                    live_names.len().to_string(), if live_names.is_empty() {MUTED}else{GOOD});
+                metric(&mut cols[1], label(br, "Mining slots", "Vagas minerando"),
+                    format!("{}/2",mining_names.len()),
+                    if mining_names.len()==2 {GOOD}else if mining_names.is_empty(){MUTED}else{WARN});
+                metric(&mut cols[2], label(br, "Streaks confirmed", "Sequências confirmadas"),
                     format!("{streaks_collected}/{streaks_live}"),
                     if streaks_collected > 0 {GOOD}else{MUTED});
-                metric(&mut cols[2], label(br, "Points earned", "Pontos ganhos"),
+                metric(&mut cols[3], label(br, "Points earned", "Pontos ganhos"),
                     format!("+{gained}"), if gained > 0 { GOOD } else { TEXT });
             });
+            ui.add_space(5.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(label(br,"● LIVE NOW","● AO VIVO AGORA"))
+                    .size(10.0).strong().color(if live_names.is_empty(){MUTED}else{GOOD}));
+                ui.label(RichText::new(if live_names.is_empty() {
+                    label(br,"None detected","Nenhuma detectada").to_owned()
+                } else {
+                    live_names.join(" · ")
+                }).size(10.0).color(TEXT));
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(label(br,"▶ MINING NOW","▶ MINERANDO AGORA"))
+                    .size(10.0).strong().color(if mining_names.is_empty(){MUTED}else{GOOD}));
+                ui.label(RichText::new(if mining_names.is_empty() {
+                    label(br,"No watch slot selected yet","Nenhuma vaga selecionada ainda").to_owned()
+                } else {
+                    mining_names.join(" · ")
+                }).size(10.0).strong().color(if mining_names.is_empty(){MUTED}else{TEXT}));
+            });
             ui.label(RichText::new(format!(
-                "{}: {claimed} · {}: {watch_signals}",
+                "{}: {available}/{desired} · {}: {claimed} · {}: {watch_signals}",
+                label(br, "Channels checked", "Canais consultados"),
                 label(br, "Bonus chests claimed", "Baús de bônus coletados"),
                 label(br, "Watch signals acknowledged", "Sinais de visualização aceitos")
             )).size(10.0).color(MUTED));
@@ -424,7 +461,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
             let mut rows=channels.values().collect::<Vec<_>>();
             rows.sort_by(|a,b| {
-                b.live.cmp(&a.live)
+                b.watching.cmp(&a.watching)
+                    .then_with(||b.live.cmp(&a.live))
                     .then_with(||favorites.contains(&b.login).cmp(&favorites.contains(&a.login)))
                     .then_with(||a.login.cmp(&b.login))
             });

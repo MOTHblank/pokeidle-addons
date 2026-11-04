@@ -155,16 +155,24 @@ impl TwitchGql {
             .map_err(|_| GqlError::Protocol("Twitch returned invalid JSON".into()))?;
         if let Some(errors) = value.get("errors").and_then(Value::as_array) {
             if !errors.is_empty() {
-                let auth = errors.iter().filter_map(|error| error.get("message"))
-                    .filter_map(Value::as_str)
-                    .any(|message| {
-                        let lower = message.to_ascii_lowercase();
-                        lower.contains("unauthorized") || lower.contains("auth")
-                    });
+                let messages=errors.iter().filter_map(|error| error.get("message"))
+                    .filter_map(Value::as_str).collect::<Vec<_>>();
+                let auth = messages.iter().any(|message| {
+                    let lower = message.to_ascii_lowercase();
+                    lower.contains("unauthorized") || lower.contains("auth")
+                });
                 return Err(if auth {
                     GqlError::Auth
                 } else {
-                    GqlError::Protocol("Twitch rejected the GraphQL request".into())
+                    let detail=messages.first().map(|message| {
+                        let clean=message.chars()
+                            .filter(|ch|!ch.is_control())
+                            .take(180).collect::<String>();
+                        if clean.is_empty() {"no error detail".to_owned()} else {clean}
+                    }).unwrap_or_else(||"no error detail".to_owned());
+                    GqlError::Protocol(format!(
+                        "Twitch rejected GraphQL {operation}: {detail}"
+                    ))
                 });
             }
         }
@@ -302,6 +310,14 @@ impl TwitchGql {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn graphql_rejection_message_identifies_operation() {
+        let message=format!("Twitch rejected GraphQL {}: {}",
+            "ChannelPointsContext","PersistedQueryNotFound");
+        assert!(message.contains("ChannelPointsContext"));
+        assert!(message.contains("PersistedQueryNotFound"));
+    }
+
     #[test]
     fn parses_reward_list_milestone_and_absent_streak() {
         let result=json!({"data":{"channel":{"self":{"watchStreakMilestone":{
