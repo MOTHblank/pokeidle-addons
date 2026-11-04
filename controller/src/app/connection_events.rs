@@ -136,7 +136,7 @@ impl ControllerApp {
                     let updater=native.capture_settings_updater();
                     // Keep restock_dirty set until a successful, current
                     // acknowledgement of this exact selection arrives.
-                    let _=std::thread::Builder::new()
+                    std::thread::Builder::new()
                         .name(format!("moth-capture-save-{}",profile.name()))
                         .spawn(move || {
                             let result=std::panic::catch_unwind(
@@ -149,7 +149,8 @@ impl ControllerApp {
                                 index,generation,request_id,config:next,
                                 origin:CaptureSaveOrigin::Restock,result
                             });
-                        });
+                        })
+                        .expect("could not start restock capture-save worker");
                 }
             }
         }
@@ -381,7 +382,7 @@ impl ControllerApp {
             let worker = std::thread::Builder::new()
                 .name(format!("moth-browser-close-{}", profile.name()))
                 .spawn(move || {
-                let mut result = if let Some(child) = child.as_mut() {
+                    let mut result = if let Some(child) = child.as_mut() {
                     firefox::stop_child(child, monitor.as_ref())
                 } else {
                     Ok(())
