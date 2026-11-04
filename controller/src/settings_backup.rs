@@ -28,7 +28,8 @@ impl SettingsBackup {
             "application": self.app.to_value(),
             "controller": self.ui.to_value(),
             "accounts": self.accounts.iter().enumerate().map(|(slot, account)| {
-                json!({"slot": slot, "name": account.name, "enabled": account.enabled})
+                json!({"slot": slot, "name": account.name, "enabled": account.enabled,
+                    "autoPvp": account.auto_pvp})
             }).collect::<Vec<_>>(),
         })
     }
@@ -58,7 +59,8 @@ impl SettingsBackup {
                 .ok_or("Invalid account name in backup")?;
             let enabled = entry.get("enabled").and_then(Value::as_bool)
                 .ok_or("Invalid account enabled state in backup")?;
-            accounts[slot] = AccountConfig { name: name.to_owned(), enabled };
+            let auto_pvp = entry.get("autoPvp").and_then(Value::as_bool);
+            accounts[slot] = AccountConfig { name: name.to_owned(), enabled, auto_pvp };
             slots_seen[slot] = true;
         }
         if slots_seen.iter().any(|seen| !seen) { return Err("Missing account slot in backup".into()); }
