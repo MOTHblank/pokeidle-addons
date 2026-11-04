@@ -337,7 +337,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             });
             if let crate::native_twitch_login::LoginStatus::Error(error)=&login_status {
-                ui.label(RichText::new(error).size(10.0)
+                ui.label(RichText::new(localize_status(error.clone())).size(10.0)
                     .color(if error=="Twitch login cancelled"{MUTED}else{WARN}));
             }
             if let Some(game_state) = game_state.as_ref() {
