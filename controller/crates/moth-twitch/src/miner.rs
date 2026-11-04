@@ -178,6 +178,9 @@ struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
     last_watch: Option<Instant>,
+    last_watch_attempt: Option<Instant>,
+    last_points_attempt: Option<Instant>,
+    last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
     broadcast_id: Option<String>,
     stream_started: Option<String>,
@@ -341,11 +344,33 @@ fn poll_channels(
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
     phase_wake: &PhaseWake,
 ) -> bool {
-    let mut active = 0usize;
     let mut first_error: Option<GqlError> = None;
     let mut auth_failed = false;
-    for login in channels {
+    // Balance checks are paced separately from the two watch slots.
+    let mut ordered=channels.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a,b| {
+        let live_a=live.binary_search(a).is_ok();
+        let live_b=live.binary_search(b).is_ok();
+        live_b.cmp(&live_a)
+            .then_with(||cache.get(*a).and_then(|c|c.last_points_attempt)
+                .cmp(&cache.get(*b).and_then(|c|c.last_points_attempt)))
+            .then_with(||a.cmp(b))
+    });
+    let mut checked_this_tick=0usize;
+    for login in ordered {
         let channel = cache.entry(login.clone()).or_default();
+        let interval=if live.binary_search(login).is_ok() {
+            Duration::from_secs(45)
+        } else {
+            Duration::from_secs(180)
+        };
+        let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
+        if !due || checked_this_tick>=8 {
+            update_streamer(snapshot,login,channel,None);
+            continue;
+        }
+        checked_this_tick+=1;
+        channel.last_points_attempt=Some(Instant::now());
         if channel.channel_id.is_none() {
             match gql.lookup_channel_id(login) {
                 Ok(id) => channel.channel_id = Some(id),
@@ -362,7 +387,7 @@ fn poll_channels(
 
         match gql.points_context(login) {
             Ok(context) => {
-                active += 1;
+                channel.last_points_checked=Some(Instant::now());
                 let prior = channel.balance.replace(context.balance);
                 if let Some(gained) = prior.and_then(|old| context.balance.checked_sub(old))
                     .filter(|gain| *gain > 0)
@@ -423,6 +448,9 @@ fn poll_channels(
         }
     }
 
+    let active=cache.values().filter(|channel|channel.last_points_checked
+        .is_some_and(|at|at.elapsed()<Duration::from_secs(300))
+        && channel.balance.is_some()).count();
     // Inspect every live official stream on a bounded cadence. A fresh
     // broadcast always resets prior streak evidence and watch attempts.
     for login in live {
@@ -500,11 +528,12 @@ fn poll_channels(
     for login in candidates {
         if watch_slots==0 {break;}
         let channel=&mut cache[login];
-        if channel.last_watch.is_some_and(|at|
+        if channel.last_watch_attempt.is_some_and(|at|
             at.elapsed()<Duration::from_secs(55)) {continue;}
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
         let Some(broadcast_id)=channel.broadcast_id.as_deref() else {continue};
         watch_slots-=1;
+        channel.last_watch_attempt=Some(Instant::now());
         match watch.send_minute_watched(
             login,channel_id,broadcast_id,&viewer.user_id
         ) {
@@ -517,9 +546,7 @@ fn poll_channels(
             }
             Err(error)=>{
                 push_event(events,MinerEvent::Warning(format!("{login}: {error}")));
-                // A failing endpoint should not hammer this channel every
-                // thirty seconds; other streams can still use the slot.
-                channel.last_watch=Some(Instant::now());
+                // A failed POST is not an acknowledged watch event.
             }
         }
         update_streamer(snapshot,login,channel,None);
@@ -572,7 +599,7 @@ fn update_streamer(
             state.streak_confirmed=cache.streak_confirmed;
             state.streak_length=cache.streak_length;
             state.streak_checked=cache.streak_checked;
-            state.last_update = Some(Instant::now());
+            state.last_update = cache.last_points_checked;
             state.error = error;
         }
         None => current.streamers.push(StreamerState {
@@ -584,7 +611,7 @@ fn update_streamer(
             streak_length:cache.streak_length,
             streak_checked:cache.streak_checked,
             live:false,
-            last_update: Some(Instant::now()),
+            last_update: cache.last_points_checked,
             error,
         }),
     }
