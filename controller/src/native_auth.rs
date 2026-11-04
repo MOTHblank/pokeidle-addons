@@ -311,25 +311,39 @@ pub fn cache_twitch_profile_probe(
     token: Option<&str>,
     generation: &std::sync::atomic::AtomicU64,
     expected: u64,
-) -> Result<Value, String> {
-    let _guard = preference_write(profile).lock()
-        .map_err(|_| "Native settings writer unavailable".to_owned())?;
+) -> (Value, Option<String>) {
+    let fallback = with_twitch_profile_probe(cached, token);
+    let _guard = match preference_write(profile).lock() {
+        Ok(guard) => guard,
+        Err(_) => return (fallback, Some("Native settings writer unavailable".into())),
+    };
     if !capture_generation_is_current(generation, expected) {
-        return Err("Twitch login detection canceled: launch changed".into());
+        return (cached.clone(), Some("Twitch login detection canceled: launch changed".into()));
     }
-    let current = load(profile)?.unwrap_or_else(|| cached.clone());
+    let (current, read_warning) = match load(profile) {
+        Ok(Some(current)) => (current, None),
+        Ok(None) => (cached.clone(), None),
+        Err(error) => (cached.clone(), Some(error)),
+    };
     let updated = with_twitch_profile_probe(&current, token);
     if !capture_generation_is_current(generation, expected) {
-        return Err("Twitch login detection canceled: launch changed".into());
+        return (cached.clone(), Some("Twitch login detection canceled: launch changed".into()));
     }
-    save(profile, &updated)?;
-    if !capture_generation_is_current(generation, expected) {
-        save(profile, &current).map_err(|error| format!(
-            "Canceled Twitch login detection rollback failed: {error}"
-        ))?;
-        return Err("Twitch login detection canceled: launch changed".into());
+    let saved = save(profile, &updated);
+    if saved.is_ok() && !capture_generation_is_current(generation, expected) {
+        let warning = match save(profile, &current) {
+            Ok(()) => "Twitch login detection canceled: launch changed".to_owned(),
+            Err(error) => format!(
+                "Canceled Twitch login detection rollback failed: {error}"
+            ),
+        };
+        return (cached.clone(), Some(warning));
     }
-    Ok(updated)
+    let warning = match saved {
+        Ok(()) => read_warning,
+        Err(error) => Some(error),
+    };
+    (updated, warning)
 }
 
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
