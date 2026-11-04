@@ -538,33 +538,56 @@ impl HuntIntel {
         }
     }
     fn num(record: &Value, key: &str) -> Option<u64> { record.get(key).and_then(Value::as_u64) }
-    /// Only full waves count as geometry. Spawn slots, not active wild encounters,
-    /// provide movement distances. No monitoring state or hunt counters are mutated.
-    fn finish_geo_wave(&mut self, now:Instant) {
-        let finished=self.geo_wave.as_ref().is_some_and(|(_,since,_)|
-            now.saturating_duration_since(*since)>=Duration::from_secs(4));
-        if !finished {return}
-        let Some((slug,_,mut distances))=self.geo_wave.take() else{return};
+    /// Record only sufficiently complete spawn layouts. Full campo.init packets
+    /// are authoritative even for high-level hunts, where per-slot respawns
+    /// must NOT be mistaken for a new full wave.
+    fn record_geo_distances(&mut self, slug:&str, mut distances:Vec<f64>) {
         let Some(hunt)=self.view.hunts.iter().find(|h|h.slug==slug) else{return};
-        if hunt.level>150 {return} // Per-slot replacement has no full wave.
         let expected=if hunt.total_spawns>0 {hunt.total_spawns as f64}
             else {hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>().min(16.0)};
         let threshold=(expected*0.8).ceil().max(6.0);
+        distances.retain(|d|d.is_finite()&&*d>=0.0&&*d<=300.0);
         if (distances.len() as f64)<threshold {return}
-        distances.retain(|d|d.is_finite()&&*d>=0.0);
-        if distances.is_empty(){return}
         distances.sort_by(f64::total_cmp);
-        let histories=self.geo_samples.entry(slug.clone()).or_default();
+        let histories=self.geo_samples.entry(slug.to_owned()).or_default();
         histories.push(distances);
         if histories.len()>6 {histories.remove(0);}
         let all=histories.iter().flat_map(|v|v.iter().copied()).collect();
         let mut next=(*self.view.geo_distances).clone();
-        next.insert(slug.clone(),all);
+        next.insert(slug.to_owned(),all);
         self.view.geo_distances=Arc::new(next);
         let mut revisions=(*self.view.geo_revisions).clone();
-        let revision=revisions.entry(slug).or_default();
+        let revision=revisions.entry(slug.to_owned()).or_default();
         *revision=revision.wrapping_add(1);
         self.view.geo_revisions=Arc::new(revisions);
+    }
+    fn record_initial_geometry(&mut self, frame:&Value) {
+        let Some(slug)=frame.get("slug").and_then(Value::as_str) else{return};
+        let Some(hero)=frame.get("heroi") else{return};
+        let (Some(hc),Some(hr))=(hero.get("c").and_then(Value::as_f64),
+            hero.get("r").and_then(Value::as_f64)) else{return};
+        let Some(mobs)=frame.get("mobs").and_then(Value::as_array) else{return};
+        let distances=mobs.iter().filter(|mob|Self::is_field_wild(mob)
+            &&mob.get("x").and_then(Value::as_bool)!=Some(true))
+            .filter_map(|mob|{
+                let c=mob.get("c")?.as_f64()?;
+                let r=mob.get("r")?.as_f64()?;
+                let d=(c-hc).hypot(r-hr);
+                (d.is_finite()&&d<=300.0).then_some((d*10.0).round()/10.0)
+            }).collect::<Vec<_>>();
+        self.record_geo_distances(slug,distances);
+    }
+    /// Only full delta waves count as geometry. Spawn slots, not active wild
+    /// encounters, provide movement distances. No monitoring state or hunt
+    /// counters are mutated.
+    fn finish_geo_wave(&mut self, now:Instant) {
+        let finished=self.geo_wave.as_ref().is_some_and(|(_,since,_)|
+            now.saturating_duration_since(*since)>=Duration::from_secs(4));
+        if !finished {return}
+        let Some((slug,_,distances))=self.geo_wave.take() else{return};
+        let Some(hunt)=self.view.hunts.iter().find(|h|h.slug==slug) else{return};
+        if hunt.level>150 {return} // Per-slot replacement has no full wave.
+        self.record_geo_distances(&slug,distances);
     }
     fn field_geo_init(&mut self, frame:&Value) {
         self.geo_wave=None;
@@ -1065,6 +1088,10 @@ impl HuntIntel {
                 if let Some(timestamp) = Self::num(&frame, "ts") {
                     self.view.field_init_timestamp = Some(timestamp);
                 }
+                // Upstream's grouped layout can be sampled directly from a
+                // complete initial map, including high-level hunts which only
+                // send individual slot replacements after spawning.
+                self.record_initial_geometry(frame);
             }
             Some("campo") => self.field_geo_delta(frame,now),
             Some("batalha") => {
@@ -1353,6 +1380,30 @@ mod tests {
         assert_eq!(intel.view.geo_revisions["field-a"],1);
         assert_eq!(intel.view.session.kills,0);
         assert_eq!(intel.view.measurements.kills,0);
+    }
+    #[test]
+    fn high_level_field_init_learns_grouped_spawns_without_waiting_for_respawn() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"welcome",
+            "hunts":[{"slug":"new-region","name":"New Region","nivel":20000,
+                "totalSpawns":8,"especies":[{"pokeId":6,"pontos":8}]}]
+        }),now);
+        let mut mobs=(0..8).map(|i|json!({
+            "s":i+1,"c":10+i,"r":15,"x":false
+        })).collect::<Vec<_>>();
+        mobs.push(json!({"s":100,"c":150,"r":200,"tr":true}));
+        intel.ingest_value(&json!({"t":"campo.init",
+            "slug":"new-region","heroi":{"c":10,"r":10},"mobs":mobs}),now);
+        assert_eq!(intel.view.geo_distances["new-region"].len(),8);
+        assert_eq!(intel.view.geo_revisions["new-region"],1);
+        assert_eq!(intel.view.session.kills,0);
+        // An incomplete re-entry cannot replace the accepted full layout.
+        intel.ingest_value(&json!({"t":"campo.init",
+            "slug":"new-region","heroi":{"c":10,"r":10},
+            "mobs":[{"s":1,"c":11,"r":15,"x":false}]}),now);
+        assert_eq!(intel.view.geo_revisions["new-region"],1);
+        assert_eq!(intel.view.geo_distances["new-region"].len(),8);
     }
     #[test]
     fn partial_state_does_not_cancel_active_shop_boost() {
