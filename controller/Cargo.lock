@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "moth-controller"
-version = "0.1.14"
+version = "0.2.0"
 dependencies = [
  "moth-twitch",
  "eframe",
