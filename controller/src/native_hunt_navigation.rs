@@ -9,6 +9,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SELECT_RETRY: Duration = Duration::from_millis(350);
 const STUCK_FOR: Duration = Duration::from_secs(14);
 const FORCE_GIVE_UP_AFTER: Duration = Duration::from_secs(60);
+const GIVE_UP_CONFIRM_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_GIVE_UP_ATTEMPTS: u8 = 3;
+pub const GIVE_UP_FAILED_NOTICE: &str =
+    "Pokémon Center was not confirmed after three Give Up attempts. Navigation is paused; check game state or cancel the destination.";
 
 pub const BLOCKED_NOTICE: &str =
     "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, give up once to reach the Pokémon Center and continue the requested destination.";
@@ -98,7 +102,9 @@ pub struct HuntNavigator {
     target: Option<Destination>,
     started: Option<Instant>,
     last_select: Option<Instant>,
-    give_up_sent: bool,
+    give_up_sent_at: Option<Instant>,
+    give_up_attempts: u8,
+    give_up_failed: bool,
 }
 impl HuntNavigator {
     pub fn select(&mut self, slug: String, now: Instant) {
@@ -107,7 +113,9 @@ impl HuntNavigator {
         self.target = Some(destination);
         self.started = Some(now);
         self.last_select = None;
-        self.give_up_sent = false;
+        self.give_up_sent_at = None;
+        self.give_up_attempts = 0;
+        self.give_up_failed = false;
     }
     /// Boss entry is a destination change just like Hunt Atlas. Keeping it
     /// inside this navigator gives it the same gate, retry cadence and blocked
@@ -118,7 +126,9 @@ impl HuntNavigator {
         self.target = Some(destination);
         self.started = Some(now);
         self.last_select = None;
-        self.give_up_sent = false;
+        self.give_up_sent_at = None;
+        self.give_up_attempts = 0;
+        self.give_up_failed = false;
     }
     pub fn boss_pending(&self) -> bool {
         matches!(self.target.as_ref(), Some(Destination::Boss { .. }))
@@ -134,7 +144,9 @@ impl HuntNavigator {
         self.target = Some(Destination::Center);
         self.started = Some(now);
         self.last_select = None;
-        self.give_up_sent = false;
+        self.give_up_sent_at = None;
+        self.give_up_attempts = 0;
+        self.give_up_failed = false;
     }
     pub fn center_pending(&self) -> bool {
         self.target == Some(Destination::Center)
@@ -143,11 +155,15 @@ impl HuntNavigator {
     pub fn center_command_sent(&self) -> bool {
         self.center_pending() && self.last_select.is_some()
     }
+    pub fn give_up_failed(&self) -> bool { self.give_up_failed }
+    pub fn give_up_pending(&self) -> bool { self.give_up_sent_at.is_some() }
     pub fn cancel(&mut self) {
         self.target = None;
         self.started = None;
         self.last_select = None;
-        self.give_up_sent = false;
+        self.give_up_sent_at = None;
+        self.give_up_attempts = 0;
+        self.give_up_failed = false;
     }
     pub fn observe(&mut self, frame: &Value, view: &HuntView, now: Instant) {
         self.gate.observe(frame, now);
@@ -204,10 +220,23 @@ impl HuntNavigator {
         }
 
         let switch_open = self.switch_open(view, now);
-        if !view.in_center && !switch_open && !self.give_up_sent &&
-            self.started.is_some_and(|at|
-                now.saturating_duration_since(at) >= FORCE_GIVE_UP_AFTER) {
-            self.give_up_sent = true;
+        if self.give_up_failed { return None; }
+        // The one-minute consent is based on an unfulfilled destination,
+        // not a speculative local combat gate. A server may reject a Center
+        // command even while our gate predicts an opening.
+        if !view.in_center && self.started.is_some_and(|at|
+            now.saturating_duration_since(at) >= FORCE_GIVE_UP_AFTER) {
+            if self.give_up_sent_at.is_some_and(|sent|
+                now.saturating_duration_since(sent) < GIVE_UP_CONFIRM_TIMEOUT) {
+                return None;
+            }
+            if self.give_up_attempts >= MAX_GIVE_UP_ATTEMPTS {
+                self.give_up_failed = true;
+                self.give_up_sent_at = None;
+                return None;
+            }
+            self.give_up_attempts += 1;
+            self.give_up_sent_at = Some(now);
             self.last_select = Some(now);
             return Some(GameCommand::GiveUp);
         }
@@ -369,12 +398,53 @@ mod tests {
         nav.observe(&json!({"t":"batalha","ev":[{"k":"ataque"}]}), &state, at_minute);
         assert_eq!(kind(nav.next_action(&state, at_minute)), "giveup");
         assert_eq!(kind(nav.next_action(&state, at_minute + Duration::from_millis(350))), "none",
-            "surrender is sent once while waiting for the Center confirmation");
+            "do not repeat surrender before its confirmation timeout");
         let mut center = state.clone();
         center.in_center = true;
         nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}),
             &center, at_minute + Duration::from_secs(1));
         assert_eq!(kind(nav.next_action(&center, at_minute + Duration::from_secs(1))), "hunt");
+    }
+    #[test]
+    fn unconfirmed_center_even_with_open_local_gate_triggers_give_up() {
+        let at = Instant::now();
+        let mut nav = HuntNavigator::default();
+        let state = view();
+        nav.center(at);
+        assert_eq!(kind(nav.next_action(&state, at)), "center");
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(60))), "giveup");
+    }
+    #[test]
+    fn ignored_give_up_retries_bounded_then_reports_failure() {
+        let at = Instant::now();
+        let mut nav = HuntNavigator::default();
+        let state = view();
+        nav.center(at);
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(60))), "giveup");
+        assert!(nav.give_up_pending());
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(67))), "none");
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(68))), "giveup");
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(76))), "giveup");
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(84))), "none");
+        assert!(nav.give_up_failed());
+        assert!(!nav.give_up_pending());
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(100))), "none");
+        nav.cancel();
+        assert!(!nav.give_up_failed());
+    }
+    #[test]
+    fn forced_give_up_never_sends_followup_before_center_confirmation() {
+        let at = Instant::now();
+        let mut nav = HuntNavigator::default();
+        let state = view();
+        nav.select("new".into(), at);
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(60))), "giveup");
+        assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(61))), "none");
+        let mut center = state.clone();
+        center.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}),
+            &center, at + Duration::from_secs(62));
+        assert_eq!(kind(nav.next_action(&center, at + Duration::from_secs(62))), "hunt");
     }
     #[test]
     fn center_and_hunt_requests_replace_each_other() {
