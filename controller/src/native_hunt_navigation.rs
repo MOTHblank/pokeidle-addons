@@ -133,6 +133,14 @@ impl HuntNavigator {
         };
         if arrived { self.cancel(); }
     }
+    /// The same server-confirmed opening used by Hunt Atlas destination
+    /// changes. Boss entry borrows this gate instead of detouring through
+    /// the Pokémon Center.
+    pub fn switch_open(&self, view: &HuntView, now: Instant) -> bool {
+        if view.in_center || view.hunt_slug.is_none() { return true; }
+        let (entry, combat) = self.gate.remaining(now);
+        entry == 0 && combat == 0
+    }
     /// Warn only if attacks are continuously preventing travel after the
     /// entry lock is already clear. Never turn this warning into Give Up.
     pub fn blocked(&self, view: &HuntView, now: Instant) -> bool {
@@ -167,10 +175,7 @@ impl HuntNavigator {
             Destination::Center => {}
         }
 
-        if !view.in_center && view.hunt_slug.is_some() {
-            let (entry, combat) = self.gate.remaining(now);
-            if entry > 0 || combat > 0 { return None; }
-        }
+        if !self.switch_open(view, now) { return None; }
         if self.last_select.is_some_and(|sent|
             now.saturating_duration_since(sent) < SELECT_RETRY) {
             return None;
@@ -235,6 +240,18 @@ mod tests {
         assert_eq!(kind(nav.next_action(&state, at + Duration::from_millis(3000))), "hunt");
         assert_eq!(kind(nav.next_action(&state, at + Duration::from_millis(3100))), "none");
         assert_eq!(kind(nav.next_action(&state, at + Duration::from_millis(3350))), "hunt");
+    }
+    #[test]
+    fn shared_switch_gate_matches_hunt_navigation_timing() {
+        let at = Instant::now();
+        let mut nav = HuntNavigator::default();
+        let state = view();
+        nav.observe(&json!({"t":"estado","estado":{
+            "servidorAgora":1000000,"centroLivreEm":1003000,
+            "trocaHuntLivreEm":1000000}}), &state, at);
+        assert!(!nav.switch_open(&state, at));
+        assert!(!nav.switch_open(&state, at + Duration::from_millis(2999)));
+        assert!(nav.switch_open(&state, at + Duration::from_millis(3000)));
     }
     #[test]
     fn normal_center_uses_same_gate_and_retry_as_hunt() {
