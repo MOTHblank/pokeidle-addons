@@ -253,6 +253,12 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                         app.set_status(error,true);
                     }
                 }
+                if ui.button(tr("Twitch alternative sign-in (BiDi)")).clicked() {
+                    app.runtimes[index].twitch.login_done_seen=false;
+                    if let Err(error)=crate::native_twitch_login::start_alternative(profile) {
+                        app.set_status(error,true);
+                    }
+                }
             });
             ui.label(RichText::new(tr(
                 "Twitch mining is optional and never blocks PokéIdle startup. Existing Firefox login is imported automatically; a new Twitch login is detected and its temporary Firefox window closes automatically."

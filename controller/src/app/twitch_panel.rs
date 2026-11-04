@@ -337,6 +337,18 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             app.set_status(error,true);
                         }
                     }
+                    if ui.button(label(br,
+                        "Alternative sign-in (BiDi)",
+                        "Login alternativo (BiDi)"
+                    )).on_hover_text(label(br,
+                        "Uses Firefox's browser protocol to read the Twitch auth cookie instead of reading cookies.sqlite directly.",
+                        "Usa o protocolo do Firefox para ler o cookie de autenticação da Twitch em vez de acessar cookies.sqlite diretamente."
+                    )).clicked() {
+                        app.runtimes[index].twitch.login_done_seen=false;
+                        if let Err(error)=crate::native_twitch_login::start_alternative(profile) {
+                            app.set_status(error,true);
+                        }
+                    }
                 }
                 if (snapshot.is_some() ||
                     matches!(login_status,crate::native_twitch_login::LoginStatus::Done)) &&
@@ -345,7 +357,11 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     app.forget_twitch_account(index);
                 }
             });
-            if let crate::native_twitch_login::LoginStatus::Error(error)=&login_status {
+            ui.label(RichText::new(label(br,
+                "If the normal method has trouble reading Firefox cookies, try the BiDi alternative.",
+                "Se o método normal tiver dificuldade para ler os cookies do Firefox, tente a alternativa BiDi."
+            )).size(10.0).color(MUTED));
+                        if let crate::native_twitch_login::LoginStatus::Error(error)=&login_status {
                 ui.label(RichText::new(localize_status(error.clone())).size(10.0)
                     .color(if error=="Twitch login cancelled"{MUTED}else{WARN}));
             }

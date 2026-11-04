@@ -1,7 +1,7 @@
-//! Twitch login through an ordinary, uninstrumented Firefox window.
-//! No Remote Agent, BiDi, WebDriver, injected scripts or page automation.
-//! After Firefox closes, import only this profile's own Twitch session cookie
-//! from its local cookie database and store it in the OS credential vault.
+//! Twitch login normally uses an ordinary, uninstrumented Firefox window and
+//! reads this profile's own Twitch auth-token from cookies.sqlite. A separate
+//! user-selected fallback opens Firefox with BiDi and asks Firefox itself for
+//! the same first-party cookie when direct SQLite access is troublesome.
 use crate::config::{Config, GameProfile};
 use crate::{firefox, native_auth};
 use std::ffi::{CString, c_char, c_int, c_void};
@@ -319,15 +319,25 @@ pub fn reset(profile: GameProfile) {
         }
     }
 }
+#[derive(Clone,Copy)]
+enum LoginMethod {
+    Primary { fresh:bool },
+    AlternativeBidi,
+}
+
 pub fn start(profile: GameProfile) -> Result<(), String> {
-    start_mode(profile,false)
+    start_mode(profile,LoginMethod::Primary {fresh:false})
 }
 
 pub fn start_fresh(profile: GameProfile) -> Result<(), String> {
-    start_mode(profile,true)
+    start_mode(profile,LoginMethod::Primary {fresh:true})
 }
 
-fn start_mode(profile: GameProfile, fresh: bool) -> Result<(), String> {
+pub fn start_alternative(profile:GameProfile)->Result<(),String> {
+    start_mode(profile,LoginMethod::AlternativeBidi)
+}
+
+fn start_mode(profile: GameProfile, method: LoginMethod) -> Result<(), String> {
     let (cancelled,revision) = {
         let mut jobs = jobs().lock()
             .map_err(|_| "Twitch login state unavailable".to_owned())?;
@@ -345,7 +355,12 @@ fn start_mode(profile: GameProfile, fresh: bool) -> Result<(), String> {
     let spawned = thread::Builder::new()
         .name(format!("moth-twitch-login-{}", profile.name()))
         .spawn(move || {
-            let result = login(profile, &cancelled, fresh, revision);
+            let result = match method {
+                LoginMethod::Primary {fresh} =>
+                    login(profile,&cancelled,fresh,revision),
+                LoginMethod::AlternativeBidi =>
+                    login_alternative_bidi(profile,&cancelled,revision),
+            };
             if let Ok(mut jobs) = jobs().lock() {
                 match result {
                     Ok(token) => {
@@ -388,6 +403,56 @@ fn save_current_token(
         profile,token,||credential_revision_is_current(profile,revision))?;
     if committed {Ok(())} else {Err("Twitch login cancelled".into())}
 }
+fn login_alternative_bidi(
+    profile:GameProfile,
+    cancelled:&AtomicBool,
+    revision:u64,
+)->Result<String,String> {
+    let config=twitch_config(profile)?;
+    let current=||credential_revision_is_current(profile,revision);
+    if !current(){return Err("Twitch login cancelled".into());}
+    if firefox::find_profile_process(&config)?.is_some() {
+        return Err(
+            "This account's Firefox profile is already open. Close it before using alternative Twitch sign-in.".into()
+        );
+    }
+
+    // A saved token acts only as a baseline: if Firefox exposes exactly the
+    // same credential, keep the browser open so the user can complete a real
+    // re-login. With no saved token, an already-valid Firefox session can be
+    // imported immediately.
+    let baseline=native_auth::load_twitch_token(profile).ok().flatten();
+    if !current(){return Err("Twitch login cancelled".into());}
+
+    let mut browser=firefox::launch_twitch_login_bidi(&config)?;
+    let token=match crate::monitor::wait_for_twitch_auth_token(
+        config.remote_debug_port,
+        baseline.as_deref(),
+        cancelled,
+        Duration::from_secs(10*60),
+    ) {
+        Ok(token)=>token,
+        Err(error)=>{
+            let _=firefox::stop_child(&mut browser,None);
+            return Err(error);
+        }
+    };
+
+    if cancelled.load(Ordering::Relaxed) || !current() {
+        let _=firefox::stop_child(&mut browser,None);
+        return Err("Twitch login cancelled".into());
+    }
+    let saved=save_current_token(profile,&token,revision);
+    let closed=firefox::stop_child(&mut browser,None);
+    saved?;
+    if let Err(error)=closed {
+        return Err(format!(
+            "Alternative Twitch login was imported, but its Firefox window could not close: {error}"
+        ));
+    }
+    Ok(token)
+}
+
 fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64) -> Result<String, String> {
     let config = twitch_config(profile)?;
     let current=||credential_revision_is_current(profile,revision);

@@ -1191,6 +1191,113 @@ fn reload_native_context_once(session: &mut BrowserSession, id: &str) -> Result<
     Err("Native authentication hook installed; reloaded this tab once to capture its WebSocket".into())
 }
 
+fn read_twitch_auth_token(session:&mut BrowserSession)->Result<Option<String>,String> {
+    let id=session.next_id;
+    session.next_id+=1;
+    let response=send_and_wait(&mut session.socket,id,json!({
+        "id":id,
+        "method":"storage.getCookies",
+        "params":{}
+    }))?;
+    let cookies=response.get("result")
+        .and_then(|result|result.get("cookies"))
+        .and_then(Value::as_array)
+        .ok_or_else(||"Firefox did not return its cookie store".to_owned())?;
+    for cookie in cookies {
+        let name=cookie.get("name").and_then(Value::as_str).unwrap_or_default();
+        let domain=cookie.get("domain").and_then(Value::as_str).unwrap_or_default()
+            .trim_start_matches('.').to_ascii_lowercase();
+        if name!="auth-token" || (domain!="twitch.tv" && !domain.ends_with(".twitch.tv")) {
+            continue;
+        }
+        let Some(encoded)=cookie.get("value") else {continue};
+        let token=if encoded.get("type").and_then(Value::as_str)==Some("string") {
+            encoded.get("value").and_then(Value::as_str)
+        } else {
+            encoded.as_str()
+        };
+        let Some(token)=token.map(str::trim) else {continue};
+        if token.is_empty() || token.len()>2048 ||
+            token.bytes().any(|byte|byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            continue;
+        }
+        return Ok(Some(token.to_owned()));
+    }
+    Ok(None)
+}
+
+/// Alternative Twitch login path: ask Firefox itself for the first-party
+/// auth-token through BiDi instead of reading cookies.sqlite. If a baseline
+/// token is present, wait for a different token so a rejected saved login does
+/// not immediately complete the fallback with the same stale credential.
+pub fn wait_for_twitch_auth_token(
+    port:u16,
+    baseline:Option<&str>,
+    cancelled:&AtomicBool,
+    timeout:Duration,
+)->Result<String,String> {
+    let started=Instant::now();
+    let mut session:Option<BrowserSession>=None;
+    let mut last_error=None;
+    let mut connected_once=false;
+    let mut reconnect_failures=0u8;
+
+    while started.elapsed()<timeout {
+        if cancelled.load(Ordering::Relaxed) {
+            end_session(&mut session);
+            return Err("Twitch login cancelled".into());
+        }
+
+        if session.is_none() {
+            match open_session(port) {
+                Ok(opened)=>{
+                    connected_once=true;
+                    reconnect_failures=0;
+                    session=Some(opened);
+                }
+                Err(error)=>{
+                    last_error=Some(error);
+                    if connected_once {
+                        reconnect_failures=reconnect_failures.saturating_add(1);
+                        if reconnect_failures>=3 {
+                            return Err(
+                                "Alternative Twitch Firefox window closed before a new auth token was detected".into()
+                            );
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(350));
+                    continue;
+                }
+            }
+        }
+
+        let result=session.as_mut().ok_or_else(||"Firefox BiDi session unavailable".to_owned())
+            .and_then(read_twitch_auth_token);
+        match result {
+            Ok(Some(token)) if baseline.is_none_or(|old|old!=token) => {
+                end_session(&mut session);
+                return Ok(token);
+            }
+            Ok(_) => {
+                thread::sleep(Duration::from_millis(400));
+            }
+            Err(error) => {
+                if session_connection_is_closed(&error) {
+                    session=None;
+                } else {
+                    last_error=Some(error);
+                    thread::sleep(Duration::from_millis(400));
+                }
+            }
+        }
+    }
+
+    end_session(&mut session);
+    Err(last_error.unwrap_or_else(||
+        "Alternative Twitch login timed out before Firefox exposed a new auth token".into()))
+}
+
 fn open_session(port: u16) -> Result<BrowserSession, String> {
     // tungstenite::connect performs the WebSocket handshake *before* callers
     // can set I/O timeouts. A stalled Firefox listener could otherwise park
