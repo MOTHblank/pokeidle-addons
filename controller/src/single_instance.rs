@@ -156,9 +156,10 @@ mod windows {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Release);
             // Wake the kernel wait so the listener can exit promptly.
-            unsafe { SetEvent(self.event as Handle); }
+            let awakened = unsafe { SetEvent(self.event as Handle) } != 0;
             if let Some(worker) = self.worker.take() {
-                let _ = worker.join();
+                // A failed OS wakeup must not hang application shutdown.
+                if awakened { let _ = worker.join(); }
             }
             unsafe {
                 CloseHandle(self.event as Handle);
@@ -290,11 +291,17 @@ mod unix {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::Release);
             // Unblock accept() without a periodic wakeup/timer.
-            if let Ok(mut stream) = UnixStream::connect(&self.socket) {
+            // If another application removed the socket file, don't join a
+            // listener that may still be blocked in accept() forever.
+            let wake = UnixStream::connect(&self.socket);
+            if let Ok(mut stream) = wake {
                 let _ = stream.write_all(STOP);
-            }
-            if let Some(worker) = self.worker.take() {
-                let _ = worker.join();
+                if let Some(worker) = self.worker.take() {
+                    let _ = worker.join();
+                }
+            } else {
+                // Dropping a JoinHandle detaches it; process exit will stop it.
+                self.worker.take();
             }
             let _ = fs::remove_file(&self.socket);
         }
