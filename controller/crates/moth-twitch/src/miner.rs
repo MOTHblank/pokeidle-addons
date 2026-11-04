@@ -179,6 +179,13 @@ struct ChannelCache {
     balance: Option<u64>,
     last_watch: Option<Instant>,
     last_claim_id: Option<String>,
+    broadcast_id: Option<String>,
+    stream_started: Option<String>,
+    stream_checked: Option<Instant>,
+    streak_checked: Option<Instant>,
+    streak_confirmed: Option<bool>,
+    streak_length: Option<u32>,
+    watch_attempts: u32,
 }
 
 fn notify(wake: &PhaseWake) {
@@ -337,9 +344,6 @@ fn poll_channels(
     let mut active = 0usize;
     let mut first_error: Option<GqlError> = None;
     let mut auth_failed = false;
-    let mut watch_slots = config.max_watched_channels.min(channels.len());
-    let _ = favorites;
-
     for login in channels {
         let channel = cache.entry(login.clone()).or_default();
         if channel.channel_id.is_none() {
@@ -401,42 +405,8 @@ fn poll_channels(
                     }
                 }
 
-                let watch_due = channel.last_watch
-                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(55));
-                if watch_due && watch_slots > 0 && live.binary_search(login).is_ok() {
-                    match gql.stream_info(login) {
-                        Ok(Some(stream)) => {
-                            watch_slots -= 1;
-                            if let Some(channel_id) = channel.channel_id.as_deref() {
-                                match watch.send_minute_watched(
-                                    login,
-                                    channel_id,
-                                    &stream.broadcast_id,
-                                    &viewer.user_id,
-                                ) {
-                                    Ok(()) => {
-                                        channel.last_watch = Some(Instant::now());
-                                        if let Ok(mut current) = snapshot.lock() {
-                                            current.watch_signals = current.watch_signals.saturating_add(1);
-                                        }
-                                    },
-                                    Err(error) => {
-                                        push_event(events, MinerEvent::Warning(format!(
-                                            "{login}: {error}"
-                                        )));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            auth_failed |= error.is_auth();
-                            if first_error.is_none() {
-                                first_error = Some(error);
-                            }
-                        }
-                    }
-                }
+                // Balance checks are independent from the scarce two watch slots.
+                // Live channel metadata and streak milestones are processed below.
 
                 update_streamer(snapshot, login, channel, None);
                 if let Ok(mut current) = snapshot.lock() {
@@ -453,8 +423,112 @@ fn poll_channels(
         }
     }
 
+    // Inspect every live official stream on a bounded cadence. A fresh
+    // broadcast always resets prior streak evidence and watch attempts.
+    for login in live {
+        let Some(channel)=cache.get_mut(login) else {continue};
+        let Some(id)=channel.channel_id.as_deref() else {continue};
+        if channel.stream_checked.is_none_or(|at|
+            at.elapsed() >= Duration::from_secs(180)) {
+            channel.stream_checked=Some(Instant::now());
+            match gql.stream_info(login) {
+                Ok(Some(stream)) => {
+                    if channel.broadcast_id.as_deref()!=Some(stream.broadcast_id.as_str()) {
+                        channel.broadcast_id=Some(stream.broadcast_id);
+                        channel.stream_started=Some(stream.started_at);
+                        channel.streak_confirmed=None;
+                        channel.streak_checked=None;
+                        channel.watch_attempts=0;
+                        channel.last_watch=None;
+                    }
+                }
+                Ok(None) => {
+                    channel.broadcast_id=None;
+                    channel.stream_started=None;
+                    channel.streak_confirmed=None;
+                    channel.streak_checked=None;
+                    channel.watch_attempts=0;
+                }
+                Err(error) => {
+                    auth_failed |= error.is_auth();
+                    if first_error.is_none() {first_error=Some(error);}
+                }
+            }
+        }
+        if channel.broadcast_id.is_some() && channel.streak_checked.is_none_or(|at|
+            at.elapsed() >= Duration::from_secs(180)) {
+            channel.streak_checked=Some(Instant::now());
+            match gql.streak(id) {
+                Ok(milestone) => {
+                    channel.streak_length=milestone.length;
+                    channel.streak_confirmed=channel.stream_started.as_deref()
+                        .zip(milestone.achieved_at.as_deref())
+                        .and_then(|(started,achieved)|
+                            crate::streak::milestone_for_current_broadcast(started,achieved));
+                }
+                Err(error) => {
+                    auth_failed |= error.is_auth();
+                    if first_error.is_none(){first_error=Some(error);}
+                }
+            }
+        }
+        update_streamer(snapshot,login,channel,None);
+    }
+
+    // Streaks have priority, then user favorites, then least-recently-watched
+    // channels. Rotate between all pending streams rather than pinning the
+    // first two alphabetical names indefinitely. Each broadcast gets a
+    // finite initial streak window (~20 watch acknowledgements).
+    let mut candidates=live.iter().filter(|login|cache.get(*login)
+        .is_some_and(|channel| channel.broadcast_id.is_some()))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a,b|{
+        let left=&cache[*a];
+        let right=&cache[*b];
+        let priority=|channel:&ChannelCache, login:&String| {
+            let pending=channel.streak_confirmed!=Some(true)
+                && channel.watch_attempts<20;
+            let favorite=favorites.iter().position(|name|name==login);
+            (if pending {0u8}else{1u8},favorite.is_none(),
+                favorite.unwrap_or(usize::MAX))
+        };
+        priority(left,a).cmp(&priority(right,b))
+            .then_with(||left.last_watch.cmp(&right.last_watch))
+            .then_with(||a.cmp(b))
+    });
+    let mut watch_slots=config.max_watched_channels.min(2);
+    for login in candidates {
+        if watch_slots==0 {break;}
+        let channel=&mut cache[login];
+        if channel.last_watch.is_some_and(|at|
+            at.elapsed()<Duration::from_secs(55)) {continue;}
+        let Some(channel_id)=channel.channel_id.as_deref() else {continue};
+        let Some(broadcast_id)=channel.broadcast_id.as_deref() else {continue};
+        watch_slots-=1;
+        match watch.send_minute_watched(
+            login,channel_id,broadcast_id,&viewer.user_id
+        ) {
+            Ok(())=>{
+                channel.last_watch=Some(Instant::now());
+                channel.watch_attempts=channel.watch_attempts.saturating_add(1);
+                if let Ok(mut current)=snapshot.lock(){
+                    current.watch_signals=current.watch_signals.saturating_add(1);
+                }
+            }
+            Err(error)=>{
+                push_event(events,MinerEvent::Warning(format!("{login}: {error}")));
+                // A failing endpoint should not hammer this channel every
+                // thirty seconds; other streams can still use the slot.
+                channel.last_watch=Some(Instant::now());
+            }
+        }
+        update_streamer(snapshot,login,channel,None);
+    }
     if let Ok(mut current) = snapshot.lock() {
         current.active = active;
+        for streamer in &mut current.streamers {
+            streamer.live = live.binary_search(&streamer.login).is_ok();
+        }
         current.streamers.sort_by(|left, right| left.login.cmp(&right.login));
     }
 
@@ -495,6 +569,9 @@ fn update_streamer(
             state.channel_id.clone_from(&cache.channel_id);
             state.points = cache.balance;
             state.last_watch_signal = cache.last_watch;
+            state.streak_confirmed=cache.streak_confirmed;
+            state.streak_length=cache.streak_length;
+            state.streak_checked=cache.streak_checked;
             state.last_update = Some(Instant::now());
             state.error = error;
         }
@@ -503,6 +580,10 @@ fn update_streamer(
             channel_id: cache.channel_id.clone(),
             points: cache.balance,
             last_watch_signal: cache.last_watch,
+            streak_confirmed:cache.streak_confirmed,
+            streak_length:cache.streak_length,
+            streak_checked:cache.streak_checked,
+            live:false,
             last_update: Some(Instant::now()),
             error,
         }),
