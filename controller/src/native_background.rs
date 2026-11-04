@@ -317,16 +317,27 @@ impl NativeSession {
                 ));
                 None
             });
+        let mut profile_busy=false;
         if twitch_token.is_none() {
             match crate::native_twitch_login::import_existing(profile) {
-                Ok(found) => twitch_token = found,
+                Ok(crate::native_twitch_login::ExistingLogin::Imported(token)) =>
+                    twitch_token=Some(token),
+                Ok(crate::native_twitch_login::ExistingLogin::NotFound) => {
+                    // Firefox's persisted cookie state is authoritative. Do
+                    // not resurrect an older embedded token after logout.
+                }
+                Ok(crate::native_twitch_login::ExistingLogin::ProfileBusy) =>
+                    profile_busy=true,
                 Err(error) => crate::logging::warn(&format!(
                     "{} automatic Twitch login import unavailable: {error}",
                     profile.name()
                 )),
             }
         }
-        if twitch_token.is_none() {
+        // During a Firefox -> native PokéIdle handoff the profile is still
+        // open, so SQLite import is intentionally skipped. The in-memory
+        // bootstrap cookie is fresh and is the migration source in that case.
+        if twitch_token.is_none() && profile_busy {
             let legacy = bootstrap.get("twitch")
                 .and_then(|value| value.get("token"))
                 .and_then(Value::as_str)
