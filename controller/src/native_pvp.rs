@@ -416,10 +416,14 @@ mod tests {
         p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
             Some(PvpAction::SetVipAuto(false)));
+        assert!(p.status(Some(false),true,Some(true),Some(30),t).cancelling);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
         assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),
             Some(PvpAction::Leave));
+        assert!(p.status(Some(false),true,Some(false),Some(30),t).cancelling);
         assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        assert!(!p.status(Some(false),true,Some(false),Some(30),t).cancelling);
     }
     #[test]
     fn late_info_does_not_erase_an_unconfirmed_join() {
