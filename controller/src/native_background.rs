@@ -1110,6 +1110,12 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                         if socket.send(Message::Text(wire.to_string().into())).is_err() {
                                             pvp.send_failed(other);
                                             send_failed = true;
+                                        } else if matches!(other, PvpAction::Join | PvpAction::Leave) {
+                                            let activity = if other == PvpAction::Join {
+                                                "requested matchmaking"
+                                            } else { "requested queue cancellation" };
+                                            crate::logging::info(&format!(
+                                                "{}: Auto PvP {activity}", profile.label()));
                                         }
                                     },
                                 }
