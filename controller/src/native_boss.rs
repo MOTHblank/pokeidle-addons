@@ -1026,10 +1026,6 @@ mod tests {
         view.in_center = true;
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
         assert!(matches!(manager.next_action(&view, &mut nav, now),
-            Some(GameCommand::Center)));
-        view.in_center = true;
-        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &view, now);
-        assert!(matches!(manager.next_action(&view, &mut nav, now),
             Some(GameCommand::BossAuto {active:true,..})));
         manager.on_disconnect(&nav, &view);
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
@@ -1101,6 +1097,10 @@ mod tests {
         let now = Instant::now();
         let mut view = hunt();
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::Center)));
+        view.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &view, now);
         assert!(matches!(manager.next_action(&view, &mut nav, now),
             Some(GameCommand::BossAuto {active:true,..})));
         manager.on_disconnect(&nav, &view);
