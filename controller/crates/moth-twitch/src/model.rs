@@ -79,6 +79,12 @@ pub struct StreamerState {
     pub points: Option<u64>,
     /// A successful telemetry HTTP acknowledgement, not confirmed reward credit.
     pub last_watch_signal: Option<Instant>,
+    /// Confirmed only when RewardList's achievement timestamp belongs to
+    /// the current live broadcast. None = not yet verified.
+    pub streak_confirmed: Option<bool>,
+    pub streak_length: Option<u32>,
+    pub streak_checked: Option<Instant>,
+    pub live: bool,
     pub last_update: Option<Instant>,
     pub error: Option<String>,
 }
