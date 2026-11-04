@@ -133,8 +133,8 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             else { tr("Not signed in") };
         let twitch_miner_label = match twitch_miner.as_ref().map(|state| state.phase) {
             Some(moth_twitch::MinerPhase::Online) => tr("Active"),
-            Some(moth_twitch::MinerPhase::Connecting | moth_twitch::MinerPhase::Reconnecting) =>
-                tr("Reconnecting"),
+            Some(moth_twitch::MinerPhase::Connecting) |
+            Some(moth_twitch::MinerPhase::Reconnecting) => tr("Reconnecting"),
             Some(moth_twitch::MinerPhase::NeedsLogin) => tr("Optional sign-in"),
             Some(moth_twitch::MinerPhase::Failed) => tr("Error"),
             Some(moth_twitch::MinerPhase::Stopped) => tr("Stopped"),
