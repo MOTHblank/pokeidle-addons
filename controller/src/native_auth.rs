@@ -171,6 +171,45 @@ mod capture_handoff_tests {
         let no_old_settings=json!({"bootstrap":{"hello":"old"}});
         assert_eq!(preserve_native_capture_preferences(&firefox,Some(&no_old_settings)),firefox);
     }
+
+    #[test]
+    fn legacy_cache_requires_one_twitch_profile_probe() {
+        assert!(twitch_profile_probe_needed(&json!({
+            "bootstrap":{"hello":"legacy"},"twitch":null
+        })));
+        assert!(!twitch_profile_probe_needed(&json!({
+            "bootstrap":{"hello":"new"},"twitchProbeVersion":1,"twitch":null
+        })));
+        assert!(!twitch_profile_probe_needed(&json!({
+            "bootstrap":{"hello":"token"},"twitch":{"token":"already-present"}
+        })));
+    }
+
+    #[test]
+    fn twitch_profile_probe_preserves_game_and_capture_state() {
+        let cached=json!({
+            "bootstrap":{"hello":"game"},
+            "cookies":[{"name":"session"}],
+            "autocatch":{"enabled":true},
+            "twitch":null
+        });
+        let updated=with_twitch_profile_probe(&cached,Some(" twitch-token "));
+        assert_eq!(updated["bootstrap"],cached["bootstrap"]);
+        assert_eq!(updated["cookies"],cached["cookies"]);
+        assert_eq!(updated["autocatch"],cached["autocatch"]);
+        assert_eq!(updated["twitch"]["token"],"twitch-token");
+        assert_eq!(updated["twitchProbeVersion"],1);
+        assert!(!twitch_profile_probe_needed(&updated));
+    }
+
+    #[test]
+    fn completed_twitch_probe_records_logged_out_profiles() {
+        let updated=with_twitch_profile_probe(
+            &json!({"bootstrap":{"hello":"game"}}),None);
+        assert!(updated["twitch"].is_null());
+        assert_eq!(updated["twitchProbeVersion"],1);
+        assert!(!twitch_profile_probe_needed(&updated));
+    }
 }
 
 /// Kick uses a dedicated OS-vault entry, never the PokéIdle game cache.
@@ -237,6 +276,60 @@ pub fn load_for_auth(profile:GameProfile,
         return Err("Cached login canceled: launch changed".into());
     }
     Ok(cached)
+}
+
+const TWITCH_PROFILE_PROBE_VERSION: u64 = 1;
+
+/// Old encrypted PokéIdle bootstraps predate Twitch-cookie import. If they
+/// already contain a Twitch token there is nothing to migrate; otherwise one
+/// local Firefox probe checks the existing profile exactly once.
+pub fn twitch_profile_probe_needed(cached: &Value) -> bool {
+    let probed = cached.get("twitchProbeVersion").and_then(Value::as_u64)
+        .unwrap_or(0) >= TWITCH_PROFILE_PROBE_VERSION;
+    let has_token = cached.get("twitch")
+        .and_then(|value| value.get("token"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|token| !token.is_empty());
+    !probed && !has_token
+}
+
+fn with_twitch_profile_probe(cached: &Value, token: Option<&str>) -> Value {
+    let mut updated = cached.clone();
+    updated["twitchProbeVersion"] = Value::from(TWITCH_PROFILE_PROBE_VERSION);
+    updated["twitch"] = token.map(str::trim).filter(|token| !token.is_empty())
+        .map(|token| serde_json::json!({"token":token}))
+        .unwrap_or(Value::Null);
+    updated
+}
+
+/// Persist a completed automatic profile probe without touching game
+/// credentials or controller-managed capture settings.
+pub fn cache_twitch_profile_probe(
+    profile: GameProfile,
+    cached: &Value,
+    token: Option<&str>,
+    generation: &std::sync::atomic::AtomicU64,
+    expected: u64,
+) -> Result<Value, String> {
+    let _guard = preference_write(profile).lock()
+        .map_err(|_| "Native settings writer unavailable".to_owned())?;
+    if !capture_generation_is_current(generation, expected) {
+        return Err("Twitch login detection canceled: launch changed".into());
+    }
+    let current = load(profile)?.unwrap_or_else(|| cached.clone());
+    let updated = with_twitch_profile_probe(&current, token);
+    if !capture_generation_is_current(generation, expected) {
+        return Err("Twitch login detection canceled: launch changed".into());
+    }
+    save(profile, &updated)?;
+    if !capture_generation_is_current(generation, expected) {
+        save(profile, &current).map_err(|error| format!(
+            "Canceled Twitch login detection rollback failed: {error}"
+        ))?;
+        return Err("Twitch login detection canceled: launch changed".into());
+    }
+    Ok(updated)
 }
 
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
