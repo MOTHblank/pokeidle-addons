@@ -117,6 +117,8 @@ pub struct BossView {
     pub auto: bool,
     pub auto_key: Option<String>,
     pub arena: Option<String>,
+    pub request_key: Option<String>,
+    pub request_repeat: Option<bool>,
     pub busy: bool,
     pub can_stop: bool,
     pub phase: String,
