@@ -111,11 +111,15 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Entry" => "Entrada",
         "Inventory" => "Inventário",
         "Required level" => "Nível necessário",
+        "Strongest eligible team Pokémon" => "Pokémon elegível mais forte da equipe",
+        "Boss combat level" => "Nível de combate do boss",
         "Possible entries" => "Entradas possíveis",
         "Farm until tokens run out" => "Farmar até acabar os tokens",
         "Fight once" => "Lutar uma vez",
         "Boss entry requires sufficient tokens and trainer level." =>
             "A entrada exige tokens suficientes e o nível necessário.",
+        "Bosses fight at the level of your strongest eligible team Pokémon, never below their own unlock level. Trainer level still controls which bosses are unlocked; entry tokens and drop tiers are unchanged." =>
+            "Os bosses lutam no nível do Pokémon elegível mais forte da sua equipe, nunca abaixo do próprio nível de liberação. O nível do treinador continua definindo quais bosses estão liberados; tokens de entrada e faixas de drop não mudaram.",
         "Boss status" => "Status do boss",
         "Return destination" => "Hunt de retorno",
         "Server repeating" => "Repetição no servidor",
