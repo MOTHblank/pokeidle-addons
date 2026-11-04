@@ -1316,7 +1316,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             at.elapsed() >= Duration::from_secs(300)) {
                             last_metadata_attempt = Some(Instant::now());
                             let sender = metadata_tx.clone();
-                            let _ = thread::Builder::new()
+                            thread::Builder::new()
                                 .name("moth-item-metadata".into())
                                 .spawn(move || {
                                     let result = std::panic::catch_unwind(
@@ -1325,7 +1325,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                         "Public item metadata loader panicked".into()
                                     ));
                                     let _ = sender.send(result);
-                                });
+                                })
+                                .expect("could not start item metadata worker");
                         }
                     }
                     // Read market rules only when the editor publishes a new revision.
