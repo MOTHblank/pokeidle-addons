@@ -309,10 +309,11 @@ fn data_and_logs(app: &mut ControllerApp, ui: &mut egui::Ui) {
     description(ui, "Support reports contain aggregate runtime counts only, never private session details.");
     ui.add_space(12.0);
     card(ui, "Settings backup",
-        "Export only local app options and account labels/enabled flags. No credentials or server automation data.", |ui| {
+        "Exports local app, account, and Kick stream preferences. Game server automation and credentials remain excluded.", |ui| {
             if ui.button(tr("Export safe settings backup")).clicked() {
-                let backup = SettingsBackup::from_active(app.preferences, app.ui_options, &app.accounts);
-                match backup.export() {
+                let backup = SettingsBackup::from_active(
+                    app.preferences, app.ui_options, &app.accounts).with_saved_kick();
+                match backup.and_then(|settings| settings.export()) {
                     Ok(path) => app.set_status(format!("{}: {}",
                         tr("Settings backup saved"), path.display()), false),
                     Err(error) => app.set_status(error, true),
@@ -341,6 +342,17 @@ fn data_and_logs(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     account.name, tr(if account.enabled { "Enabled" } else { "Disabled" })));
             }
             ui.separator();
+            if let Some(kick) = backup.kick.as_ref() {
+                ui.label(RichText::new(tr("Kick stream preferences")).strong());
+                for (index, (channels, preferences)) in kick.channels.iter()
+                    .zip(kick.preferences.iter()).enumerate() {
+                    ui.label(format!("{} {} · {}: {} · {}: {} · {}: {}",
+                        tr("Account"), index + 1,
+                        tr("Channels"), channels,
+                        tr("Maximum streams"), preferences.max_streams,
+                        tr("Favorites"), preferences.favorites.join(", ")));
+                }
+            }
             ui.label(format!("{}: {}%", tr("Interface scale"), backup.app.ui_scale_percent));
             let aoe_slots = backup.ui.atlas_aoe_enabled.iter().enumerate()
                 .filter(|(_, enabled)| **enabled)
