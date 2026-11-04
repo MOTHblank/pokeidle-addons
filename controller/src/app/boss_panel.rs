@@ -153,6 +153,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     .unwrap_or_else(|| "—".into());
                                 resource_chip(ui, &format!("{}: {}", tr("Trainer level"), current));
                                 resource_chip(ui, &format!("{}: {}", tr("Required level"), entry.min_level));
+                                if let Some(fight_level) = entry.fight_level(level) {
+                                    resource_chip(ui, &format!("{}: {}", tr("Boss combat level"), fight_level));
+                                }
                                 resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
                             });
                             ui.add_space(5.0);
@@ -164,6 +167,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 ui, tr("Inventory"),
                                 &format!("{} × {}", tokens, entry.token_name),
                             );
+                            ui.label(RichText::new(tr(
+                                "Bosses now fight at your trainer level (minimum: their unlock level). A higher trainer level increases boss stats and battle duration; entry tokens and drop tiers still follow the original boss."
+                            )).size(10.0).color(MUTED));
 
                             let ready = live
                                 && view.state_known
