@@ -488,6 +488,30 @@ mod tests {
     }
 
     #[test]
+    fn exported_report_excludes_account_names_and_private_state() {
+        let mut sampler = DiagnosticsSampler::default();
+        sampler.network = Some(HlsNetworkSample {
+            rows: vec![HlsAccountSample {
+                account: "PRIVATE_ACCOUNT".into(), bytes: 100,
+                last_minute: 50, channels: 1,
+            }],
+            bytes: 100, last_minute: 50,
+        });
+        sampler.operational = Some(OperationalSample {
+            game: vec![GameQueueSample {
+                slot: 1, phase: "Online".into(),
+                capture_queued: 3, ..GameQueueSample::default()
+            }],
+            ..OperationalSample::default()
+        });
+        let report = sampler.report_json().to_string();
+        assert!(!report.contains("PRIVATE_ACCOUNT"));
+        assert!(report.contains("profile_slot"));
+        assert!(report.contains("capture_queued"));
+        assert!(report.contains("moth-controller-diagnostics-v1"));
+    }
+
+    #[test]
     fn history_is_bounded() {
         let mut sampler = DiagnosticsSampler::default();
         for _ in 0..100 {
