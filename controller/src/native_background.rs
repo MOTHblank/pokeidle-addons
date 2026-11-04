@@ -1218,6 +1218,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
+                    // Boss combat deliberately does not gate Restock. Bosses consume
+                    // the same potion/revive inventory as hunts, while the server's
+                    // Auto-Potion/Auto-Revive settings stay synchronized above.
                     if let Some(command) = restock.next(Instant::now()) {
                         // Commands contain only category, product ID and
                         // quantity. Never log authentication or personal data.
