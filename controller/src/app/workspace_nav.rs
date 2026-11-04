@@ -258,6 +258,11 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.open_logs();
             }
 
+            if sidebar_button(ui, tr("Diagnostics"),
+                app.workspace.panel_tab == PanelTab::Diagnostics).clicked() {
+                app.workspace.panel_tab = PanelTab::Diagnostics;
+            }
+
             if sidebar_button(ui, tr("Options"), app.workspace.panel_tab == PanelTab::Options).clicked() {
                 app.workspace.panel_tab = PanelTab::Options;
             }
