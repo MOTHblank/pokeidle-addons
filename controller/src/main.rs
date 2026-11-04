@@ -30,7 +30,6 @@ mod native_market;
 mod native_atlas;
 mod native_atlas_models;
 mod native_restock;
-mod native_twitch;
 mod native_tls;
 mod logging;
 mod diagnostics;
@@ -63,7 +62,7 @@ fn main() {
 
     // rustls 0.23 cannot infer a default when transitive dependencies enable
     // both ring and aws-lc-rs. Initialize ONE process-wide provider before
-    // spawning cache, game, or Twitch TLS workers. No authentication is sent
+    // spawning cache or game TLS workers. No authentication is sent
     // if provider installation fails.
     if let Err(error) = native_tls::ensure() {
         eprintln!("Native TLS initialization failed: {error}");
