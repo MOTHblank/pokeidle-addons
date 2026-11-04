@@ -118,6 +118,8 @@ pub struct NativeSnapshot {
     /// Twitch is game state only. No IRC/chat connection is owned by Moth.
     pub twitch_linked: Option<bool>,
     pub twitch_login: Option<String>,
+    pub twitch_official_roster: Option<Vec<String>>,
+    pub twitch_official_live: Option<Vec<String>>,
     pub twitch_bonus_pct: f32,
     pub twitch_xp_until: u64,
     pub twitch_capture_until: u64,
@@ -144,7 +146,9 @@ impl Default for NativeSnapshot {
             native_market: MarketStatus::default(),
             pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
             pokemon_sale_error: None,
-            twitch_linked: None, twitch_login: None, twitch_bonus_pct: 0.0,
+            twitch_linked: None, twitch_login: None,
+            twitch_official_roster: None, twitch_official_live: None,
+            twitch_bonus_pct: 0.0,
             twitch_xp_until: 0, twitch_capture_until: 0, twitch_shiny_until: 0,
             kick_official_live: None, kick_official_roster: None,
             kick_roster_revision: 0,
@@ -545,6 +549,9 @@ impl NativeSession {
         // A worker can expire while its initial handoff is still in flight.
         if self.snapshot().phase=="NeedsLogin" { wake(); }
     }
+    pub fn set_twitch_favorites(&self, channels: Vec<String>) {
+        self.twitch_miner.set_favorites(channels);
+    }
     pub fn twitch_miner_snapshot(&self) -> Option<moth_twitch::MinerSnapshot> {
         self.twitch_miner.snapshot()
     }
@@ -695,6 +702,12 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool
                 }
             }
             if let Some(twitch) = state.get("twitch") {
+                if let Some(channels)=crate::native_twitch_miner::official_channels(payload) {
+                    status.twitch_official_roster=Some(channels);
+                }
+                if let Some(channels)=crate::native_twitch_miner::official_live_channels(payload) {
+                    status.twitch_official_live=Some(channels);
+                }
                 status.twitch_linked=twitch.get("vinculado").and_then(Value::as_bool)
                     .or_else(||Some(twitch.get("login").and_then(Value::as_str).is_some()));
                 if let Some(login)=twitch.get("login").and_then(Value::as_str) {
@@ -728,8 +741,11 @@ fn sync_twitch_miner_targets(control:&TwitchMinerControl,payload:&Value) {
             .flatten().map(str::to_owned);
         control.set_expected_login(login);
     }
-    if let Some(channels)=crate::native_twitch_miner::official_live_channels(payload) {
+    if let Some(channels)=crate::native_twitch_miner::official_channels(payload) {
         control.set_channels(channels);
+    }
+    if let Some(channels)=crate::native_twitch_miner::official_live_channels(payload) {
+        control.set_live_channels(channels);
     }
 }
 

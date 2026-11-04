@@ -19,6 +19,18 @@ impl TwitchMinerControl {
         }
     }
 
+    pub fn set_live_channels(&self, channels: Vec<String>) {
+        if let Some(inner)=self.inner.as_ref() {
+            inner.set_live_channels(channels);
+        }
+    }
+
+    pub fn set_favorites(&self, channels: Vec<String>) {
+        if let Some(inner) = self.inner.as_ref() {
+            inner.set_favorites(channels);
+        }
+    }
+
     pub fn set_expected_login(&self, login: Option<String>) {
         if let Some(inner) = self.inner.as_ref() {
             inner.set_expected_login(login);
@@ -54,6 +66,10 @@ impl TwitchMinerSession {
         Self { miner }
     }
 
+    pub fn set_favorites(&self, channels: Vec<String>) {
+        self.control().set_favorites(channels);
+    }
+
     pub fn control(&self) -> TwitchMinerControl {
         TwitchMinerControl {
             inner: self.miner.as_ref().map(Miner::control),
@@ -83,6 +99,20 @@ impl Drop for TwitchMinerSession {
     }
 }
 
+/// Preserve the full official catalog while the miner only watches live channels.
+pub fn official_channels(payload: &Value) -> Option<Vec<String>> {
+    let official = payload.get("estado")?.get("twitch")?.get("oficiais")?.as_array()?;
+    let mut channels = official.iter().filter(|entry|
+        entry.get("bonus").and_then(Value::as_bool).unwrap_or(true)
+    ).filter_map(|entry|{
+        entry.as_str().or_else(||entry.get("login").or_else(||entry.get("nome"))
+            .and_then(Value::as_str)).and_then(moth_twitch::normalize_login)
+    }).collect::<Vec<_>>();
+    channels.sort_unstable();
+    channels.dedup();
+    Some(channels)
+}
+
 pub fn official_live_channels(payload: &Value) -> Option<Vec<String>> {
     let twitch = payload.get("estado")?.get("twitch")?;
     let official = twitch.get("oficiais")?.as_array()?;
@@ -91,9 +121,9 @@ pub fn official_live_channels(payload: &Value) -> Option<Vec<String>> {
     let eligible = official.iter().filter(|entry| {
         entry.get("bonus").and_then(Value::as_bool).unwrap_or(true)
     }).filter_map(|entry| {
-        entry.get("login")
+        entry.as_str().or_else(||entry.get("login")
             .or_else(|| entry.get("nome"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_str))
             .and_then(moth_twitch::normalize_login)
     }).collect::<std::collections::BTreeSet<_>>();
 
@@ -128,6 +158,16 @@ mod tests {
             "lives":[{"login":"ONE"},{"login":"two"}]
         }}});
         assert_eq!(official_live_channels(&frame).unwrap(), vec!["one"]);
+    }
+
+    #[test]
+    fn full_official_roster_includes_offline_channels() {
+        let frame=json!({"estado":{"twitch":{"oficiais":[
+            {"login":"offline"},{"login":"live","bonus":true},
+            {"login":"excluded","bonus":false}
+        ],"lives":[{"login":"live"}]}}});
+        assert_eq!(official_channels(&frame).unwrap(),vec!["live","offline"]);
+        assert_eq!(official_live_channels(&frame).unwrap(),vec!["live"]);
     }
 
     #[test]

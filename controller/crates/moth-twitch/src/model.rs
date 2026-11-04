@@ -36,7 +36,6 @@ impl Credentials {
 pub struct MinerConfig {
     pub poll_interval: Duration,
     pub claim_bonuses: bool,
-    pub max_watched_channels: usize,
 }
 
 impl Default for MinerConfig {
@@ -44,7 +43,6 @@ impl Default for MinerConfig {
         Self {
             poll_interval: Duration::from_secs(30),
             claim_bonuses: true,
-            max_watched_channels: 2,
         }
     }
 }
@@ -79,6 +77,15 @@ pub struct StreamerState {
     pub points: Option<u64>,
     /// A successful telemetry HTTP acknowledgement, not confirmed reward credit.
     pub last_watch_signal: Option<Instant>,
+    /// Confirmed only when RewardList's achievement timestamp belongs to
+    /// the current live broadcast. None = not yet verified.
+    pub streak_confirmed: Option<bool>,
+    pub streak_length: Option<u32>,
+    pub streak_checked: Option<Instant>,
+    pub streak_watch_attempts: u32,
+    pub live: bool,
+    /// This channel occupies one of the miner's two persistent watch slots.
+    pub watching: bool,
     pub last_update: Option<Instant>,
     pub error: Option<String>,
 }

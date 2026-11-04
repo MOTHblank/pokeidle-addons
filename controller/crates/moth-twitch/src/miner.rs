@@ -12,11 +12,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+const WATCH_SLOTS: usize = 2;
 
 #[derive(Clone)]
 pub struct MinerControl {
     desired: Arc<Mutex<Vec<String>>>,
+    live: Arc<Mutex<Vec<String>>>,
     expected_login: Arc<Mutex<Option<String>>>,
+    favorites: Arc<Mutex<Vec<String>>>,
     wake: SyncSender<()>,
 }
 
@@ -36,6 +39,28 @@ impl MinerControl {
         if changed {
             let _ = self.wake.try_send(());
         }
+    }
+
+    pub fn set_live_channels(&self, channels: Vec<String>) {
+        let channels=normalize_channels(channels);
+        let changed=self.live.lock().map(|mut current|{
+            if *current==channels {false} else {*current=channels;true}
+        }).unwrap_or(false);
+        if changed {let _=self.wake.try_send(());}
+    }
+
+    /// Favorites affect selection order, never the fixed two watch slots.
+    pub fn set_favorites(&self, channels: Vec<String>) {
+        let mut unique = Vec::new();
+        for raw in channels.into_iter().take(128) {
+            if let Some(login)=crate::model::normalize_login(&raw) {
+                if !unique.contains(&login) { unique.push(login); }
+            }
+        }
+        let changed=self.favorites.lock().map(|mut current|{
+            if *current==unique {false} else {*current=unique;true}
+        }).unwrap_or(false);
+        if changed {let _=self.wake.try_send(());}
     }
 
     pub fn set_expected_login(&self, login: Option<String>) {
@@ -69,7 +94,9 @@ impl Miner {
         let snapshot = Arc::new(Mutex::new(MinerSnapshot::default()));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let desired = Arc::new(Mutex::new(Vec::new()));
+        let live = Arc::new(Mutex::new(Vec::new()));
         let expected_login = Arc::new(Mutex::new(None));
+        let favorites = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let phase_wake: PhaseWake = Arc::new(Mutex::new(None));
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
@@ -77,7 +104,9 @@ impl Miner {
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_events = Arc::clone(&events);
         let worker_desired = Arc::clone(&desired);
+        let worker_live = Arc::clone(&live);
         let worker_expected_login = Arc::clone(&expected_login);
+        let worker_favorites = Arc::clone(&favorites);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
         thread::Builder::new()
@@ -89,7 +118,9 @@ impl Miner {
                     worker_snapshot,
                     worker_events,
                     worker_desired,
+                    worker_live,
                     worker_expected_login,
+                    worker_favorites,
                     worker_stop,
                     worker_phase_wake,
                     wake_rx,
@@ -100,7 +131,7 @@ impl Miner {
         Ok(Self {
             snapshot,
             events,
-            control: MinerControl { desired, expected_login, wake: wake_tx },
+            control: MinerControl { desired, live, expected_login, favorites, wake: wake_tx },
             stop,
             phase_wake,
         })
@@ -148,7 +179,87 @@ struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
     last_watch: Option<Instant>,
+    last_watch_attempt: Option<Instant>,
+    watch_failures: u8,
+    last_points_attempt: Option<Instant>,
+    last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
+    broadcast_id: Option<String>,
+    stream_started: Option<String>,
+    stream_checked: Option<Instant>,
+    streak_checked: Option<Instant>,
+    streak_confirmed: Option<bool>,
+    streak_length: Option<u32>,
+    watch_attempts: u32,
+    last_error: Option<String>,
+}
+
+/// Two persistent watch slots. A slot keeps its broadcast identity so an
+/// offline/restarted stream never inherits the prior stream's streak window.
+struct WatchSlot {
+    login: String,
+    broadcast_id: String,
+    entered: Instant,
+}
+
+fn streak_pending(channel:&ChannelCache)->bool {
+    channel.streak_confirmed!=Some(true) && channel.watch_attempts<20
+}
+
+/// Hold two candidate broadcasts long enough for Twitch to issue a streak
+/// milestone (up to 20 minutes), then rotate. Do not fill temporary gaps
+/// between two telemetry POSTs with extra streams: two slots means two streams.
+fn refresh_watch_slots(
+    slots:&mut Vec<WatchSlot>, live:&[String],
+    cache:&mut HashMap<String,ChannelCache>,favorites:&[String],
+    now:Instant,
+) {
+    for slot in slots.iter() {
+        if now.saturating_duration_since(slot.entered)>=Duration::from_secs(20*60) {
+            if let Some(channel)=cache.get_mut(&slot.login) {
+                // A timed-out attempt does not imply the streak was awarded.
+                if channel.streak_confirmed!=Some(true) {
+                    channel.watch_attempts=20;
+                }
+            }
+        }
+    }
+    let waiting_streak=live.iter().any(|name|
+        !slots.iter().any(|slot|&slot.login==name)
+        && cache.get(name).is_some_and(streak_pending));
+    slots.retain(|slot| {
+        let Some(channel)=cache.get(&slot.login) else {return false};
+        if !live.binary_search(&slot.login).is_ok()
+            || channel.broadcast_id.as_deref()!=Some(slot.broadcast_id.as_str()) {
+            return false;
+        }
+        let backed_off=channel.watch_failures>=3
+            && channel.last_watch_attempt.is_some_and(|at|
+                now.saturating_duration_since(at)<Duration::from_secs(300));
+        if backed_off {return false;}
+        let elapsed=now.saturating_duration_since(slot.entered);
+        if streak_pending(channel) && elapsed<Duration::from_secs(20*60) {
+            return true;
+        }
+        !waiting_streak && elapsed<Duration::from_secs(600)
+    });
+    let mut candidates=live.iter().filter(|name|cache.get(*name)
+        .is_some_and(|channel| {
+            channel.broadcast_id.is_some() &&
+                !(channel.watch_failures>=3 &&
+                    channel.last_watch_attempt.is_some_and(|at|
+                        now.saturating_duration_since(at)<Duration::from_secs(300)))
+        })).collect::<Vec<_>>();
+    candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
+    for name in candidates {
+        if slots.len()>=WATCH_SLOTS {break;}
+        if slots.iter().any(|slot|slot.login==name.as_str()) {continue;}
+        let Some(broadcast_id)=cache.get(name).and_then(|c|c.broadcast_id.clone())
+            else {continue};
+        slots.push(WatchSlot {
+            login:name.clone(),broadcast_id,entered:now
+        });
+    }
 }
 
 fn notify(wake: &PhaseWake) {
@@ -189,7 +300,9 @@ fn run(
     snapshot: Arc<Mutex<MinerSnapshot>>,
     events: Arc<Mutex<VecDeque<MinerEvent>>>,
     desired: Arc<Mutex<Vec<String>>>,
+    live: Arc<Mutex<Vec<String>>>,
     expected_login: Arc<Mutex<Option<String>>>,
+    favorites: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
     wake_rx: Receiver<()>,
@@ -203,6 +316,7 @@ fn run(
     };
     let mut identity: Option<ViewerIdentity> = None;
     let mut cache: HashMap<String, ChannelCache> = HashMap::new();
+    let mut watch_slots: Vec<WatchSlot> = Vec::new();
     let interval = config.poll_interval.max(Duration::from_secs(10));
 
     while !stop.load(Ordering::Acquire) {
@@ -264,7 +378,11 @@ fn run(
                     viewer,
                     &config,
                     &channels,
+                    &live.lock().map(|items|items.clone()).unwrap_or_default(),
+                    &favorites.lock().map(|items|items.clone()).unwrap_or_default(),
                     &mut cache,
+                    &mut watch_slots,
+                    &stop,
                     &snapshot,
                     &events,
                     &phase_wake,
@@ -293,23 +411,49 @@ fn poll_channels(
     viewer: &ViewerIdentity,
     config: &MinerConfig,
     channels: &[String],
+    live: &[String],
+    favorites: &[String],
     cache: &mut HashMap<String, ChannelCache>,
+    watch_slots: &mut Vec<WatchSlot>,
+    stop: &AtomicBool,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
     phase_wake: &PhaseWake,
 ) -> bool {
-    let mut active = 0usize;
     let mut first_error: Option<GqlError> = None;
     let mut auth_failed = false;
-    let mut watch_slots = config.max_watched_channels.min(channels.len());
-
-    for login in channels {
+    // Balance checks are paced separately from the two watch slots.
+    let mut ordered=channels.iter().collect::<Vec<_>>();
+    ordered.sort_by(|a,b| {
+        let live_a=live.binary_search(a).is_ok();
+        let live_b=live.binary_search(b).is_ok();
+        live_b.cmp(&live_a)
+            .then_with(||cache.get(*a).and_then(|c|c.last_points_attempt)
+                .cmp(&cache.get(*b).and_then(|c|c.last_points_attempt)))
+            .then_with(||a.cmp(b))
+    });
+    let mut checked_this_tick=0usize;
+    for login in ordered {
+        if stop.load(Ordering::Acquire) {return false;}
         let channel = cache.entry(login.clone()).or_default();
+        let interval=if live.binary_search(login).is_ok() {
+            Duration::from_secs(45)
+        } else {
+            Duration::from_secs(180)
+        };
+        let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
+        if !due || checked_this_tick>=8 {
+            update_streamer(snapshot,login,channel,None);
+            continue;
+        }
+        checked_this_tick+=1;
+        channel.last_points_attempt=Some(Instant::now());
         if channel.channel_id.is_none() {
             match gql.lookup_channel_id(login) {
                 Ok(id) => channel.channel_id = Some(id),
                 Err(error) => {
                     auth_failed |= error.is_auth();
+                    channel.last_error=Some(error.user_message());
                     update_streamer(snapshot, login, channel, Some(error.user_message()));
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -321,7 +465,8 @@ fn poll_channels(
 
         match gql.points_context(login) {
             Ok(context) => {
-                active += 1;
+                channel.last_error=None;
+                channel.last_points_checked=Some(Instant::now());
                 let prior = channel.balance.replace(context.balance);
                 if let Some(gained) = prior.and_then(|old| context.balance.checked_sub(old))
                     .filter(|gain| *gain > 0)
@@ -355,6 +500,7 @@ fn poll_channels(
                                 }
                                 Err(error) => {
                                     auth_failed |= error.is_auth();
+                                    channel.last_error=Some(error.user_message());
                                     if first_error.is_none() {
                                         first_error = Some(error);
                                     }
@@ -364,42 +510,8 @@ fn poll_channels(
                     }
                 }
 
-                let watch_due = channel.last_watch
-                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(55));
-                if watch_due && watch_slots > 0 {
-                    match gql.stream_info(login) {
-                        Ok(Some(stream)) => {
-                            watch_slots -= 1;
-                            if let Some(channel_id) = channel.channel_id.as_deref() {
-                                match watch.send_minute_watched(
-                                    login,
-                                    channel_id,
-                                    &stream.broadcast_id,
-                                    &viewer.user_id,
-                                ) {
-                                    Ok(()) => {
-                                        channel.last_watch = Some(Instant::now());
-                                        if let Ok(mut current) = snapshot.lock() {
-                                            current.watch_signals = current.watch_signals.saturating_add(1);
-                                        }
-                                    },
-                                    Err(error) => {
-                                        push_event(events, MinerEvent::Warning(format!(
-                                            "{login}: {error}"
-                                        )));
-                                    }
-                                }
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            auth_failed |= error.is_auth();
-                            if first_error.is_none() {
-                                first_error = Some(error);
-                            }
-                        }
-                    }
-                }
+                // Balance checks are independent from the scarce two watch slots.
+                // Live channel metadata and streak milestones are processed below.
 
                 update_streamer(snapshot, login, channel, None);
                 if let Ok(mut current) = snapshot.lock() {
@@ -408,6 +520,7 @@ fn poll_channels(
             }
             Err(error) => {
                 auth_failed |= error.is_auth();
+                channel.last_error=Some(error.user_message());
                 update_streamer(snapshot, login, channel, Some(error.user_message()));
                 if first_error.is_none() {
                     first_error = Some(error);
@@ -416,8 +529,113 @@ fn poll_channels(
         }
     }
 
+    let active=cache.values().filter(|channel|channel.last_points_checked
+        .is_some_and(|at|at.elapsed()<Duration::from_secs(300))
+        && channel.balance.is_some()).count();
+    // Inspect every live official stream on a bounded cadence. A fresh
+    // broadcast always resets prior streak evidence and watch attempts.
+    // Limit metadata/reward-list work per tick to prevent large rosters from
+    // delaying minute-watched credit and point claims.
+    let mut metadata_checks=0usize;
+    let mut streak_checks=0usize;
+    for login in live {
+        if stop.load(Ordering::Acquire) {return false;}
+        let Some(channel)=cache.get_mut(login) else {continue};
+        let Some(id)=channel.channel_id.as_deref() else {continue};
+        if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
+            at.elapsed() >= Duration::from_secs(180)) {
+            metadata_checks+=1;
+            channel.stream_checked=Some(Instant::now());
+            match gql.stream_info(login) {
+                Ok(Some(stream)) => {
+                    if channel.broadcast_id.as_deref()!=Some(stream.broadcast_id.as_str()) {
+                        channel.broadcast_id=Some(stream.broadcast_id);
+                        channel.stream_started=Some(stream.started_at);
+                        channel.streak_confirmed=None;
+                        channel.streak_checked=None;
+                        channel.watch_attempts=0;
+                        channel.last_watch=None;
+                    }
+                }
+                Ok(None) => {
+                    channel.broadcast_id=None;
+                    channel.stream_started=None;
+                    channel.streak_confirmed=None;
+                    channel.streak_checked=None;
+                    channel.watch_attempts=0;
+                }
+                Err(error) => {
+                    auth_failed |= error.is_auth();
+                    channel.last_error=Some(error.user_message());
+                    if first_error.is_none() {first_error=Some(error);}
+                }
+            }
+        }
+        if streak_checks<4 && channel.broadcast_id.is_some()
+            && channel.streak_checked.is_none_or(|at|
+                at.elapsed() >= Duration::from_secs(180)) {
+            streak_checks+=1;
+            channel.streak_checked=Some(Instant::now());
+            match gql.streak(id) {
+                Ok(milestone) => {
+                    channel.streak_length=milestone.length;
+                    channel.streak_confirmed=match (
+                        channel.stream_started.as_deref(),
+                        milestone.achieved_at.as_deref()
+                    ) {
+                        (Some(started),Some(achieved)) =>
+                            crate::streak::milestone_for_current_broadcast(started,achieved),
+                        (Some(_),None) if milestone.length.is_some() => Some(false),
+                        _ => None,
+                    };
+                }
+                Err(error) => {
+                    auth_failed |= error.is_auth();
+                    channel.last_error=Some(error.user_message());
+                    if first_error.is_none(){first_error=Some(error);}
+                }
+            }
+        }
+        update_streamer(snapshot,login,channel,None);
+    }
+
+    // Watch selection persists across polling iterations. Do not create
+    // fresh temporary watch sessions while selected streams are between
+    // their minute-watched requests.
+    refresh_watch_slots(watch_slots,live,cache,favorites,Instant::now());
+    for slot in watch_slots.iter() {
+        if stop.load(Ordering::Acquire) {return false;}
+        let Some(channel)=cache.get_mut(&slot.login) else {continue};
+        if channel.last_watch_attempt.is_some_and(|at|
+            at.elapsed()<Duration::from_secs(55)) {continue;}
+        let Some(channel_id)=channel.channel_id.as_deref() else {continue};
+        channel.last_watch_attempt=Some(Instant::now());
+        match watch.send_minute_watched(
+            &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id
+        ) {
+            Ok(())=>{
+                channel.last_watch=Some(Instant::now());
+                channel.watch_failures=0;
+                channel.watch_attempts=channel.watch_attempts.saturating_add(1);
+                if let Ok(mut current)=snapshot.lock(){
+                    current.watch_signals=current.watch_signals.saturating_add(1);
+                }
+            }
+            Err(error)=>{
+                channel.watch_failures=channel.watch_failures.saturating_add(1);
+                channel.last_error=Some(error.clone());
+                push_event(events,MinerEvent::Warning(format!("{}: {error}",slot.login)));
+            }
+        }
+        update_streamer(snapshot,&slot.login,channel,None);
+    }
     if let Ok(mut current) = snapshot.lock() {
         current.active = active;
+        for streamer in &mut current.streamers {
+            streamer.live = live.binary_search(&streamer.login).is_ok();
+            streamer.watching = watch_slots.iter()
+                .any(|slot|slot.login==streamer.login);
+        }
         current.streamers.sort_by(|left, right| left.login.cmp(&right.login));
     }
 
@@ -445,6 +663,111 @@ fn poll_channels(
     auth_failed
 }
 
+/// Fair streak coverage: channels that still need this broadcast's
+/// milestone are ordered by oldest watch attempt, before favorites. After
+/// their initial streak window, favorites determine ordinary farming order.
+fn watch_priority(
+    a:&String,b:&String,cache:&HashMap<String,ChannelCache>,favorites:&[String]
+)->std::cmp::Ordering {
+    let left=&cache[a];
+    let right=&cache[b];
+    let pending=|channel:&ChannelCache|
+        channel.streak_confirmed!=Some(true) && channel.watch_attempts<20;
+    let l_pending=pending(left);
+    let r_pending=pending(right);
+    let favorite=|login:&String|
+        favorites.iter().position(|item|item==login).unwrap_or(usize::MAX);
+    r_pending.cmp(&l_pending)
+        .then_with(|| if l_pending && r_pending {
+            left.last_watch_attempt.cmp(&right.last_watch_attempt)
+        } else {
+            favorite(a).cmp(&favorite(b))
+        })
+        .then_with(||left.last_watch_attempt.cmp(&right.last_watch_attempt))
+        .then_with(||favorite(a).cmp(&favorite(b)))
+        .then_with(||a.cmp(b))
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+    #[test]
+    fn pending_streaks_are_fair_before_favorites() {
+        let now=Instant::now();
+        let mut cache=HashMap::new();
+        cache.insert("favorite".into(),ChannelCache {
+            last_watch_attempt:Some(now), ..Default::default()
+        });
+        cache.insert("unwatched".into(),ChannelCache::default());
+        let favorites=vec!["favorite".to_owned()];
+        assert_eq!(watch_priority(&"unwatched".into(),&"favorite".into(),
+            &cache,&favorites),std::cmp::Ordering::Less);
+        cache.get_mut("unwatched").unwrap().streak_confirmed=Some(true);
+        assert_eq!(watch_priority(&"favorite".into(),&"unwatched".into(),
+            &cache,&favorites),std::cmp::Ordering::Less);
+    }
+    #[test]
+    fn holds_two_streams_until_one_streak_is_confirmed() {
+        let start=Instant::now();
+        let live=vec!["alpha".to_owned(),"beta".to_owned(),"gamma".to_owned()];
+        let mut cache=HashMap::new();
+        for name in &live {
+            cache.insert(name.clone(),ChannelCache {
+                broadcast_id:Some(format!("{name}-broadcast")),
+                ..Default::default()
+            });
+        }
+        let mut slots=Vec::new();
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        assert_eq!(slots.len(),2);
+        let initial=slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>();
+        assert_eq!(initial,vec!["alpha","beta"]);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],
+            start+Duration::from_secs(90));
+        assert_eq!(slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>(),
+            initial,"a polling cycle must not rotate unfinished streaks");
+        cache.get_mut("alpha").unwrap().streak_confirmed=Some(true);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],
+            start+Duration::from_secs(180));
+        assert_eq!(slots.len(),2);
+        assert!(slots.iter().any(|slot|slot.login=="beta"));
+        assert!(slots.iter().any(|slot|slot.login=="gamma"));
+        assert!(!slots.iter().any(|slot|slot.login=="alpha"));
+    }
+
+    #[test]
+    fn stale_streak_window_releases_slot_without_claiming_success() {
+        let start=Instant::now();
+        let live=vec!["alpha".to_owned(),"beta".to_owned(),"gamma".to_owned()];
+        let mut cache=HashMap::new();
+        for name in &live {
+            cache.insert(name.clone(),ChannelCache {
+                broadcast_id:Some(format!("{name}-broadcast")),
+                ..Default::default()
+            });
+        }
+        let mut slots=Vec::new();
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],
+            start+Duration::from_secs(20*60+1));
+        assert!(slots.iter().any(|slot|slot.login=="gamma"));
+        assert_eq!(cache.get("alpha").unwrap().streak_confirmed,None);
+        assert_eq!(cache.get("alpha").unwrap().watch_attempts,20);
+    }
+
+    #[test]
+    fn completed_streaks_follow_favorite_order() {
+        let mut cache=HashMap::new();
+        for name in ["star","other"] {
+            cache.insert(name.to_owned(),ChannelCache {
+                streak_confirmed:Some(true), ..Default::default()
+            });
+        }
+        assert_eq!(watch_priority(&"star".into(),&"other".into(),&cache,
+            &["star".into()]),std::cmp::Ordering::Less);
+    }
+}
+
 fn update_streamer(
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     login: &str,
@@ -458,16 +781,26 @@ fn update_streamer(
             state.channel_id.clone_from(&cache.channel_id);
             state.points = cache.balance;
             state.last_watch_signal = cache.last_watch;
-            state.last_update = Some(Instant::now());
-            state.error = error;
+            state.streak_confirmed=cache.streak_confirmed;
+            state.streak_length=cache.streak_length;
+            state.streak_checked=cache.streak_checked;
+            state.streak_watch_attempts=cache.watch_attempts;
+            state.last_update = cache.last_points_checked;
+            state.error = error.or_else(||cache.last_error.clone());
         }
         None => current.streamers.push(StreamerState {
             login: login.to_owned(),
             channel_id: cache.channel_id.clone(),
             points: cache.balance,
             last_watch_signal: cache.last_watch,
-            last_update: Some(Instant::now()),
-            error,
+            streak_confirmed:cache.streak_confirmed,
+            streak_length:cache.streak_length,
+            streak_checked:cache.streak_checked,
+            streak_watch_attempts:cache.watch_attempts,
+            live:false,
+            watching:false,
+            last_update: cache.last_points_checked,
+            error:error.or_else(||cache.last_error.clone()),
         }),
     }
 }

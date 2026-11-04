@@ -6,7 +6,9 @@ Aplicativo desktop do [PokéIdle Addons](../README.md), desenvolvido em Rust com
 
 ## Uso
 
-Em **Contas → Twitch**, o minerador tem uma tela dedicada com seletor de contas, estado da autenticação, canais consultados, sinais de visualização aceitos, pontos ganhos e coleta de bônus. O layout segue os cartões compactos de **Contas → Kick**. Os sinais de visualização são confirmações HTTP, não comprovam que a Twitch creditou pontos. A tela lê snapshots do worker, sem realizar solicitações de rede durante a renderização.
+Em **Contas → Twitch**, o minerador tem uma tela dedicada com seletor de contas, estado da autenticação, catálogo de streamers oficiais (inclusive offline), saldo confirmado de pontos por canal, estrelas para favoritos e estado das sequências de visualização. Os favoritos são persistidos separadamente por conta no arquivo `twitch-favorites.json` (sem credenciais). A tela segue os cartões compactos de **Contas → Kick** e lê apenas snapshots do worker, sem rede na renderização.
+
+**Mineração:** há sempre no máximo **dois canais em visualização** por conta, sem controle para alterar esse limite. Os canais oficiais ao vivo com sequência pendente têm prioridade justa, para que canais não assistidos também recebam sua tentativa; depois vêm os favoritos e o restante em rodízio. Os saldos dos canais ao vivo são consultados com maior frequência que os offline e os bônus periódicos disponíveis são reivindicados automaticamente. A sequência só aparece como **confirmada** se o `RewardList` autenticado da Twitch registrar o marco após o início da transmissão atual. O marco é reconsultado e não é assumido com base em um POST de telemetria. O crédito da Twitch não pode ser garantido por uma simples confirmação HTTP.
 
 
 Em **Contas**, configure seus perfis e faça login no PokéIdle quando solicitado. Os cartões mostram o estado da sessão do jogo e os controles de cada conta.
