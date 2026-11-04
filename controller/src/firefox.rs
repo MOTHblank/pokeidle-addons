@@ -786,7 +786,7 @@ mod unmonitored_login_tests {
         assert!(args.contains(&"--new-tab".to_owned()));
         assert!(args.contains(&"https://www.twitch.tv/some_channel".to_owned()));
         assert!(!args.iter().any(|arg| {
-            arg == "--no-remote" ||
+            arg.as_str() == "--no-remote" ||
             arg.contains("remote-debugging") ||
             arg.contains("marionette") ||
             arg.contains("headless")
