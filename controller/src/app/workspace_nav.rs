@@ -317,12 +317,10 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             // check; it does not create or query any diagnostics machinery.
             let recording = app.recording.as_ref()
                 .is_some_and(|session| session.is_running());
-            let diagnostics_name = if recording {
-                format!("● {} · REC", tr("Diagnostics"))
-            } else {
-                tr("Diagnostics").to_owned()
-            };
-            if sidebar_button(ui, &diagnostics_name,
+            // Do not allocate or format anything for ordinary users.
+            let recording_label = recording.then(|| format!("● {} · REC", tr("Diagnostics")));
+            let diagnostics_name = recording_label.as_deref().unwrap_or(tr("Diagnostics"));
+            if sidebar_button(ui, diagnostics_name,
                 app.workspace.panel_tab == PanelTab::Diagnostics).clicked() {
                 app.workspace.panel_tab = PanelTab::Diagnostics;
             }
