@@ -380,6 +380,15 @@ fn reset_after_spawn_failure(profile: GameProfile) {
 fn twitch_config(profile: GameProfile) -> Result<Config, String> {
     Config::for_profile(profile)
 }
+fn save_current_token(
+    profile:GameProfile,
+    token:&str,
+    revision:u64,
+)->Result<(),String> {
+    let committed=crate::native_auth::save_twitch_token_checked(
+        profile,token,||credential_revision_is_current(profile,revision))?;
+    if committed {Ok(())} else {Err("Twitch login cancelled".into())}
+}
 fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64) -> Result<String, String> {
     let config = twitch_config(profile)?;
     let current=||credential_revision_is_current(profile,revision);
@@ -401,8 +410,7 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64
             if cancelled.load(Ordering::Relaxed) || !current() {
                 return Err("Twitch login cancelled".into());
             }
-            native_auth::save_twitch_token(profile, &token)?;
-            if !current() {return Err("Twitch login cancelled".into());}
+            save_current_token(profile,&token,revision)?;
             return Ok(token);
         }
         if firefox::find_profile_process(&config)?.is_some() {
@@ -424,7 +432,7 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64
             // Always release the temporary browser we own, even if protected
             // credential persistence fails afterward.
             let saved=if current() {
-                native_auth::save_twitch_token(profile,&token)
+                save_current_token(profile,&token,revision)
             } else {
                 Err("Twitch login cancelled".into())
             };
@@ -450,8 +458,7 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64
         "Twitch login not detected. Sign in using Firefox; Moth will import automatically.".to_owned()
     })?;
     if !current() {return Err("Twitch login cancelled".into());}
-    native_auth::save_twitch_token(profile, &token)?;
-    if !current() {return Err("Twitch login cancelled".into());}
+    save_current_token(profile,&token,revision)?;
     Ok(token)
 }
 
