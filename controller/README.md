@@ -8,7 +8,7 @@ Aplicativo desktop do [PokéIdle Addons](../README.md), desenvolvido em Rust com
 
 Em **Contas**, configure seus perfis e faça login no PokéIdle quando solicitado. Os cartões mostram o estado da sessão do jogo e os controles de cada conta.
 
-Desde o PokéIdle v1.400, o Moth Controller **não autentica Twitch, não entra em chats e não mantém IRC**. O bônus automático por presença em chat foi removido pelo jogo. A interface apenas lê do estado autenticado do PokéIdle o vínculo da conta Twitch e os temporizadores dos bônus resgatados com pontos do canal: XP, Capture Boost e Secret Lure.
+Desde o PokéIdle v1.400, o Moth Controller **não entra em chats e não mantém IRC**. O bônus automático por presença em chat foi removido pelo jogo. Em **Contas**, o login opcional do **Minerador Twitch** usa o mesmo perfil isolado do Firefox apenas para obter o cookie de autenticação; o worker Rust nativo minera pontos nos canais oficiais ao vivo informados pelo próprio PokéIdle e reivindica os bônus periódicos de pontos disponíveis na Twitch. A Twitch nunca é pré-requisito para iniciar a conta. Os bônus do jogo (XP, Capture Boost e Secret Lure) continuam sendo ativados somente pelos resgates de pontos do canal; presença/mineração não é tratada como bônus ativo e o Moth ainda não resgata automaticamente essas recompensas customizadas.
 
 - **Painel:** visão geral da atividade das contas e detalhes das sessões.
 - **Hunt Atlas:** análise e comparação de caçadas.
