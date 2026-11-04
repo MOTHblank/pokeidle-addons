@@ -25,27 +25,9 @@ fn phase_label(phase: moth_twitch::MinerPhase, br: bool) -> (&'static str, Color
     }
 }
 
-fn open_channel(login: &str) -> Result<(), String> {
-    // Never allow arbitrary URLs or shell interpolation from a server field.
-    let login = moth_twitch::normalize_login(login)
-        .ok_or_else(|| "Invalid Twitch channel".to_owned())?;
-    let mut command = std::process::Command::new(if cfg!(windows) {
-        "explorer.exe"
-    } else {
-        "xdg-open"
-    });
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    command.arg(format!("https://www.twitch.tv/{login}"))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open Twitch channel: {error}"))
+fn open_channel(profile: GameProfile, login: &str) -> Result<(), String> {
+    let config = Config::for_profile(profile)?;
+    firefox::open_twitch_stream(&config, login)
 }
 
 fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
@@ -106,8 +88,8 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                     )).size(11.0).color(GOOD));
                 }
                 open = ui.small_button("↗").on_hover_text(label(br,
-                    "Open Twitch channel in your default browser",
-                    "Abrir canal Twitch no navegador padrão")).clicked();
+                    "Open Twitch channel in this account's Firefox profile",
+                    "Abrir canal Twitch no perfil Firefox desta conta")).clicked();
             });
             if let Some(error) = channel.error.as_ref() {
                 ui.label(RichText::new(error).size(10.0).color(WARN));
@@ -515,7 +497,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     app.toggle_twitch_favorite(index,&channel.login);
                 }
                 if open {
-                    if let Err(error) = open_channel(&channel.login) {
+                    if let Err(error) = open_channel(profile, &channel.login) {
                         app.set_status(error, true);
                     }
                 }
