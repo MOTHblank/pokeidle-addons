@@ -12,15 +12,21 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
 - **Hunt Atlas:** análise e comparação de caçadas.
 - **Automações:** captura automática, reposição de itens e regras do mercado.
 - **Diagnósticos:** painel sob demanda com CPU (percentual de um núcleo lógico),
-  RAM residente/pico, contagem de threads, duração do trabalho da interface,
-  histórico de até dois minutos e tráfego HLS da Kick por conta.
-  A coleta acontece a cada dois segundos **somente** com a página de
-  Diagnósticos selecionada e a janela em foco. Ao trocar de página ou perder
-  o foco, o estado e o histórico são descartados; não há worker de coleta,
-  gravação em disco nem timer próprio fora da página. **Pausar medições** congela
-  a coleta; **Reiniciar medições** recomeça do zero. O uso de memória/CPU é do
-  processo Moth, sem incluir o Firefox. O tráfego exibido inclui apenas bytes
-  HLS da Kick já contabilizados, não todo o tráfego de rede do aplicativo.
+  RAM residente/pico, threads, duração total da atualização da interface (média,
+  P95 e máximo), custos das consultas, filas de comandos, ocupação dos pools Kick
+  e tráfego HLS por conta. A CPU/RAM é amostrada a cada dois segundos; a
+  contagem de threads, a cada 15 segundos. Gráficos com horário preservam
+  intervalos sem dados e pausas, com até 60 amostras. **Pausar medições** congela
+  a coleta; **Retomar** preserva as amostras anteriores e inicia um novo cálculo
+  de CPU; **Reiniciar medições** preserva o estado de pausa. O botão
+  **Exportar relatório** grava um JSON compacto com números e índices de perfis,
+  sem nomes de contas, URLs ou credenciais, somente quando acionado.
+  A coleta acontece **somente** com a página de Diagnósticos selecionada e
+  a janela em foco. Ao trocar de página ou perder o foco, todo o estado de
+  coleta é descartado; sem worker de coleta, timer próprio ou escrita automática.
+  As métricas de CPU e RAM são do processo Moth, sem o Firefox. Filas são
+  contagens de trabalho pendente, não CPU por recurso; a taxa de rede inclui
+  apenas dados HLS Kick já contabilizados.
 - **Abrir no Firefox:** abre o jogo no navegador para interação manual.
 
 ## Kick — tela dedicada em Contas

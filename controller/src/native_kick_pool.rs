@@ -37,6 +37,22 @@ struct Pool {
     limit: usize,
     name: &'static str,
 }
+
+/// Read only when the Diagnostics page explicitly requests a snapshot.
+/// This does not initialize either pool or install ongoing counters.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PoolUsage {
+    pub(crate) workers: usize,
+    pub(crate) idle: usize,
+    pub(crate) pending: usize,
+}
+impl Pool {
+    fn usage(&self) -> Option<PoolUsage> {
+        self.shared.queue.try_lock().ok().map(|queue| PoolUsage {
+            workers: queue.workers, idle: queue.idle, pending: queue.pending.len(),
+        })
+    }
+}
 impl Pool {
     fn new(name: &'static str, limit: usize) -> Self {
         Self { shared: Arc::new(Shared::default()), limit, name }
@@ -145,13 +161,19 @@ pub(crate) fn retire(handle: JoinHandle<()>) {
     }
 }
 
+static CHANNEL_POOL: OnceLock<Pool> = OnceLock::new();
+static HLS_POOL: OnceLock<Pool> = OnceLock::new();
+
 fn channel_pool() -> &'static Pool {
-    static POOL: OnceLock<Pool> = OnceLock::new();
-    POOL.get_or_init(|| Pool::new("moth-kick-channel", MAX_CHANNEL_WORKERS))
+    CHANNEL_POOL.get_or_init(|| Pool::new("moth-kick-channel", MAX_CHANNEL_WORKERS))
 }
 fn hls_pool() -> &'static Pool {
-    static POOL: OnceLock<Pool> = OnceLock::new();
-    POOL.get_or_init(|| Pool::new("moth-kick-hls", MAX_HLS_WORKERS))
+    HLS_POOL.get_or_init(|| Pool::new("moth-kick-hls", MAX_HLS_WORKERS))
+}
+
+/// No new pools/threads are created by opening diagnostics.
+pub(crate) fn diagnostics_usage() -> (Option<PoolUsage>, Option<PoolUsage>) {
+    (CHANNEL_POOL.get().and_then(Pool::usage), HLS_POOL.get().and_then(Pool::usage))
 }
 pub(crate) fn submit_channel(stop: Arc<AtomicBool>,
                              work: impl FnOnce() + Send + 'static) -> Result<(), String> {

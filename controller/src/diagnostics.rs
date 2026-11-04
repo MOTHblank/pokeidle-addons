@@ -8,9 +8,13 @@ use std::time::{Duration, Instant};
 
 pub(crate) const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_HISTORY: usize = 60;
+const THREAD_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
+const MAX_UI_HISTORY: usize = 120;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PerformanceSample {
+    /// Monotonic timestamp, preserving real gaps and pause intervals.
+    pub(crate) at: Option<Instant>,
     /// CPU usage relative to one logical CPU: multi-threaded work can exceed 100%.
     pub(crate) cpu_percent: Option<f64>,
     pub(crate) resident_bytes: Option<u64>,
@@ -33,6 +37,26 @@ pub(crate) struct HlsNetworkSample {
     pub(crate) last_minute: u64,
 }
 
+/// Queue and worker data taken from existing snapshots while diagnostics is open.
+/// These are queue occupancy metrics, NOT a per-feature CPU estimate.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GameQueueSample {
+    pub(crate) slot: usize,
+    pub(crate) phase: String,
+    pub(crate) capture_queued: usize,
+    pub(crate) automation_queued: usize,
+    pub(crate) automation_pending: bool,
+    pub(crate) market_pending: bool,
+    pub(crate) restock_pending: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OperationalSample {
+    pub(crate) game: Vec<GameQueueSample>,
+    pub(crate) kick_channels: Option<crate::native_kick_pool::PoolUsage>,
+    pub(crate) kick_hls: Option<crate::native_kick_pool::PoolUsage>,
+}
+
 #[derive(Clone, Copy)]
 struct ProcessCounters {
     cpu_ns: u128,
@@ -44,14 +68,22 @@ struct ProcessCounters {
 #[derive(Default)]
 pub(crate) struct DiagnosticsSampler {
     last_read: Option<Instant>,
+    last_thread_read: Option<Instant>,
+    last_thread_count: Option<u32>,
     previous: Option<(Instant, ProcessCounters)>,
     pub(crate) current: Option<PerformanceSample>,
     pub(crate) history: VecDeque<PerformanceSample>,
     pub(crate) network: Option<HlsNetworkSample>,
+    pub(crate) operational: Option<OperationalSample>,
     pub(crate) paused: bool,
     pub(crate) last_frame_ms: Option<f64>,
     pub(crate) slowest_frame_ms: f64,
     pub(crate) recorded_frames: u64,
+    pub(crate) ui_frames: VecDeque<f64>,
+    pub(crate) last_preflight_ms: Option<f64>,
+    pub(crate) last_panel_ms: Option<f64>,
+    pub(crate) last_process_probe_ms: Option<f64>,
+    pub(crate) last_network_probe_ms: Option<f64>,
 }
 
 /// Fail closed if the window manager does not report focus. Diagnostics
@@ -66,61 +98,175 @@ fn cpu_usage_percent(previous_ns: u128, current_ns: u128, elapsed: Duration) -> 
     Some((current_ns - previous_ns) as f64 * 100.0 / elapsed_ns as f64)
 }
 
+fn thread_sample_due(last: Option<Instant>, now: Instant) -> bool {
+    last.is_none_or(|at| now.saturating_duration_since(at) >= THREAD_SAMPLE_INTERVAL)
+}
+
 impl DiagnosticsSampler {
+    pub(crate) fn reset(&mut self) {
+        // Reset is a data action; it must never silently resume sampling.
+        let paused = self.paused;
+        *self = Self { paused, ..Self::default() };
+    }
+
     pub(crate) fn set_paused(&mut self, paused: bool) {
         if self.paused && !paused {
-            // A pause interval is not a valid CPU usage sample window.
+            // Time spent paused must not enter a CPU delta. Keep earlier
+            // history and insert a visible gap on the time-based graphs.
             self.previous = None;
             self.last_read = None;
             self.current = None;
-            self.history.clear();
             self.network = None;
+            self.operational = None;
+            self.history.push_back(PerformanceSample {
+                at: Some(Instant::now()),
+                ..PerformanceSample::default()
+            });
+            self.trim_history();
         }
         self.paused = paused;
     }
 
-    // True only on a due sampling tick. Callers may update other cached
-    // metrics on that same tick; never re-read them on intermediate UI frames.
+    fn trim_history(&mut self) {
+        while self.history.len() > MAX_HISTORY { self.history.pop_front(); }
+    }
+
+    /// Returns true only on a due tick. Never polls while paused.
     pub(crate) fn sample_if_due(&mut self) -> bool {
         if self.paused { return false; }
         let now = Instant::now();
-        if self.last_read.is_some_and(|at| now.duration_since(at) < SAMPLE_INTERVAL) {
+        if self.last_read.is_some_and(|at| now.saturating_duration_since(at) < SAMPLE_INTERVAL) {
             return false;
         }
         self.last_read = Some(now);
-        let Some(counters) = read_process_counters() else {
+        let include_threads = thread_sample_due(self.last_thread_read, now);
+        let probe_start = Instant::now();
+        let counters = read_process_counters(include_threads);
+        self.last_process_probe_ms = Some(probe_start.elapsed().as_secs_f64() * 1000.0);
+        if include_threads { self.last_thread_read = Some(now); }
+
+        let Some(counters) = counters else {
             self.previous = None;
             self.current = None;
+            self.history.push_back(PerformanceSample {
+                at: Some(now), ..PerformanceSample::default()
+            });
+            self.trim_history();
             return true;
         };
+        if include_threads { self.last_thread_count = counters.threads; }
         let cpu_percent = self.previous
             .and_then(|(previous_at, previous)| cpu_usage_percent(
-                previous.cpu_ns, counters.cpu_ns, now.duration_since(previous_at)
+                previous.cpu_ns, counters.cpu_ns, now.saturating_duration_since(previous_at)
             ));
         let point = PerformanceSample {
+            at: Some(now),
             cpu_percent,
             resident_bytes: counters.resident_bytes,
             peak_bytes: counters.peak_bytes,
-            threads: counters.threads,
+            threads: self.last_thread_count,
         };
         self.previous = Some((now, counters));
         self.current = Some(point);
         self.history.push_back(point);
-        if self.history.len() > MAX_HISTORY { self.history.pop_front(); }
+        self.trim_history();
         true
     }
 
-    pub(crate) fn record_frame(&mut self, elapsed: Duration) {
+    pub(crate) fn record_frame(
+        &mut self, elapsed: Duration, preflight: Option<Duration>, panel: Option<Duration>,
+    ) {
         if self.paused { return; }
         let ms = elapsed.as_secs_f64() * 1000.0;
         self.last_frame_ms = Some(ms);
         self.slowest_frame_ms = self.slowest_frame_ms.max(ms);
         self.recorded_frames = self.recorded_frames.saturating_add(1);
+        self.ui_frames.push_back(ms);
+        while self.ui_frames.len() > MAX_UI_HISTORY { self.ui_frames.pop_front(); }
+        self.last_preflight_ms = preflight.map(|t| t.as_secs_f64() * 1000.0);
+        self.last_panel_ms = panel.map(|t| t.as_secs_f64() * 1000.0);
+    }
+
+    /// Report creation is an explicit user action, never an automatic save.
+    /// Account names, credentials, network URLs and game state are excluded.
+    fn report_json(&self) -> serde_json::Value {
+        let now = Instant::now();
+        serde_json::json!({
+            "schema": "moth-controller-diagnostics-v1",
+            "version": env!("CARGO_PKG_VERSION"),
+            "sampling_interval_ms": SAMPLE_INTERVAL.as_millis(),
+            "cpu_units": "percent_of_one_logical_cpu",
+            "process_samples": self.history.iter().map(|point| serde_json::json!({
+                "age_ms": point.at.map(|at| now.saturating_duration_since(at).as_millis()),
+                "cpu_percent": point.cpu_percent,
+                "resident_bytes": point.resident_bytes,
+                "peak_bytes": point.peak_bytes,
+                "threads": point.threads,
+            })).collect::<Vec<_>>(),
+            "ui": {
+                "frame_pass_samples_ms": self.ui_frames.iter().copied().collect::<Vec<_>>(),
+                "frame_passes_total": self.recorded_frames,
+                "last_preflight_ms": self.last_preflight_ms,
+                "last_panel_ms": self.last_panel_ms,
+                "last_process_probe_ms": self.last_process_probe_ms,
+                "last_diagnostics_refresh_ms": self.last_network_probe_ms,
+            },
+            "kick_hls": self.network.as_ref().map(|network| serde_json::json!({
+                "session_bytes": network.bytes,
+                "last_minute_bytes": network.last_minute,
+            })),
+            "worker_queues": self.operational.as_ref().map(|ops| serde_json::json!({
+                "game": ops.game.iter().map(|game| serde_json::json!({
+                    "profile_slot": game.slot + 1,
+                    "phase": game.phase,
+                    "capture_queued": game.capture_queued,
+                    "automation_queued": game.automation_queued,
+                    "automation_pending": game.automation_pending,
+                    "market_pending": game.market_pending,
+                    "restock_pending": game.restock_pending,
+                })).collect::<Vec<_>>(),
+                "kick_channels": ops.kick_channels.map(|pool| serde_json::json!({
+                    "workers": pool.workers, "idle": pool.idle, "pending": pool.pending,
+                })),
+                "kick_hls": ops.kick_hls.map(|pool| serde_json::json!({
+                    "workers": pool.workers, "idle": pool.idle, "pending": pool.pending,
+                })),
+            })),
+        })
+    }
+
+    pub(crate) fn export_report(&self) -> Result<std::path::PathBuf, String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let root = crate::config::data_root()?.join("Diagnostics");
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("Could not create diagnostics directory: {error}"))?;
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("Invalid system clock: {error}"))?.as_millis();
+        let path = root.join(format!("diagnostics-{stamp}.json"));
+        let bytes = serde_json::to_vec_pretty(&self.report_json())
+            .map_err(|error| format!("Could not serialize diagnostics: {error}"))?;
+        std::fs::write(&path, bytes)
+            .map_err(|error| format!("Could not save diagnostics report: {error}"))?;
+        Ok(path)
+    }
+
+    pub(crate) fn mean_frame_ms(&self) -> Option<f64> {
+        (!self.ui_frames.is_empty()).then(||
+            self.ui_frames.iter().sum::<f64>() / self.ui_frames.len() as f64
+        )
+    }
+
+    pub(crate) fn p95_frame_ms(&self) -> Option<f64> {
+        if self.ui_frames.is_empty() { return None; }
+        let mut values: Vec<_> = self.ui_frames.iter().copied().collect();
+        values.sort_unstable_by(f64::total_cmp);
+        let index = (values.len() * 95).div_ceil(100).saturating_sub(1);
+        values.get(index).copied()
     }
 }
 
 #[cfg(target_os = "linux")]
-fn read_process_counters() -> Option<ProcessCounters> {
+fn read_process_counters(include_threads: bool) -> Option<ProcessCounters> {
     use std::fs;
     use std::ffi::{c_int, c_long};
     // Linux /proc/self/stat utime/stime are process-wide CPU tick counters.
@@ -148,12 +294,13 @@ fn read_process_counters() -> Option<ProcessCounters> {
         cpu_ns,
         resident_bytes: value("VmRSS:").and_then(|kib| kib.checked_mul(1024)),
         peak_bytes: value("VmHWM:").and_then(|kib| kib.checked_mul(1024)),
-        threads: value("Threads:").and_then(|n| u32::try_from(n).ok()),
+        threads: include_threads.then(|| value("Threads:")
+            .and_then(|n| u32::try_from(n).ok())).flatten(),
     })
 }
 
 #[cfg(windows)]
-fn read_process_counters() -> Option<ProcessCounters> {
+fn read_process_counters(include_threads: bool) -> Option<ProcessCounters> {
     use std::ffi::c_void;
     use std::mem::size_of;
     #[repr(C)]
@@ -216,10 +363,13 @@ fn read_process_counters() -> Option<ProcessCounters> {
     } != 0;
 
     // Toolhelp is invoked *only* on a due sample while Diagnostics is visible.
-    let snapshot = unsafe { CreateToolhelp32Snapshot(0x0000_0004, 0) };
-    let thread_count = if snapshot == usize::MAX as *mut c_void || snapshot.is_null() {
+    let thread_count = if !include_threads {
         None
     } else {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(0x0000_0004, 0) };
+        if snapshot == usize::MAX as *mut c_void || snapshot.is_null() {
+            None
+        } else {
         let mut entry = ThreadEntry32 { size: size_of::<ThreadEntry32>() as u32,
             ..ThreadEntry32::default() };
         let pid = unsafe { GetCurrentProcessId() };
@@ -231,6 +381,7 @@ fn read_process_counters() -> Option<ProcessCounters> {
         }
         unsafe { CloseHandle(snapshot) };
         Some(count)
+        }
     };
 
     Some(ProcessCounters {
@@ -242,7 +393,7 @@ fn read_process_counters() -> Option<ProcessCounters> {
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn read_process_counters() -> Option<ProcessCounters> { None }
+fn read_process_counters(_include_threads: bool) -> Option<ProcessCounters> { None }
 
 #[cfg(test)]
 mod tests {
@@ -273,14 +424,14 @@ mod tests {
     fn pause_does_not_sample_or_record_frames() {
         let mut sampler = DiagnosticsSampler { paused: true, ..DiagnosticsSampler::default() };
         assert!(!sampler.sample_if_due());
-        sampler.record_frame(Duration::from_millis(17));
+        sampler.record_frame(Duration::from_millis(17), None, None);
         assert!(sampler.current.is_none());
         assert_eq!(sampler.recorded_frames, 0);
         assert!(sampler.last_read.is_none());
     }
 
     #[test]
-    fn resuming_clears_stale_cpu_and_network_samples() {
+    fn resuming_preserves_history_but_clears_cpu_baseline() {
         let mut sampler = DiagnosticsSampler {
             paused: true,
             current: Some(PerformanceSample::default()),
@@ -298,7 +449,66 @@ mod tests {
         assert!(sampler.network.is_none());
         assert!(sampler.previous.is_none());
         assert!(sampler.last_read.is_none());
-        assert!(sampler.history.is_empty());
+        assert_eq!(sampler.history.len(), 2);
+        assert!(sampler.history.back().is_some_and(|point| point.cpu_percent.is_none()));
+    }
+
+    #[test]
+    fn reset_keeps_pause_and_clears_data() {
+        let mut sampler = DiagnosticsSampler {
+            paused: true, recorded_frames: 12,
+            current: Some(PerformanceSample::default()),
+            ..DiagnosticsSampler::default()
+        };
+        sampler.reset();
+        assert!(sampler.paused);
+        assert!(sampler.current.is_none());
+        assert_eq!(sampler.recorded_frames, 0);
+        assert!(!sampler.sample_if_due());
+    }
+
+    #[test]
+    fn samples_threads_at_lower_frequency() {
+        let now = Instant::now();
+        assert!(thread_sample_due(None, now));
+        assert!(!thread_sample_due(Some(now), now));
+        assert!(!thread_sample_due(Some(now), now + Duration::from_secs(14)));
+        assert!(thread_sample_due(Some(now), now + Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn ui_statistics_are_bounded_and_correct() {
+        let mut sampler = DiagnosticsSampler::default();
+        for millis in 1..=130 {
+            sampler.record_frame(Duration::from_millis(millis), None, None);
+        }
+        assert_eq!(sampler.ui_frames.len(), MAX_UI_HISTORY);
+        assert_eq!(sampler.mean_frame_ms(), Some(70.5));
+        assert_eq!(sampler.p95_frame_ms(), Some(124.0));
+    }
+
+    #[test]
+    fn exported_report_excludes_account_names_and_private_state() {
+        let mut sampler = DiagnosticsSampler::default();
+        sampler.network = Some(HlsNetworkSample {
+            rows: vec![HlsAccountSample {
+                account: "PRIVATE_ACCOUNT".into(), bytes: 100,
+                last_minute: 50, channels: 1,
+            }],
+            bytes: 100, last_minute: 50,
+        });
+        sampler.operational = Some(OperationalSample {
+            game: vec![GameQueueSample {
+                slot: 1, phase: "Online".into(),
+                capture_queued: 3, ..GameQueueSample::default()
+            }],
+            ..OperationalSample::default()
+        });
+        let report = sampler.report_json().to_string();
+        assert!(!report.contains("PRIVATE_ACCOUNT"));
+        assert!(report.contains("profile_slot"));
+        assert!(report.contains("capture_queued"));
+        assert!(report.contains("moth-controller-diagnostics-v1"));
     }
 
     #[test]
