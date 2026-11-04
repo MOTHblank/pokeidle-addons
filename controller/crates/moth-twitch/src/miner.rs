@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+const WATCH_SLOTS: usize = 2;
 
 #[derive(Clone)]
 pub struct MinerControl {
@@ -523,7 +524,7 @@ fn poll_channels(
         .is_some_and(|channel| channel.broadcast_id.is_some()))
         .collect::<Vec<_>>();
     candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
-    let mut watch_slots=config.max_watched_channels.min(2);
+    let mut watch_slots=WATCH_SLOTS;
     for login in candidates {
         if watch_slots==0 {break;}
         let Some(channel)=cache.get_mut(login) else {continue};
