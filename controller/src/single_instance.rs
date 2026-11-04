@@ -100,6 +100,8 @@ mod windows {
     const INFINITE: u32 = 0xFFFF_FFFF;
     const MUTEX_NAME: &str = "Local\\MothController-Instance-v1";
     const EVENT_NAME: &str = "Local\\MothController-Restore-v1";
+    const WINDOW_TITLE: &str = "Moth · PokéIdle";
+    const SW_RESTORE: i32 = 9;
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -111,6 +113,9 @@ mod windows {
         fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
         fn GetLastError() -> u32;
         fn CloseHandle(handle: Handle) -> i32;
+        fn FindWindowW(class_name: *const u16, window_name: *const u16) -> Handle;
+        fn ShowWindow(window: Handle, command: i32) -> i32;
+        fn SetForegroundWindow(window: Handle) -> i32;
     }
 
     fn wide(text: &str) -> Vec<u16> {
@@ -201,9 +206,24 @@ mod windows {
             if !event.is_null() {
                 let ok = unsafe { SetEvent(event) };
                 unsafe { CloseHandle(event); }
-                return if ok != 0 { Ok(()) }
-                    else { Err(format!("could not signal existing controller: {}",
-                        std::io::Error::last_os_error())) };
+                if ok == 0 {
+                    return Err(format!("could not signal existing controller: {}",
+                        std::io::Error::last_os_error()));
+                }
+                // A second launch originated from a user desktop action, so
+                // also ask Windows directly to restore/foreground the window.
+                // If the GUI is still initializing, the named event handles it.
+                let title = wide(WINDOW_TITLE);
+                let hwnd = unsafe {
+                    FindWindowW(std::ptr::null(), title.as_ptr())
+                };
+                if !hwnd.is_null() {
+                    unsafe {
+                        ShowWindow(hwnd, SW_RESTORE);
+                        SetForegroundWindow(hwnd);
+                    }
+                }
+                return Ok(());
             }
             thread::sleep(Duration::from_millis(50));
         }
@@ -228,7 +248,7 @@ mod unix {
     const LOCK_EX: c_int = 2;
     const LOCK_NB: c_int = 4;
     const RESTORE: &[u8] = b"MOTH-RESTORE-v1\n";
-    const STOP: &[u8] = b"MOTH-STOP-v1\n";
+    const STOP: &[u8] = b"MOTH-STOP----v1\n";
     const ACK: &[u8] = b"OK\n";
 
     unsafe extern "C" {
@@ -302,9 +322,11 @@ mod unix {
                     let Ok((mut stream, _)) = listener.accept() else { break };
                     let _ = stream.set_read_timeout(Some(Duration::from_millis(750)));
                     let mut input = [0u8; RESTORE.len()];
-                    if stream.read_exact(&mut input).is_ok() && input == RESTORE {
-                        signal.request();
-                        let _ = stream.write_all(ACK);
+                    if stream.read_exact(&mut input).is_ok() && input.as_slice() == RESTORE {
+                        if !worker_stop.load(Ordering::Acquire) {
+                            signal.request();
+                            let _ = stream.write_all(ACK);
+                        }
                     }
                 }
             }) {
@@ -327,7 +349,7 @@ mod unix {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                 if stream.write_all(RESTORE).is_ok() {
                     let mut ack = [0u8; ACK.len()];
-                    if stream.read_exact(&mut ack).is_ok() && ack == ACK {
+                    if stream.read_exact(&mut ack).is_ok() && ack.as_slice() == ACK {
                         return Ok(());
                     }
                 }
