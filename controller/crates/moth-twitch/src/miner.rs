@@ -1189,11 +1189,11 @@ mod priority_tests {
         };
         push_event(&bus,MinerEvent::RosterUpdated {channels:12});
         assert!(matches!(
-            queue.lock().unwrap().front(),
+            queue.lock().unwrap().front().cloned(),
             Some(MinerEvent::RosterUpdated {channels:12})
         ));
         assert!(matches!(
-            seen.lock().unwrap().front(),
+            seen.lock().unwrap().front().cloned(),
             Some(MinerEvent::RosterUpdated {channels:12})
         ));
     }
