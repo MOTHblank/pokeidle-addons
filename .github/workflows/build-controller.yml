@@ -132,18 +132,49 @@ jobs:
         working-directory: controller
         run: cargo build --release --locked
 
-      - name: Preparar executável e SHA-256
+      - name: Preparar executáveis Windows
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $arquivo = "moth-controller-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
-          Copy-Item 'controller/target/release/moth-controller.exe' "dist/$arquivo"
-          $hash = (Get-FileHash "dist/$arquivo" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $arquivo" | Set-Content -Encoding ascii "dist/$arquivo.sha256"
+          $versionado = "moth-controller-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
+          Copy-Item 'controller/target/release/moth-controller.exe' "dist/$versionado"
+          Copy-Item 'controller/target/release/moth-controller.exe' 'dist/Moth-Controller-Portable-windows-x86_64.exe'
 
-      - name: Atestar proveniência do executável Windows
+          # The installer should carry the exact same application icon as the
+          # executable and tray icon, without checking a generated binary into Git.
+          Add-Type -AssemblyName System.Drawing
+          $appExe = (Resolve-Path 'controller/target/release/moth-controller.exe').Path
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($appExe)
+          $stream = [System.IO.File]::Create((Join-Path (Resolve-Path 'dist').Path 'moth-controller.ico'))
+          try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose() }
+
+      - name: Instalar Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Gerar instalador por usuário
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.versao.outputs.version }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc" }
+          $controller = (Resolve-Path 'controller/target/release/moth-controller.exe').Path
+          $icon = (Resolve-Path 'dist/moth-controller.ico').Path
+          & $iscc "/DAppVersion=$env:RELEASE_VERSION" "/DControllerExe=$controller" "/DControllerIcon=$icon" "/O$((Resolve-Path 'dist').Path)" 'controller/windows/moth-controller.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+
+      - name: Gerar SHA-256 dos executáveis Windows
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter '*.exe' | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)" | Set-Content -Encoding ascii "$($_.FullName).sha256"
+          }
+
+      - name: Atestar proveniência dos executáveis Windows
         uses: actions/attest@v4
         with:
           subject-path: dist/*.exe
@@ -260,6 +291,8 @@ jobs:
         run: |
           set -euo pipefail
           test -s "dist/moth-controller-v$RELEASE_VERSION-windows-x86_64.exe"
+          test -s "dist/Moth-Controller-Portable-windows-x86_64.exe"
+          test -s "dist/Moth-Controller-Setup-v$RELEASE_VERSION.exe"
           test -s "dist/moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
           (cd dist && for checksum in *.sha256; do sed -i 's/\r$//' "$checksum"; done && sha256sum -c ./*.sha256)
           cp LICENSE dist/LICENSE.txt
@@ -302,4 +335,4 @@ jobs:
           else
             gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --generate-notes
           fi
-          echo "Release $tag publicada com Windows, Linux, licença e checksums."
+          echo "Release $tag publicada com instalador Windows, portátil, Linux, licença e checksums."
