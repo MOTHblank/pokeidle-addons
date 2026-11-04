@@ -192,7 +192,7 @@ fn read_twitch_cookie(profile_dir: &Path) -> Result<Option<String>, String> {
                 if text.is_null() { continue; }
                 let bytes = unsafe { std::slice::from_raw_parts(text, length as usize) };
                 if let Ok(raw) = std::str::from_utf8(bytes) {
-                    if let Some(token) = decode_twitch_session_cookie(raw) {
+                    if let Some(token) = decode_twitch_auth_cookie(raw) {
                         return Ok(Some(token));
                     }
                 }
