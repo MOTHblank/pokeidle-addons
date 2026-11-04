@@ -117,6 +117,162 @@ fn history_chart(
         });
 }
 
+/// Explicit capture outlives this page; the OS sampler is owned by the
+/// recording thread, while this UI only reads snapshots when visited.
+fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
+    let mut status: Option<(String, bool)> = None;
+    let mut discard = false;
+    egui::Frame::new().fill(PANEL).stroke(egui::Stroke::new(1.0, BORDER))
+        .corner_radius(10.0).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+            ui.label(RichText::new(tr("Developer capture"))
+                .size(14.0).strong().color(TEXT));
+            ui.label(RichText::new(tr(
+                "Start an explicit 1-second recording to capture CPU, RAM and thread activity while switching pages, using other applications or minimizing to the tray. It continues until stopped, with a bounded one-hour timeline."
+            )).size(10.0).color(MUTED));
+            ui.add_space(8.0);
+            if app.recording.is_none() {
+                if ui.button(tr("Start performance recording")).clicked() {
+                    match crate::diagnostics_recording::RecordingSession::start() {
+                        Ok(recording) => app.recording = Some(recording),
+                        Err(error) => status = Some((error, true)),
+                    }
+                }
+            }
+
+            if let Some(recording) = app.recording.as_mut() {
+                let running = recording.is_running();
+                ui.horizontal_wrapped(|ui| {
+                    let label = if running { tr("Recording active") } else { tr("Recording stopped") };
+                    runtime_chip(ui, tr("Status"), label, if running { GOOD } else { MUTED });
+                    runtime_chip(ui, tr("Elapsed"),
+                        &format!("{:.0} s", recording.elapsed().as_secs_f64()), ACCENT);
+                    if running && ui.button(tr("Stop and keep capture")).clicked() {
+                        recording.stop();
+                    }
+                    if !running && ui.small_button(tr("Discard capture")).clicked() {
+                        discard = true;
+                    }
+                    if ui.small_button(tr("Export full capture")).clicked() {
+                        match recording.export_report() {
+                            Ok(path) => status = Some((
+                                format!("{}: {}", tr("Diagnostics report saved"), path.display()),
+                                false
+                            )),
+                            Err(error) => status = Some((error, true)),
+                        }
+                    }
+                });
+                if running {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut recording.draft_marker)
+                            .hint_text(tr("Optional marker label")).desired_width(220.0));
+                        if ui.small_button(tr("Mark event now")).clicked() {
+                            let label = recording.draft_marker.trim();
+                            recording.mark(if label.is_empty() {
+                                "Manual marker".to_string()
+                            } else {
+                                label.to_string()
+                            });
+                            recording.draft_marker.clear();
+                        }
+                    });
+                }
+                let current = recording.snapshot();
+                if let Some(snapshot) = current {
+                    ui.add_space(12.0);
+                    ui.horizontal_wrapped(|ui| {
+                        runtime_chip(ui, tr("CPU"),
+                            &cpu_label(snapshot.current.and_then(|s| s.cpu_percent)), ACCENT);
+                        runtime_chip(ui, tr("RAM"),
+                            &memory_label(snapshot.current.and_then(|s| s.resident_bytes)), GOOD);
+                        runtime_chip(ui, tr("Captured points"),
+                            &snapshot.history.len().to_string(), MUTED);
+                        runtime_chip(ui, tr("Thread snapshots"),
+                            &snapshot.thread_history.len().to_string(), MUTED);
+                    });
+                    ui.add_space(8.0);
+                    let history: Vec<_> = snapshot.history.iter().copied().collect();
+                    ui.columns(2, |cols| {
+                        history_chart(&mut cols[0], tr("Recorded CPU history"),
+                            &history, |s| s.cpu_percent, ACCENT, "%");
+                        history_chart(&mut cols[1], tr("Recorded RAM history"),
+                            &history, |s| s.resident_bytes.map(|b| b as f64 / 1_048_576.0),
+                            GOOD, "MiB");
+                    });
+                    ui.add_space(9.0);
+                    // Summarize spikes over the whole retained recording,
+                    // rather than only showing whichever thread is busy now.
+                    let mut cpu_peaks: Vec<_> = snapshot.history.iter()
+                        .filter_map(|point| Some((point.at?, point.cpu_percent?)))
+                        .collect();
+                    cpu_peaks.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
+                    if let Some((_, peak)) = cpu_peaks.first() {
+                        ui.label(RichText::new(format!(
+                            "{}: {peak:.1}%", tr("Highest recorded CPU")
+                        )).size(11.0).strong().color(TEXT));
+                    }
+                    let mut top_threads = std::collections::HashMap::<u64, (String, f64)>::new();
+                    for point in &snapshot.thread_history {
+                        for thread in &point.hottest {
+                            let row = top_threads.entry(thread.id)
+                                .or_insert_with(|| (thread.name.clone(), 0.0));
+                            row.1 = row.1.max(thread.cpu_percent);
+                        }
+                    }
+                    let mut top_threads: Vec<_> = top_threads.into_iter().collect();
+                    top_threads.sort_unstable_by(|a, b| b.1.1.total_cmp(&a.1.1));
+                    if !top_threads.is_empty() {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(tr("Highest thread CPU over capture"))
+                            .size(11.0).strong().color(TEXT));
+                        for (id, (name, peak)) in top_threads.iter().take(8) {
+                            ui.label(RichText::new(format!(
+                                "{name} · #{id} · {peak:.1}%"
+                            )).size(10.0).color(MUTED));
+                        }
+                    }
+                } else {
+                    ui.label(RichText::new(tr("Recording snapshot currently busy"))
+                        .size(10.0).color(WARN));
+                }
+
+                if !recording.page_timings.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(tr("UI cost by page during capture"))
+                        .size(11.0).strong().color(TEXT));
+                    let mut rows: Vec<_> = recording.page_timings.iter().collect();
+                    rows.sort_unstable_by(|a, b|
+                        b.1.p95_ms().total_cmp(&a.1.p95_ms()));
+                    for (name, times) in rows {
+                        ui.label(RichText::new(format!(
+                            "{} · {}: {:.1} ms · P95: {:.1} ms · {}: {:.1} ms · {}: {}",
+                            name, tr("Average"), times.average_ms(),
+                            times.p95_ms(), tr("Peak"), times.maximum_ms,
+                            tr("Passes"), times.passes
+                        )).size(10.0).color(MUTED));
+                    }
+                }
+
+                if !recording.markers.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(tr("Recording events"))
+                        .size(11.0).strong().color(TEXT));
+                    let now = std::time::Instant::now();
+                    for marker in recording.markers.iter().rev().take(10) {
+                        ui.label(RichText::new(format!(
+                            "-{:.0}s · {}", now.saturating_duration_since(marker.at).as_secs_f64(),
+                            marker.label
+                        )).size(10.0).color(MUTED));
+                    }
+                }
+            }
+        });
+    if discard { app.recording = None; }
+    if let Some((message, error)) = status {
+        app.set_status(message, error);
+    }
+}
+
 pub(super) fn draw_diagnostics_panel(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
@@ -132,6 +288,8 @@ pub(super) fn draw_diagnostics_panel(
                 "Measurements run only while this page is visible and the window is focused. Closing it or switching pages stops sampling and discards its history."
             )).size(11.0).color(MUTED));
             ui.add_space(10.0);
+            draw_recording_section(app, ui);
+            ui.add_space(12.0);
 
             if !active {
                 ui.label(RichText::new(tr(
