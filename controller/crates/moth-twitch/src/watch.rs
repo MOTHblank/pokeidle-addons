@@ -82,7 +82,7 @@ impl WatchClient {
             .map_err(|_| "Could not load Twitch settings".to_owned())?
             .text()
             .map_err(|_| "Could not read Twitch settings".to_owned())?;
-        let raw = extract_json_string(&script, ""spade_url":"")
+        let raw = extract_json_string(&script, "\"spade_url\":\"")
             .ok_or_else(|| "Twitch watch endpoint was not found".to_owned())?;
         let raw = raw.replace("\\/", "/").replace("\\u0026", "&");
         let url = Url::parse(&raw)
@@ -144,7 +144,7 @@ mod tests {
     fn extracts_escaped_spade_value() {
         let script = r#"x={"spade_url":"https:\/\/spade.twitch.tv\/track"};"#;
         assert_eq!(
-            extract_json_string(script, ""spade_url":""),
+            extract_json_string(script, "\"spade_url\":\""),
             Some("https:\/\/spade.twitch.tv\/track")
         );
     }
