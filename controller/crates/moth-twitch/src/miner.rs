@@ -16,6 +16,7 @@ type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 #[derive(Clone)]
 pub struct MinerControl {
     desired: Arc<Mutex<Vec<String>>>,
+    expected_login: Arc<Mutex<Option<String>>>,
     wake: SyncSender<()>,
 }
 
@@ -36,6 +37,21 @@ impl MinerControl {
             let _ = self.wake.try_send(());
         }
     }
+
+    pub fn set_expected_login(&self, login: Option<String>) {
+        let login = login.and_then(|login| crate::model::normalize_login(&login));
+        let changed = self.expected_login.lock().map(|mut current| {
+            if *current == login {
+                false
+            } else {
+                *current = login;
+                true
+            }
+        }).unwrap_or(false);
+        if changed {
+            let _ = self.wake.try_send(());
+        }
+    }
 }
 
 pub struct Miner {
@@ -52,6 +68,7 @@ impl Miner {
         let snapshot = Arc::new(Mutex::new(MinerSnapshot::default()));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let desired = Arc::new(Mutex::new(Vec::new()));
+        let expected_login = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
         let phase_wake: PhaseWake = Arc::new(Mutex::new(None));
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
@@ -59,6 +76,7 @@ impl Miner {
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_events = Arc::clone(&events);
         let worker_desired = Arc::clone(&desired);
+        let worker_expected_login = Arc::clone(&expected_login);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
         let worker_name = credentials.username.as_deref().unwrap_or("account").to_owned();
@@ -71,6 +89,7 @@ impl Miner {
                     worker_snapshot,
                     worker_events,
                     worker_desired,
+                    worker_expected_login,
                     worker_stop,
                     worker_phase_wake,
                     wake_rx,
@@ -81,7 +100,7 @@ impl Miner {
         Ok(Self {
             snapshot,
             events,
-            control: MinerControl { desired, wake: wake_tx },
+            control: MinerControl { desired, expected_login, wake: wake_tx },
             stop,
             phase_wake,
         })
@@ -170,6 +189,7 @@ fn run(
     snapshot: Arc<Mutex<MinerSnapshot>>,
     events: Arc<Mutex<VecDeque<MinerEvent>>>,
     desired: Arc<Mutex<Vec<String>>>,
+    expected_login: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
     wake_rx: Receiver<()>,
@@ -220,7 +240,21 @@ fn run(
         }
 
         if let Some(viewer) = identity.as_ref() {
-            if !channels.is_empty() {
+            let expected = expected_login.lock().ok().and_then(|login| login.clone());
+            if let Some(expected)=expected.as_deref().filter(|expected| *expected != viewer.login) {
+                if let Ok(mut current)=snapshot.lock() {
+                    current.active=0;
+                }
+                set_phase(
+                    &snapshot,
+                    &phase_wake,
+                    MinerPhase::NeedsLogin,
+                    Some(format!(
+                        "Twitch is signed in as {}, but PokéIdle is linked to {}",
+                        viewer.login, expected
+                    )),
+                );
+            } else if !channels.is_empty() {
                 let auth_failed = poll_channels(
                     &gql,
                     &mut watch,
