@@ -1,6 +1,6 @@
 //! Read-only stream redemption, XP bonus and browser-tab summaries from Health.
 use super::{bonus_chip, compact_text, egui, format_pct, tr, Health,
-    RichText, DIM, GOOD, MUTED, PANEL_ALT, TEXT};
+    RichText, DIM, GOOD, MUTED, PANEL_ALT};
 
 fn twitch_clock_ms(health:&Health)->u64 {
     if health.twitch_server_now_ms>0 {

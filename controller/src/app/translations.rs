@@ -327,7 +327,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Damage dealt" => "DANO CAUSADO",
         "Damage received" => "DANO RECEBIDO",
         "No type advantage (1×)" => "Sem vantagem · 1×",
-        "Type data unavailable" => "Tipos indisponíveis",
         "TYPE MATCHUP" => "CONFRONTO DE TIPOS",
         "Current wild species" => "Espécie selvagem atual",
         "Most common hunt species" => "Espécie representativa da hunt",
