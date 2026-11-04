@@ -36,6 +36,7 @@ fn localize_status_pt(message: String) -> String {
         ("Could not observe the Twitch Firefox login window", "Não foi possível acompanhar a janela de login Twitch no Firefox"),
         ("Twitch login was imported, but its temporary Firefox window could not close: ", "O login Twitch foi importado, mas a janela temporária do Firefox não pôde ser fechada: "),
         ("Alternative Twitch login timed out before Firefox exposed a new auth token", "Login Twitch alternativo expirou antes que o Firefox fornecesse um novo token de autenticação"),
+        ("Alternative Twitch Firefox window closed before a new auth token was detected", "A janela alternativa da Twitch no Firefox foi fechada antes da detecção de um novo token de autenticação"),
         ("Alternative Twitch login was imported, but its Firefox window could not close: ", "O login Twitch alternativo foi importado, mas a janela do Firefox não pôde ser fechada: "),
         ("This account's Firefox profile is already open. Close it before using alternative Twitch sign-in.", "O perfil Firefox desta conta já está aberto. Feche-o antes de usar o login Twitch alternativo."),
         ("Twitch login not detected. Sign in using Firefox; Moth will import automatically.", "Login Twitch não detectado. Entre pelo Firefox; o Moth importará automaticamente."),
