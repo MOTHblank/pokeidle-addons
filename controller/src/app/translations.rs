@@ -3,6 +3,24 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "An enabled Any item rule may buy items even when a matching Specific item rule is off." => "Uma regra de Qualquer item ativada pode comprar itens mesmo quando uma regra Específica correspondente está desativada.",
+        "Non-shiny Pokémon" => "Pokémon não shiny",
+        "Pokémon potency (0 = any, 1–5)" => "Potência do Pokémon (0 = qualquer, 1–5)",
+        "Minimum" => "Mínimo",
+        "Maximum" => "Máximo",
+        "Species ID (0 = any)" => "ID da espécie (0 = qualquer)",
+        "Minimum level (0 = any)" => "Nível mínimo (0 = qualquer)",
+        "Minimum IV sum (0 = any)" => "Soma mínima de IVs (0 = qualquer)",
+        "Minimum listing units (0 = any)" => "Unidades mínimas do anúncio (0 = qualquer)",
+        "Maximum units per purchase (0 = all affordable)" => "Máximo de unidades por compra (0 = todas as que couberem no orçamento)",
+        "Choose an item (for item listings), enter a real listing ID, and set a maximum price." => "Escolha um item (para anúncios de itens), informe um ID real de anúncio e defina um preço máximo.",
+        "No item selected" => "Nenhum item selecionado",
+        "Retry item catalog" => "Tentar catálogo de itens novamente",
+        "Loading PokéIdle item catalog…" => "Carregando catálogo de itens do PokéIdle…",
+        "Search items by name…" => "Buscar itens por nome…",
+        "No matching items" => "Nenhum item encontrado",
+        "Showing the first 80 matches. Type more to narrow the catalog." => "Exibindo os primeiros 80 resultados. Digite mais para refinar o catálogo.",
+        "The saved item is not present in the current PokéIdle catalog. Choose a replacement before saving." => "O item salvo não está presente no catálogo atual do PokéIdle. Escolha um substituto antes de salvar.",
         "Error" => "Erro",
         "Stop diagnostics" => "Parar diagnóstico",
         "Stop the active developer diagnostics recording and keep its capture" =>
