@@ -169,9 +169,37 @@ impl PvpAutomation {
         // Turning off a queue we started must cancel it. Do not cancel a
         // player-created queue when this controller never joined it.
         if !enabled && self.owned_queue {
-            self.owned_queue = false;
-            self.join_sent = None;
-            self.next_join_at = Some(now + REFUSAL_BACKOFF);
+            // Wait for an outstanding Join acknowledgement before cancelling;
+            // the server can complete independent handlers out of order.
+            if let Some(sent) = self.join_sent {
+                if now.saturating_duration_since(sent) < JOIN_ACK_TIMEOUT {
+                    return None;
+                }
+                self.join_sent = None;
+                self.queue_known = false;
+                self.next_info_at = None;
+            }
+            // A timed-out Leave is verified with Info, not blindly repeated.
+            if let Some(sent) = self.leave_sent {
+                if now.saturating_duration_since(sent) < JOIN_ACK_TIMEOUT {
+                    return None;
+                }
+                self.leave_sent = None;
+                self.queue_known = false;
+                self.next_info_at = None;
+            }
+            if !self.queue_known {
+                if self.next_info_at.is_none_or(|due| now >= due) {
+                    self.next_info_at = Some(now + INFO_INTERVAL);
+                    return Some(PvpAction::Info);
+                }
+                return None;
+            }
+            if !self.queued {
+                self.owned_queue = false;
+                return None;
+            }
+            self.leave_sent = Some(now);
             return Some(PvpAction::Leave);
         }
         if vip {
