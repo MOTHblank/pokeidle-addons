@@ -18,6 +18,12 @@ impl TwitchMinerControl {
             inner.set_channels(channels);
         }
     }
+
+    pub fn set_expected_login(&self, login: Option<String>) {
+        if let Some(inner) = self.inner.as_ref() {
+            inner.set_expected_login(login);
+        }
+    }
 }
 
 pub struct TwitchMinerSession {
@@ -82,7 +88,7 @@ pub fn official_live_channels(payload: &Value) -> Option<Vec<String>> {
     let official = twitch.get("oficiais")?.as_array()?;
     let live = twitch.get("lives")?.as_array()?;
 
-    let mut eligible = official.iter().filter(|entry| {
+    let eligible = official.iter().filter(|entry| {
         entry.get("bonus").and_then(Value::as_bool).unwrap_or(true)
     }).filter_map(|entry| {
         entry.get("login")
@@ -103,7 +109,6 @@ pub fn official_live_channels(payload: &Value) -> Option<Vec<String>> {
 
     channels.sort_unstable();
     channels.dedup();
-    eligible.clear();
     Some(channels)
 }
 
