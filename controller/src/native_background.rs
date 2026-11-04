@@ -1175,6 +1175,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     }
                     if send_failed { break; }
                     let boss_phase = boss_manager.view.phase.clone();
+                    let boss_warning = boss_manager.view.warning.clone();
                     if let Some(command) = boss_manager.next_action(
                         &hunt_intel.view, &mut navigator, Instant::now()) {
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
@@ -1183,7 +1184,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             break;
                         }
                     }
-                    if boss_manager.view.phase != boss_phase {
+                    if boss_manager.view.phase != boss_phase ||
+                        boss_manager.view.warning != boss_warning {
                         boss_manager.publish(&boss);
                     }
                     // The 60 ms worker wake catches narrow travel openings for
