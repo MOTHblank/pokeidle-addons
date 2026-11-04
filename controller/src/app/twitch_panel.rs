@@ -316,22 +316,26 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     if ui.small_button(label(br,"Cancel","Cancelar")).clicked() {
                         crate::native_twitch_login::cancel(profile);
                     }
-                } else if ui.button(label(br,
-                    if snapshot.is_some() {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
-                    if snapshot.is_some() {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
-                )).clicked() {
-                    // A cached Firefox cookie can complete before the next UI
-                    // pump observes LoginStatus::Running. Mark this user action
-                    // as a fresh generation immediately so Done is never
-                    // mistaken for the previous login completion.
-                    app.runtimes[index].twitch.login_done_seen=false;
-                    let result=if snapshot.is_some() {
-                        crate::native_twitch_login::start_fresh(profile)
-                    } else {
-                        crate::native_twitch_login::start(profile)
-                    };
-                    if let Err(error)=result {
-                        app.set_status(error,true);
+                } else {
+                    let has_login=snapshot.is_some() ||
+                        matches!(login_status,crate::native_twitch_login::LoginStatus::Done);
+                    if ui.button(label(br,
+                        if has_login {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
+                        if has_login {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
+                    )).clicked() {
+                        // A cached Firefox cookie can complete before the next UI
+                        // pump observes LoginStatus::Running. Mark this user action
+                        // as a fresh generation immediately so Done is never
+                        // mistaken for the previous login completion.
+                        app.runtimes[index].twitch.login_done_seen=false;
+                        let result=if has_login {
+                            crate::native_twitch_login::start_fresh(profile)
+                        } else {
+                            crate::native_twitch_login::start(profile)
+                        };
+                        if let Err(error)=result {
+                            app.set_status(error,true);
+                        }
                     }
                 }
                 if (snapshot.is_some() ||
