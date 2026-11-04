@@ -799,12 +799,20 @@ fn poll_channels(
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
         channel.last_watch_attempt=Some(Instant::now());
         match watch.send_minute_watched(
-            &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id
+            &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id,
+            || gql.playback_access(&slot.login).map_err(|error|error.user_message())
         ) {
-            Ok(())=>{
+            Ok(ack)=>{
                 channel.last_watch=Some(Instant::now());
                 channel.watch_failures=0;
                 channel.watch_attempts=channel.watch_attempts.saturating_add(1);
+                if let Some(media_error)=ack.media_error {
+                    push_event(events,MinerEvent::Warning(format!(
+                        "{} media activity: {media_error}",slot.login
+                    )));
+                } else {
+                    channel.last_media_activity=Some(Instant::now());
+                }
                 if let Ok(mut current)=snapshot.lock(){
                     current.watch_signals=current.watch_signals.saturating_add(1);
                 }
@@ -859,8 +867,7 @@ fn watch_priority(
 )->std::cmp::Ordering {
     let left=&cache[a];
     let right=&cache[b];
-    let pending=|channel:&ChannelCache|
-        channel.streak_confirmed!=Some(true) && channel.watch_attempts<20;
+    let pending=streak_pending;
     let l_pending=pending(left);
     let r_pending=pending(right);
     let favorite=|login:&String|
@@ -906,17 +913,17 @@ mod priority_tests {
             });
         }
         let mut slots=Vec::new();
-        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start,STREAK_PRIORITY_BASE);
         assert_eq!(slots.len(),2);
         let initial=slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>();
         assert_eq!(initial,vec!["alpha","beta"]);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
-            start+Duration::from_secs(90));
+            start+Duration::from_secs(90),STREAK_PRIORITY_BASE);
         assert_eq!(slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>(),
             initial,"a polling cycle must not rotate unfinished streaks");
         cache.get_mut("alpha").unwrap().streak_confirmed=Some(true);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
-            start+Duration::from_secs(180));
+            start+Duration::from_secs(180),STREAK_PRIORITY_BASE);
         assert_eq!(slots.len(),2);
         assert!(slots.iter().any(|slot|slot.login=="beta"));
         assert!(slots.iter().any(|slot|slot.login=="gamma"));
@@ -937,10 +944,10 @@ mod priority_tests {
         let mut slots=Vec::new();
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
-            start+Duration::from_secs(20*60+1));
+            start+STREAK_PRIORITY_BASE+Duration::from_secs(1),STREAK_PRIORITY_BASE);
         assert!(slots.iter().any(|slot|slot.login=="gamma"));
         assert_eq!(cache.get("alpha").unwrap().streak_confirmed,None);
-        assert_eq!(cache.get("alpha").unwrap().watch_attempts,20);
+        assert!(cache.get("alpha").unwrap().streak_priority_exhausted);
     }
 
     #[test]
@@ -969,6 +976,7 @@ fn update_streamer(
             state.channel_id.clone_from(&cache.channel_id);
             state.points = cache.balance;
             state.last_watch_signal = cache.last_watch;
+            state.last_media_activity = cache.last_media_activity;
             state.streak_confirmed=cache.streak_confirmed;
             state.streak_length=cache.streak_length;
             state.streak_checked=cache.streak_checked;
@@ -981,6 +989,7 @@ fn update_streamer(
             channel_id: cache.channel_id.clone(),
             points: cache.balance,
             last_watch_signal: cache.last_watch,
+            last_media_activity:cache.last_media_activity,
             streak_confirmed:cache.streak_confirmed,
             streak_length:cache.streak_length,
             streak_checked:cache.streak_checked,
