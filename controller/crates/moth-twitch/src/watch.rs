@@ -162,9 +162,12 @@ impl WatchClient {
     }
 
     fn read_playlist(&self,address:&Url)->Result<Vec<Url>,String> {
-        let response=self.client.get(address.clone()).timeout(Duration::from_secs(10)).send()
+        let response=self.client.get(address.clone())
+            .timeout(Duration::from_secs(10))
+            .header("Connection","close")
+            .send()
             .map_err(|_|"Could not load Twitch stream playlist".to_owned())?;
-        if !response.status().is_success() {
+        if response.status().as_u16()!=200 {
             return Err(format!(
                 "Twitch stream playlist returned HTTP {}",
                 response.status().as_u16()
