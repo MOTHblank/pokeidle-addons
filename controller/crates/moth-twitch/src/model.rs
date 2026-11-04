@@ -77,6 +77,8 @@ pub struct StreamerState {
     pub points: Option<u64>,
     /// A successful telemetry HTTP acknowledgement, not confirmed reward credit.
     pub last_watch_signal: Option<Instant>,
+    /// Last time the HLS media playlist and listed segments were successfully touched.
+    pub last_media_activity: Option<Instant>,
     /// Confirmed only when RewardList's achievement timestamp belongs to
     /// the current live broadcast. None = not yet verified.
     pub streak_confirmed: Option<bool>,
@@ -98,6 +100,8 @@ pub struct MinerSnapshot {
     pub watch_signals: u64,
     pub points_gained: u64,
     pub bonuses_claimed: u64,
+    pub pubsub_connected: bool,
+    pub pubsub_error: Option<String>,
     pub last_received: Option<Instant>,
     pub error: Option<String>,
     pub streamers: Vec<StreamerState>,
@@ -112,6 +116,8 @@ impl Default for MinerSnapshot {
             watch_signals: 0,
             points_gained: 0,
             bonuses_claimed: 0,
+            pubsub_connected: false,
+            pubsub_error: None,
             last_received: None,
             error: None,
             streamers: Vec::new(),
@@ -124,6 +130,7 @@ pub enum MinerEvent {
     Connected,
     PointsGained { channel: String, amount: u64, balance: u64 },
     BonusClaimed { channel: String },
+    StreakConfirmed { channel: String, reason: String },
     Warning(String),
 }
 
