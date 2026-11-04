@@ -75,7 +75,7 @@ impl Default for BuyRule {
 impl BuyRule {
     fn valid(&self) -> bool {
         !self.id.is_empty() && self.id.len() <= 100 &&
-        matches!(self.kind.as_str(), "item" | "any_item" | "pokemon_any" | "pokemon_shiny" | "pokemon_p5") &&
+        matches!(self.kind.as_str(), "item" | "any_item" | "pokemon_any" | "pokemon_normal" | "pokemon_shiny" | "pokemon_p5") &&
         matches!(self.currency.as_str(), "gold" | "orb") &&
         (self.kind != "item" || self.item_id > 0) &&
         (self.kind != "pokemon_shiny" || self.currency == "orb") &&
@@ -207,6 +207,7 @@ impl MarketRules {
             for (i, entry) in entries.iter().enumerate() {
                 let kind = if prefix == "pokemon" {
                     match entry.get("kind").and_then(Value::as_str) {
+                        Some("normal") => "pokemon_normal",
                         Some("any") => "pokemon_any",
                         Some("shiny") => "pokemon_shiny",
                         Some("p5") => "pokemon_p5", _ => continue
@@ -224,6 +225,8 @@ impl MarketRules {
                     max_spend_day: number(entry, "maxSpendDay").unwrap_or(0),
                     max_purchases_session: number(entry, "maxPurchasesSession").unwrap_or(0),
                     max_quantity_session: number(entry, "maxQuantitySession").unwrap_or(0),
+                    min_potency: 0, max_potency: 0,
+                    min_listing_quantity: 0, max_units_per_buy: 0,
                 };
                 if rule.buy_max > 0 && rule.valid() { out.rules.push(rule); }
             }
@@ -325,12 +328,21 @@ impl Offer {
     fn matches(&self, rule: &BuyRule, nick: &str, server_ms: u64) -> bool {
         if self.price > rule.buy_max || self.seller.eq_ignore_ascii_case(nick) ||
            self.held_until > server_ms || self.at.elapsed() > Duration::from_secs(30) { return false; }
+        if self.kind=="item" && rule.min_listing_quantity>0 &&
+            self.qty<rule.min_listing_quantity {return false}
+        if self.kind=="pokemon" {
+            let power=self.potency.unwrap_or(0);
+            if (rule.min_potency>0 && power<rule.min_potency) ||
+                (rule.max_potency>0 && power>rule.max_potency) {return false}
+        }
         match rule.kind.as_str() {
             "item" => self.kind == "item" && self.item_id == rule.item_id,
             "any_item" => self.kind == "item",
             "pokemon_any" => self.kind == "pokemon" && self.shiny.is_some() &&
                 (1..=5).contains(&self.potency.unwrap_or(0)) &&
                 (self.currency == "orb" || self.shiny == Some(false)),
+            "pokemon_normal" => self.kind == "pokemon" && self.shiny == Some(false) &&
+                (1..=5).contains(&self.potency.unwrap_or(0)),
             "pokemon_p5" => self.kind == "pokemon" && self.shiny.is_some() &&
                 self.potency == Some(5) && (self.currency == "orb" || self.shiny == Some(false)),
             "pokemon_shiny" => self.kind == "pokemon" && self.shiny == Some(true) &&
@@ -834,7 +846,10 @@ impl MarketBuyer {
         if rule.max_quantity_session>0 {qty=qty.min(rule.max_quantity_session.saturating_sub(rule_session.2));}
         // Community Market listings have no verified 5,000-unit maximum.
         // Unlike NPC shop.buy, request the full affordable listing quantity.
-        if offer.kind=="pokemon" {qty.min(1)} else {qty.min(offer.qty)}
+        if offer.kind=="pokemon" {qty.min(1)} else {
+            let qty=qty.min(offer.qty);
+            if rule.max_units_per_buy>0 {qty.min(rule.max_units_per_buy)} else {qty}
+        }
     }
     pub fn next(&mut self,cfg:&MarketRules,now:Instant) -> Option<Value> {
         self.status.enabled=cfg.enabled&&!cfg.paused;
@@ -1361,6 +1376,49 @@ mod tests {
         assert!(summary.contains("n=256"));
         assert!(summary.contains("p95="));
         assert!(summary.contains("max=0.256ms"));
+    }
+
+    #[test] fn new_rule_filters_default_to_legacy_behavior() {
+        let old=json!({"id":"legacy","kind":"item","item_id":42,"currency":"gold",
+            "enabled":true,"buy_max":40});
+        let rule:BuyRule=serde_json::from_value(old).unwrap();
+        assert_eq!(rule.min_listing_quantity,0);
+        assert_eq!(rule.max_units_per_buy,0);
+        assert_eq!(rule.min_potency,0);
+        assert_eq!(rule.max_potency,0);
+    }
+    #[test] fn quantity_rules_require_real_lot_size_and_limit_purchase_units() {
+        let now=Instant::now();
+        let item=Offer::from_listing(&json!({"id":82,"preco":10,"qtd":8,
+            "vendedor":"other"}),"item",42,"gold",now).unwrap();
+        let mut rule=BuyRule{id:"quantity".into(),kind:"item".into(),item_id:42,
+            currency:"gold".into(),enabled:true,buy_max:15,
+            min_listing_quantity:10,max_units_per_buy:3,..Default::default()};
+        assert!(!item.matches(&rule,"me",clock_ms()));
+        rule.min_listing_quantity=8;
+        assert!(item.matches(&rule,"me",clock_ms()));
+        let mut buyer=MarketBuyer::new(GameProfile::Game4);
+        buyer.journal=Journal::default();
+        buyer.balances=[Some(1000),Some(0)];
+        assert_eq!(buyer.budget_for(&MarketRules::default(),&rule,&item,false),3);
+    }
+    #[test] fn pokemon_potency_range_and_normal_only_are_verified_from_listing() {
+        let now=Instant::now();
+        let normal=Offer::from_listing(&json!({"id":91,"preco":10,
+            "vendedor":"other","ficha":{"shiny":false,"potencia":3}}),
+            "pokemon",0,"orb",now).unwrap();
+        let shiny=Offer::from_listing(&json!({"id":92,"preco":10,
+            "vendedor":"other","ficha":{"shiny":true,"potencia":3}}),
+            "pokemon",0,"orb",now).unwrap();
+        let mut rule=BuyRule{id:"normal".into(),kind:"pokemon_normal".into(),
+            currency:"orb".into(),enabled:true,buy_max:20,
+            min_potency:3,max_potency:4,..Default::default()};
+        assert!(normal.matches(&rule,"me",clock_ms()));
+        assert!(!shiny.matches(&rule,"me",clock_ms()));
+        rule.min_potency=4;
+        assert!(!normal.matches(&rule,"me",clock_ms()));
+        rule.min_potency=3;rule.max_potency=2;
+        assert!(!rule.valid());
     }
     #[test] fn native_snatch_requires_explicit_listing_identity_and_price() {
         let mut t=SnatchTarget {kind:"item".into(),currency:"gold".into(),
