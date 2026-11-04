@@ -202,6 +202,43 @@ pub(super) fn format_hunt_amount(value: f64) -> String {
     else { format!("{negative}{num:.0}") }
 }
 
+fn pvp_rank_text(status: &crate::native_pvp::PvpStatus) -> Option<String> {
+    let rank = status.rank.as_ref()?;
+    let placement_matches = status.placement_matches.unwrap_or(5);
+    if rank.matches.is_some_and(|matches| matches < placement_matches) {
+        let matches = rank.matches.unwrap_or(0);
+        return Some(if pt_br() {
+            format!("Não classificado · {matches}/{placement_matches}")
+        } else {
+            format!("Unranked · {matches}/{placement_matches}")
+        });
+    }
+
+    let tier = match (pt_br(), rank.tier_id.as_str()) {
+        (true, "bronze") => "Bronze",
+        (true, "prata") => "Prata",
+        (true, "ouro") => "Ouro",
+        (true, "platina") => "Platina",
+        (true, "diamante") => "Diamante",
+        (true, "mestre") => "Mestre",
+        (true, "graomestre") => "Grão Mestre",
+        (true, "challenger") => "Challenger",
+        (false, "bronze") => "Bronze",
+        (false, "prata") => "Silver",
+        (false, "ouro") => "Gold",
+        (false, "platina") => "Platinum",
+        (false, "diamante") => "Diamond",
+        (false, "mestre") => "Master",
+        (false, "graomestre") => "Grandmaster",
+        (false, "challenger") => "Challenger",
+        (_, other) => other,
+    };
+    let label = rank.division_num.as_deref()
+        .filter(|division| !division.is_empty())
+        .map_or_else(|| tier.to_owned(), |division| format!("{tier} {division}"));
+    Some(format!("{label} · {} PR", format_number(rank.points)))
+}
+
 // Hunt Atlas lives in a dedicated child module, sharing the native state and
 // rendering primitives without pulling browser JavaScript into the controller.
 /// At-a-glance card: keep the operational summary visible for every enabled
@@ -408,35 +445,35 @@ pub(super) fn draw_overview_card(
                         // the button above uses the saved preference for immediate toggles.
                         if status.enabled || status.cancelling {
                             let info = if status.cancelling {
-                                if pt_br() { "Desligando PvP" } else { "Stopping PvP" }.to_owned()
+                                Some(if pt_br() { "Desligando PvP" } else { "Stopping PvP" }.to_owned())
                             } else if status.paused {
-                                if pt_br() { "Pausado pelo jogo" } else { "Paused by game" }.to_owned()
+                                Some(if pt_br() { "Pausado pelo jogo" } else { "Paused by game" }.to_owned())
                             } else if status.queued {
-                                if pt_br() { "Na fila" } else { "Queued" }.to_owned()
+                                Some(if pt_br() { "Na fila" } else { "Queued" }.to_owned())
                             } else if status.awaiting_reply {
-                                if pt_br() { "Entrando na fila" } else { "Joining queue" }.to_owned()
+                                Some(if pt_br() { "Entrando na fila" } else { "Joining queue" }.to_owned())
                             } else if status.waiting_for_team {
-                                if pt_br() { "Equipe PvP necessária" } else { "PvP team needed" }.to_owned()
+                                Some(if pt_br() { "Equipe PvP necessária" } else { "PvP team needed" }.to_owned())
                             } else if let Some(level) = status.waiting_for_level {
-                                if pt_br() { format!("Exige nível {level}") }
-                                else { format!("Requires level {level}") }
+                                Some(if pt_br() { format!("Exige nível {level}") }
+                                else { format!("Requires level {level}") })
                             } else if status.cooldown_secs > 0 {
-                                if pt_br() { format!("Espera {}s", status.cooldown_secs) }
-                                else { format!("Cooldown {}s", status.cooldown_secs) }
+                                Some(if pt_br() { format!("Espera {}s", status.cooldown_secs) }
+                                else { format!("Cooldown {}s", status.cooldown_secs) })
                             } else if status.retry_secs > 0 {
-                                if pt_br() { format!("Nova tentativa em {}s", status.retry_secs) }
-                                else { format!("Retry in {}s", status.retry_secs) }
+                                Some(if pt_br() { format!("Nova tentativa em {}s", status.retry_secs) }
+                                else { format!("Retry in {}s", status.retry_secs) })
                             } else if status.checking_queue {
-                                if pt_br() { "Verificando fila" } else { "Checking queue" }.to_owned()
-                            } else if status.vip {
-                                if pt_br() { "Fila VIP do jogo" } else { "Game VIP queue" }.to_owned()
+                                Some(if pt_br() { "Verificando fila" } else { "Checking queue" }.to_owned())
                             } else {
-                                if pt_br() { "Buscando" } else { "Matchmaking" }.to_owned()
+                                pvp_rank_text(status)
                             };
-                            let response = ui.label(RichText::new(info)
-                                .size(10.0).color(if status.paused || status.cancelling { WARN } else { MUTED }));
-                            if let Some(warning) = status.warning.as_ref() {
-                                response.on_hover_text(warning);
+                            if let Some(info) = info {
+                                let response = ui.label(RichText::new(info)
+                                    .size(10.0).color(if status.paused || status.cancelling { WARN } else { MUTED }));
+                                if let Some(warning) = status.warning.as_ref() {
+                                    response.on_hover_text(warning);
+                                }
                             }
                         }
                     }

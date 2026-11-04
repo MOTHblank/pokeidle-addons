@@ -11,6 +11,14 @@ const VIP_SYNC_RETRY: Duration = Duration::from_secs(20);
 const MAX_SERVER_COOLDOWN_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Default)]
+pub struct PvpRankSummary {
+    pub tier_id: String,
+    pub division_num: Option<String>,
+    pub points: u64,
+    pub matches: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct PvpStatus {
     pub enabled: bool,
     pub vip: bool,
@@ -23,6 +31,8 @@ pub struct PvpStatus {
     pub checking_queue: bool,
     pub paused: bool,
     pub cancelling: bool,
+    pub rank: Option<PvpRankSummary>,
+    pub placement_matches: Option<u32>,
     pub warning: Option<String>,
 }
 
@@ -57,6 +67,8 @@ pub struct PvpAutomation {
     vip_cancel_pending: bool,
     vip_rejected: bool,
     leave_sent: Option<Instant>,
+    rank: Option<PvpRankSummary>,
+    placement_matches: Option<u32>,
     warning: Option<String>,
 }
 
@@ -67,7 +79,8 @@ impl Default for PvpAutomation {
             team_ready: None, min_level: None, cooldown_until: None,
             join_sent: None, next_join_at: None, next_info_at: None,
             last_vip_sync: None, vip_cancel_pending: false,
-            vip_rejected: false, leave_sent: None, warning: None,
+            vip_rejected: false, leave_sent: None, rank: None,
+            placement_matches: None, warning: None,
         }
     }
 }
@@ -75,6 +88,29 @@ impl Default for PvpAutomation {
 impl PvpAutomation {
     pub fn on_frame(&mut self, frame: &Value, now: Instant) {
         if frame.get("t").and_then(Value::as_str) != Some("pvp") { return; }
+        // pvp.info is also the game's authoritative source for the trainer's
+        // displayed rank. Keep the server-derived tier instead of recreating
+        // elite position / placement rules in the controller.
+        if let Some(rank) = frame.get("rank") {
+            self.rank = rank.as_object().and_then(|rank| {
+                Some(PvpRankSummary {
+                    tier_id: rank.get("tierId")?.as_str()?.to_owned(),
+                    division_num: rank.get("divisaoNum")
+                        .and_then(Value::as_str)
+                        .filter(|division| !division.is_empty())
+                        .map(str::to_owned),
+                    points: rank.get("pontos")?.as_u64()?,
+                    matches: rank.get("partidas").and_then(Value::as_u64)
+                        .and_then(|matches| u32::try_from(matches).ok()),
+                })
+            });
+        }
+        if let Some(matches) = frame.get("regras")
+            .and_then(|rules| rules.get("posicionamento"))
+            .and_then(Value::as_u64)
+            .and_then(|matches| u32::try_from(matches).ok()) {
+            self.placement_matches = Some(matches);
+        }
         // The game reports the initial PvP team as 'time', but an edit
         // acknowledgement uses 'timeSalvo'. Both are authoritative.
         if let Some(time) = frame.get("timeSalvo").or_else(|| frame.get("time"))
@@ -157,6 +193,8 @@ impl PvpAutomation {
         self.last_vip_sync = None;
         self.vip_cancel_pending = false;
         self.leave_sent = None;
+        self.rank = None;
+        self.placement_matches = None;
         // Preserve ownership to cancel an in-flight queue if the user disabled
         // Auto PvP while disconnected and the server restored their entry.
     }
@@ -182,6 +220,8 @@ impl PvpAutomation {
             checking_queue: enabled && !self.queue_known,
             paused: enabled && vip && self.vip_rejected,
             cancelling: !enabled && (self.owned_queue || self.vip_cancel_pending),
+            rank: self.rank.clone(),
+            placement_matches: self.placement_matches,
             warning: enabled.then(|| self.warning.clone()).flatten(),
         }
     }
@@ -327,6 +367,31 @@ impl PvpAutomation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pvp_info_exposes_the_server_rank_without_recomputing_it() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({
+            "t":"pvp",
+            "rank":{
+                "tierId":"ouro",
+                "divisaoNum":"II",
+                "pontos":742,
+                "partidas":12
+            },
+            "posicao":123,
+            "regras":{"nivelMin":10,"posicionamento":5},
+            "fila":{"na":false}
+        }), t);
+        let status = p.status(Some(true), false, None, Some(40), t);
+        let rank = status.rank.expect("rank from pvp.info");
+        assert_eq!(rank.tier_id, "ouro");
+        assert_eq!(rank.division_num.as_deref(), Some("II"));
+        assert_eq!(rank.points, 742);
+        assert_eq!(rank.matches, Some(12));
+        assert_eq!(status.placement_matches, Some(5));
+    }
+
     #[test]
     fn non_vip_requests_info_then_joins_without_hunt_or_battle_commands() {
         let t = Instant::now();
