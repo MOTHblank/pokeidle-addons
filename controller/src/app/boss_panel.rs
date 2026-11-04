@@ -132,7 +132,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     ui.selectable_value(
                                         &mut *selected,
                                         entry.key.clone(),
-                                        compact_text(&entry.name, 42),
+                                        compact_text(&entry.name, max_chars),
                                     ).on_hover_text(&entry.name);
                                 }
                             })
@@ -255,7 +255,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         } else {
                             tr(&view.phase)
                         };
-                        automation_badge(ui, "Boss status", phase, live && (view.auto || view.arena.is_some()));
+                        automation_badge(ui, "Phase", phase, live && (view.auto || view.arena.is_some()));
                     });
                     if let Some(arena) = view.arena.as_deref() {
                         let name = view.catalog.iter()
@@ -417,10 +417,13 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.add_space(7.0);
                         // Keep the history controls reachable even after
                         // hundreds of distinct recorded item drops.
+                        let totals_label = if ui.available_width() < 320.0 {
+                            tr("Loot totals")
+                        } else {
+                            tr("Items acquired (retained history)")
+                        };
                         egui::CollapsingHeader::new(format!(
-                            "{} ({})",
-                            tr("Items acquired (retained history)"),
-                            totals.len(),
+                            "{} ({})", totals_label, totals.len(),
                         ))
                         .id_salt(("boss-loot-totals", index))
                         .default_open(false)
@@ -477,7 +480,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         ui.selectable_value(
                                             &mut *filter,
                                             key.clone(),
-                                            compact_text(name, 42),
+                                            compact_text(name, max_chars),
                                         ).on_hover_text(name);
                                     }
                                 })
