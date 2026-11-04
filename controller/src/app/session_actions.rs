@@ -508,6 +508,11 @@ impl ControllerApp {
                 config.url.as_str(),
                 " opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
             ),
+            ProfileAction::TwitchMiner => (
+                "Twitch",
+                "https://www.twitch.tv/",
+                " opened Firefox without remote debugging for optional Twitch miner sign-in. After signing in, close that window and launch this account normally to start the miner.",
+            ),
             ProfileAction::Folder => return,
         };
 
@@ -541,7 +546,7 @@ impl ControllerApp {
 
     pub(super) fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
         let result = match action {
-            ProfileAction::GoogleSignIn => {
+            ProfileAction::GoogleSignIn | ProfileAction::TwitchMiner => {
                 self.open_unmonitored_sign_in(profile, action);
                 return;
             }
