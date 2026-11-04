@@ -41,7 +41,7 @@ pub struct MinerConfig {
 impl Default for MinerConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(30),
+            poll_interval: Duration::from_secs(20),
             claim_bonuses: true,
         }
     }
@@ -85,6 +85,9 @@ pub struct StreamerState {
     pub streak_length: Option<u32>,
     pub streak_checked: Option<Instant>,
     pub streak_watch_attempts: u32,
+    /// The reference-style 7/20 minute priority window elapsed without
+    /// Twitch confirming this broadcast's streak.
+    pub streak_priority_exhausted: bool,
     pub live: bool,
     /// This channel occupies one of the miner's two persistent watch slots.
     pub watching: bool,
