@@ -147,8 +147,12 @@ pub fn detect_existing_twitch_login(config: &Config) -> Result<Option<String>, S
 
     if let Err(error) = cleanup {
         // Never lose ownership of a temporary migration browser. A failed
-        // graceful close gets one final PID-scoped termination attempt.
-        let forced = child.kill().and_then(|_| child.wait().map(|_| ()));
+        // graceful close gets one final PID-scoped termination attempt, unless
+        // the process already exited between the cleanup error and this check.
+        let forced = match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            _ => child.kill().and_then(|_| child.wait().map(|_| ())),
+        };
         if let Err(force_error) = forced {
             return Err(format!(
                 "Twitch login detection finished but temporary Firefox cleanup failed: {error}; force close failed: {force_error}"
