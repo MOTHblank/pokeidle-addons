@@ -84,6 +84,7 @@ pub struct StreamerState {
     pub streak_confirmed: Option<bool>,
     pub streak_length: Option<u32>,
     pub streak_checked: Option<Instant>,
+    pub streak_watch_attempts: u32,
     pub live: bool,
     pub last_update: Option<Instant>,
     pub error: Option<String>,
