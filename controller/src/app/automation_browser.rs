@@ -2,7 +2,7 @@
 //! Called from the expanded account view. No extra monitoring or polling.
 use super::{compact_text, egui, json, multikick_link,
     open_kick_channels_in_regular_browser, tr, Align, ControllerApp, Health,
-    Layout, RichText, ACCENT, DIM, GOOD, MUTED, PANEL_ALT, TEXT, WARN};
+    Layout, RichText, ACCENT, DIM, GOOD, MUTED, PANEL_ALT, TEXT};
 
 pub(super) fn draw_browser_controls(
     app: &mut ControllerApp,
