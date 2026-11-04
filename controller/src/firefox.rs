@@ -97,6 +97,30 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
 /// for Kick authentication. Keep Google cookies and the rest of the profile,
 /// but do not launch a Remote Agent, BiDi, or any browser automation.
 /// The normal PokéIdle handoff must have released the Firefox profile lock.
+pub fn launch_twitch_login(config: &Config) -> Result<Child, String> {
+    // Reuse the selected PokéIdle account's isolated browser profile so the
+    // Twitch auth cookie can be imported into that account's native session.
+    // This browser is intentionally ordinary: no Remote Agent/BiDi flags.
+    migrate_legacy_profile(config)?;
+    if !config.profile_dir.is_dir() {
+        return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
+    }
+    if find_profile_process(config)?.is_some() {
+        return Err("The PokéIdle Firefox profile is still running. Wait for it to stop before logging into Twitch.".into());
+    }
+    Command::new(&config.firefox_executable)
+        .arg("--no-remote")
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-window")
+        .arg("https://www.twitch.tv/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(format_spawn_error)
+}
+
 pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
     // Reuse pre-existing Google auth, including accounts with legacy Moth
     // profile paths. Never create a blank profile for Kick as a fallback.
@@ -669,5 +693,28 @@ mod unmonitored_login_tests {
     fn unmonitored_login_refuses_unrelated_urls() {
         assert!(unmonitored_login_command(&config(), "https://example.com/").is_err());
         assert!(unmonitored_login_command(&config(), "https://www.twitch.tv/login").is_err());
+    }
+
+    #[test]
+    fn twitch_login_command_is_regular_profile_browser() {
+        let config = config();
+        let mut command = Command::new(&config.firefox_executable);
+        command
+            .arg("--no-remote")
+            .arg("--profile")
+            .arg(&config.profile_dir)
+            .arg("--new-window")
+            .arg("https://www.twitch.tv/");
+        let args: Vec<_> = command.get_args()
+            .map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--no-remote".to_owned()));
+        assert!(args.contains(&"--profile".to_owned()));
+        assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
+        assert!(args.contains(&"https://www.twitch.tv/".to_owned()));
+        assert!(!args.iter().any(|arg| {
+            arg.contains("remote-debugging") ||
+            arg.contains("marionette") ||
+            arg.contains("headless")
+        }));
     }
 }
