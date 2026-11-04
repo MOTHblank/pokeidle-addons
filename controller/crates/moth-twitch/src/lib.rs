@@ -7,6 +7,7 @@
 mod gql;
 mod miner;
 mod model;
+mod streak;
 mod watch;
 
 pub use miner::{Miner, MinerControl};
