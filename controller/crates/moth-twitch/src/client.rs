@@ -7,6 +7,41 @@ pub const LINUX_FIREFOX_USER_AGENT: &str =
 pub const DEVICE_FLOW_SCOPES: &str =
     "channel_read chat:read user_blocks_edit user_blocks_read user_follows_edit user_read";
 
+const REFERENCE_CREDENTIAL_PREFIX:&str="mothref1";
+
+pub fn encode_reference_credential(token:&str,device_id:&str)->Result<String,String> {
+    let token=token.trim();
+    if token.is_empty() || token.len()>2048
+        || token.bytes().any(|byte|byte.is_ascii_whitespace()||byte.is_ascii_control()) {
+        return Err("Invalid Twitch OAuth token".into());
+    }
+    if device_id.len()!=32 || !device_id.bytes().all(|byte|byte.is_ascii_alphanumeric()) {
+        return Err("Invalid Twitch device id".into());
+    }
+    Ok(format!("{REFERENCE_CREDENTIAL_PREFIX}:{device_id}:{token}"))
+}
+
+pub(crate) fn decode_reference_credential(value:&str)->Result<(&str,Option<&str>),String> {
+    let value=value.trim();
+    if !value.starts_with("mothref") {
+        return Ok((value,None));
+    }
+    let mut parts=value.splitn(3,':');
+    if parts.next()!=Some(REFERENCE_CREDENTIAL_PREFIX) {
+        return Err("Unsupported stored Twitch credential version".into());
+    }
+    let device_id=parts.next().ok_or_else(||"Stored Twitch credential is incomplete".to_owned())?;
+    let token=parts.next().ok_or_else(||"Stored Twitch credential is incomplete".to_owned())?;
+    if device_id.len()!=32 || !device_id.bytes().all(|byte|byte.is_ascii_alphanumeric()) {
+        return Err("Stored Twitch device id is invalid".into());
+    }
+    if token.is_empty() || token.len()>2048
+        || token.bytes().any(|byte|byte.is_ascii_whitespace()||byte.is_ascii_control()) {
+        return Err("Stored Twitch OAuth token is invalid".into());
+    }
+    Ok((token,Some(device_id)))
+}
+
 pub fn random_string(length: usize) -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut bytes=vec![0u8;length];
@@ -73,6 +108,19 @@ mod tests {
         assert!(device.bytes().all(|byte| byte.is_ascii_alphanumeric()));
         assert_eq!(session.len(), 16);
         assert!(session.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn reference_credential_round_trips_device_id() {
+        let encoded=encode_reference_credential(
+            "oauth-token",
+            "abcdefghijklmnopqrstuvwxyzABCDEF",
+        ).unwrap();
+        let (token,device)=decode_reference_credential(&encoded).unwrap();
+        assert_eq!(token,"oauth-token");
+        assert_eq!(device,Some("abcdefghijklmnopqrstuvwxyzABCDEF"));
+        assert_eq!(decode_reference_credential("legacy-token").unwrap(),
+            ("legacy-token",None));
     }
 
     #[test]
