@@ -53,6 +53,8 @@ pub(crate) struct GameQueueSample {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OperationalSample {
     pub(crate) game: Vec<GameQueueSample>,
+    pub(crate) game_busy: usize,
+    pub(crate) kick_busy: usize,
     pub(crate) kick_channels: Option<crate::native_kick_pool::PoolUsage>,
     pub(crate) kick_hls: Option<crate::native_kick_pool::PoolUsage>,
 }
@@ -305,6 +307,8 @@ impl DiagnosticsSampler {
                 "last_minute_bytes": network.last_minute,
             })),
             "worker_queues": self.operational.as_ref().map(|ops| serde_json::json!({
+                "game_snapshots_busy": ops.game_busy,
+                "kick_snapshots_busy": ops.kick_busy,
                 "game": ops.game.iter().map(|game| serde_json::json!({
                     "profile_slot": game.slot + 1,
                     "phase": game.phase,
@@ -598,6 +602,60 @@ mod tests {
         assert!(report.contains("profile_slot"));
         assert!(report.contains("capture_queued"));
         assert!(report.contains("moth-controller-diagnostics-v1"));
+    }
+
+    #[test]
+    fn hotspot_cpu_rates_ignore_new_and_replaced_threads() {
+        let now = Instant::now();
+        let previous_at = now - Duration::from_secs(10);
+        let previous = HashMap::from([(101, 1_000_000_000), (202, 5_000_000_000)]);
+        let current = vec![
+            crate::diagnostics_threads::ThreadCounter {
+                id: 101, name: "moth-game".into(), cpu_ns: 3_000_000_000,
+            },
+            crate::diagnostics_threads::ThreadCounter {
+                id: 202, name: "moth-ui".into(), cpu_ns: 5_500_000_000,
+            },
+            crate::diagnostics_threads::ThreadCounter {
+                id: 303, name: "new".into(), cpu_ns: 1_000_000_000,
+            },
+            crate::diagnostics_threads::ThreadCounter {
+                id: 404, name: "reset".into(), cpu_ns: 2_000_000_000,
+            },
+        ];
+        let results = calculate_hotspots(&previous, previous_at, &current, now);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id, 101);
+        assert!((results[0].cpu_percent - 20.0).abs() < 0.0001);
+        assert_eq!(results[1].id, 202);
+        assert!((results[1].cpu_percent - 5.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn thread_inspection_is_opt_in_and_clears_old_baselines() {
+        let mut sampler = DiagnosticsSampler::default();
+        assert!(!sampler.inspect_threads);
+        assert!(sampler.previous_thread_cpu.is_empty());
+        sampler.set_thread_inspection(true);
+        assert!(sampler.inspect_threads);
+        sampler.previous_thread_cpu.insert(123, 99);
+        sampler.last_thread_read = Some(Instant::now());
+        sampler.set_thread_inspection(false);
+        assert!(!sampler.inspect_threads);
+        assert!(sampler.previous_thread_cpu.is_empty());
+        assert!(sampler.last_thread_read.is_none());
+        sampler.set_thread_inspection(true);
+        assert!(sampler.previous_thread_read.is_none());
+    }
+
+    #[test]
+    fn reset_preserves_thread_inspection_preference() {
+        let mut sampler = DiagnosticsSampler::default();
+        sampler.set_thread_inspection(true);
+        sampler.reset();
+        assert!(sampler.inspect_threads);
+        assert!(sampler.previous_thread_cpu.is_empty());
+        assert!(sampler.hot_threads.is_empty());
     }
 
     #[test]
