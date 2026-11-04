@@ -570,6 +570,9 @@ fn run(
     let mut watch = match WatchClient::new() {
         Ok(watch) => watch,
         Err(error) => {
+            push_event(&events,MinerEvent::Warning(format!(
+                "watch client initialization: {error}"
+            )));
             set_phase(&snapshot, &phase_wake, MinerPhase::Failed, Some(error));
             return;
         }
@@ -673,6 +676,7 @@ fn run(
                     Some(message),
                 );
             } else if !channels.is_empty() {
+                last_auth_warning=None;
                 let streak_limit=if started_at.elapsed()>LONG_SESSION {
                     STREAK_PRIORITY_EXTENDED
                 } else {
