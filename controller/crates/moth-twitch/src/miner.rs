@@ -252,7 +252,7 @@ fn refresh_watch_slots(
     candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
     for name in candidates {
         if slots.len()>=WATCH_SLOTS {break;}
-        if slots.iter().any(|slot|slot.login==*name) {continue;}
+        if slots.iter().any(|slot|slot.login==name.as_str()) {continue;}
         let Some(broadcast_id)=cache.get(name).and_then(|c|c.broadcast_id.clone())
             else {continue};
         slots.push(WatchSlot {
@@ -741,6 +741,7 @@ fn update_streamer(
             streak_checked:cache.streak_checked,
             streak_watch_attempts:cache.watch_attempts,
             live:false,
+            watching:false,
             last_update: cache.last_points_checked,
             error,
         }),
