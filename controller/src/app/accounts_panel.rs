@@ -2,7 +2,7 @@
 use super::{egui, kick_panel, twitch_panel, localize_status, pt_br, status_chip, tr, tr_dynamic,
     AccountsSection, Align, Color32, ControllerApp, Duration, FontId, GameProfile,
     Layout, ProfileAction, RichText, Stroke, BAD, BORDER, GOOD, MUTED,
-    PANEL, PANEL_ALT, TEXT, WARN};
+    DIM, PANEL, PANEL_ALT, TEXT, WARN};
 
 /// Show all four account slots at once; a card never switches or stops another
 /// account. Connection indicators come from the authenticated game session.
