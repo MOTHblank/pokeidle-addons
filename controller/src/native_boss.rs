@@ -467,7 +467,9 @@ impl BossManager {
             self.cancel_pending_entry(navigator, _hunt, now);
             return None;
         }
-        if self.trip.as_ref()?.stage == Stage::Cancelling { return None; }
+        if matches!(self.trip.as_ref()?.stage, Stage::Cancelling | Stage::Returning) {
+            return None;
+        }
         let trip = self.trip.as_mut()?;
         trip.ended = true;
         // A Start that is waiting for confirmation may still be queued for a
@@ -489,7 +491,8 @@ impl BossManager {
             self.cancel_pending_entry(navigator, hunt, now);
             return commands;
         }
-        if self.trip.as_ref().is_some_and(|trip| trip.stage == Stage::Cancelling) {
+        if self.trip.as_ref().is_some_and(|trip|
+            matches!(trip.stage, Stage::Cancelling | Stage::Returning)) {
             return commands;
         }
         if let Some(trip) = self.trip.as_mut() {
