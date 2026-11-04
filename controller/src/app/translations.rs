@@ -3,6 +3,7 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Error" => "Erro",
         "Stop diagnostics" => "Parar diagnóstico",
         "Stop the active developer diagnostics recording and keep its capture" =>
             "Parar a gravação ativa de diagnóstico de desenvolvimento e manter a captura",
