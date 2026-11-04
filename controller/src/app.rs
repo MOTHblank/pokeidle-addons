@@ -1134,6 +1134,15 @@ impl ControllerApp {
             rustls::crypto::CryptoProvider::get_default().is_some()
         ));
         logging::info("controller UI initialized with egui/eframe");
+        #[cfg(windows)]
+        if preferences.start_with_windows {
+            // Re-register the current executable path on every launch. This
+            // self-heals the startup entry after moving a portable build or
+            // switching from portable to the per-user installer.
+            if let Err(error) = startup::set_start_with_windows(true) {
+                logging::warn(&format!("could not refresh Windows startup registration: {error}"));
+            }
+        }
         let update_status = update::start_update_check(preferences.check_updates_on_start);
         let (native_handoff_tx, native_handoff_rx) = wake_channel(&cc.egui_ctx);
         let (cached_native_tx, cached_native_rx) = wake_channel(&cc.egui_ctx);
