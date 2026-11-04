@@ -402,9 +402,12 @@ pub(super) fn draw_overview_card(
                         app.accounts[index].auto_pvp = previous;
                     }
                 }
-                if pvp_on && fresh {
+                if fresh {
                     if let Some(status) = sample.native.as_ref().map(|s| &s.native_pvp) {
-                        let info = if status.paused {
+                        if pvp_on || status.cancelling {
+                        let info = if status.cancelling {
+                            if pt_br() { "Desligando PvP" } else { "Stopping PvP" }.to_owned()
+                        } else if status.paused {
                             if pt_br() { "Pausado pelo jogo" } else { "Paused by game" }.to_owned()
                         } else if status.queued {
                             if pt_br() { "Na fila" } else { "Queued" }.to_owned()
@@ -429,9 +432,10 @@ pub(super) fn draw_overview_card(
                             if pt_br() { "Buscando" } else { "Matchmaking" }.to_owned()
                         };
                         let response = ui.label(RichText::new(info)
-                            .size(10.0).color(if status.paused { WARN } else { MUTED }));
+                            .size(10.0).color(if status.paused || status.cancelling { WARN } else { MUTED }));
                         if let Some(warning) = status.warning.as_ref() {
                             response.on_hover_text(warning);
+                        }
                         }
                     }
                 }
