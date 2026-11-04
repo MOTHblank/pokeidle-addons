@@ -350,7 +350,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 let name = app.inventory_catalog.as_ref()
                                     .map(|catalog| catalog.name(id))
                                     .unwrap_or_else(|| format!("Item #{id}"));
-                                resource_chip(ui, &format!("{name} ×{quantity}"));
+                                resource_chip(ui, &format!("×{quantity} {name}"));
                             }
                         });
                     }
