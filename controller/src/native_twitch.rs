@@ -158,6 +158,12 @@ pub fn validate(value: &serde_json::Value) -> Result<(), String> {
 }
 
 fn credentials_from_browser(value: &serde_json::Value) -> Result<Credentials, String> {
+    // New handoffs read Twitch's auth-token cookie directly. Old encrypted
+    // caches may still contain the previously captured IRC PASS/NICK pair, so
+    // accept both formats until those sessions naturally refresh.
+    if let Some(token) = value.get("token").and_then(serde_json::Value::as_str) {
+        return Credentials::token_only(token);
+    }
     let pass = value.get("pass").and_then(serde_json::Value::as_str)
         .ok_or_else(|| "Twitch OAuth authentication was not captured".to_owned())?;
     let nick = value.get("nick").and_then(serde_json::Value::as_str)
@@ -182,8 +188,15 @@ mod tests {
             "nick": "NICK moth_user",
             "cap": "CAP REQ :twitch.tv/tags"
         })).unwrap();
-        assert_eq!(credentials.username, "moth_user");
+        assert_eq!(credentials.username.as_deref(), Some("moth_user"));
         assert_eq!(credentials.oauth_token, "abc_123");
+    }
+
+    #[test]
+    fn cookie_token_does_not_need_irc_metadata() {
+        let credentials = credentials_from_browser(&json!({ "token": "cookie_token" })).unwrap();
+        assert!(credentials.username.is_none());
+        assert_eq!(credentials.oauth_token, "cookie_token");
     }
 
     #[test]
