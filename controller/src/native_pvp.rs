@@ -343,7 +343,13 @@ mod tests {
         p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":10},
             "fila":{"na":false}}),t);
         assert_eq!(p.next(Some(true),false,None,Some(40),t),Some(PvpAction::Join));
+        // A fast toggle must not race the pending server-side Join.
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
         assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        assert!(!p.owned_queue);
     }
     #[test]
     fn vip_inherits_server_setting_and_never_client_joins() {
@@ -368,6 +374,76 @@ mod tests {
         assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),
             Some(PvpAction::Leave));
         assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),None);
+    }
+    #[test]
+    fn late_info_does_not_erase_an_unconfirmed_join() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":5},
+            "fila":{"na":false}}), t);
+        assert_eq!(p.next(Some(true),false,None,Some(30),t),Some(PvpAction::Join));
+        // The earlier pvp.info is not evidence that this Join failed.
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}), t + Duration::from_secs(1));
+        assert!(p.owned_queue);
+        assert_eq!(p.next(Some(false),false,None,Some(30),
+            t + Duration::from_secs(1)),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),
+            t + Duration::from_secs(2));
+        assert_eq!(p.next(Some(false),false,None,Some(30),
+            t + Duration::from_secs(2)),Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),false,None,Some(30),
+            t + Duration::from_secs(3)),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),
+            t + Duration::from_secs(4));
+        assert!(!p.owned_queue);
+    }
+    #[test]
+    fn missing_leave_ack_queries_server_before_retry() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":1},
+            "fila":{"na":false}}), t);
+        assert_eq!(p.next(Some(true),false,None,Some(15),t),Some(PvpAction::Join));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        assert_eq!(p.next(Some(false),false,None,Some(15),t),Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),false,None,Some(15),
+            t + Duration::from_secs(5)),None);
+        assert_eq!(p.next(Some(false),false,None,Some(15),
+            t + Duration::from_secs(16)),Some(PvpAction::Info));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),
+            t + Duration::from_secs(17));
+        assert_eq!(p.next(Some(false),false,None,Some(15),
+            t + Duration::from_secs(17)),Some(PvpAction::Leave));
+    }
+    #[test]
+    fn reconnect_checks_ownership_before_cancelling_and_preserves_manual_queue() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        p.on_reconnect();
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":1},
+            "fila":{"na":false}}),t);
+        assert_eq!(p.next(Some(true),false,None,Some(40),t),Some(PvpAction::Join));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        p.on_reconnect();
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Info));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Leave));
+    }
+    #[test]
+    fn server_vip_refusal_pauses_retries_until_user_rearms() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
+        assert!(p.status(Some(true),true,Some(false),Some(25),t).paused);
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),Some(PvpAction::Info));
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),
+            t + Duration::from_secs(30)),None);
+        assert_eq!(p.next(Some(false),true,Some(false),Some(25),t),None);
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
+            Some(PvpAction::SetVipAuto(true)));
     }
     #[test]
     fn match_and_reconnect_require_fresh_server_status_before_requeue() {
