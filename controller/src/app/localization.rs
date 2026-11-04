@@ -476,8 +476,8 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
             "Não foi possível salvar as opções. As configurações anteriores continuam ativas.",
         "Retry saving options" => "Tentar salvar novamente",
         "Open performance diagnostics" => "Abrir diagnóstico de desempenho",
-        "Diagnostics only samples while its screen is visible and focused." =>
-            "O diagnóstico só realiza medições enquanto sua tela estiver visível e em foco.",
+        "Live measurements stop off-page; explicit recordings continue until stopped." =>
+            "As medições ao vivo param fora da página; gravações explícitas continuam até serem interrompidas.",
         "Changes take effect after a successful save and are restored on the next launch." =>
             "As alterações entram em vigor após serem salvas e são restauradas na próxima inicialização.",
         "Controller options saved" => "Opções do controlador salvas",
