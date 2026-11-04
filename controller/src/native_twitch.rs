@@ -1,21 +1,21 @@
-//! Browserless Twitch IRC for the native-first controller.
-//! Credentials are observed from Firefox's *existing authenticated IRC socket*
-//! during bootstrap. No access token or PASS frame is logged or persisted.
-use std::collections::BTreeSet;
-use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
-use tungstenite::{client_tls, client::IntoClientRequest, http::header, Message};
+//! Native Twitch channel-points integration.
+//!
+//! Firefox can still provide the OAuth token already used by Twitch's web IRC
+//! client, but IRC presence is no longer the automation mechanism. The token is
+//! handed to the UI-agnostic `moth-twitch` worker, which tracks channel-point
+//! balances and claims available community-points bonuses. PokéIdle itself does
+//! not depend on Twitch authentication.
 
-const IRC_HOST: &str = "irc-ws.chat.twitch.tv";
-const IRC_URL: &str = "wss://irc-ws.chat.twitch.tv:443";
-const AUTH_TIMEOUT: Duration = Duration::from_secs(15);
-const IO_TIMEOUT: Duration = Duration::from_secs(2);
-const JOIN_GAP: Duration = Duration::from_millis(600);
-const RETRY_DELAY: Duration = Duration::from_secs(5);
-const MAX_ROOMS: usize = 100;
+use moth_twitch::{Credentials, Miner, MinerConfig};
+use std::sync::Arc;
+use std::time::Instant;
+
+#[derive(Clone, Debug, Default)]
+pub struct TwitchStreamerSnapshot {
+    pub login: String,
+    pub points: Option<u64>,
+    pub error: Option<String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct TwitchSnapshot {
@@ -24,353 +24,163 @@ pub struct TwitchSnapshot {
     pub joined: usize,
     pub last_received: Option<Instant>,
     pub error: Option<String>,
+    pub points_gained: u64,
+    pub bonuses_claimed: u64,
+    pub streamers: Vec<TwitchStreamerSnapshot>,
 }
+
 impl Default for TwitchSnapshot {
     fn default() -> Self {
-        Self { phase: "Connecting".into(), desired: 0, joined: 0,
-            last_received: None, error: None }
+        Self {
+            phase: "NeedsLogin".into(),
+            desired: 0,
+            joined: 0,
+            last_received: None,
+            error: None,
+            points_gained: 0,
+            bonuses_claimed: 0,
+            streamers: Vec::new(),
+        }
     }
 }
 
-struct IrcIdentity {
-    nick: String,
-    pass: String,
-    cap: String,
-}
-impl IrcIdentity {
-    fn from_browser(value: &serde_json::Value) -> Result<Self, String> {
-        let url = value.get("url").and_then(serde_json::Value::as_str).unwrap_or("");
-        if url != IRC_URL && url != "wss://irc-ws.chat.twitch.tv" &&
-            url != "wss://irc-ws.chat.twitch.tv:443/" &&
-            url != "wss://irc-ws.chat.twitch.tv/" {
-            return Err("Native Twitch handoff refused a non-IRC Twitch endpoint".into());
-        }
-        let pass = value.get("pass").and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "Twitch IRC PASS wasn't captured".to_owned())?;
-        let nick = value.get("nick").and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "Twitch IRC NICK wasn't captured".to_owned())?;
-        // Twitch's web IRC client can omit its CAP request on reconnect.
-        // An empty captured capability string is not an authentication error.
-        let cap = value.get("cap").and_then(serde_json::Value::as_str)
-            .filter(|cap| !cap.trim().is_empty())
-            .unwrap_or("CAP REQ :twitch.tv/tags twitch.tv/commands");
-        if !pass.starts_with("PASS oauth:") || pass.len() > 2048 ||
-            !pass[11..].bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-            return Err("Captured Twitch IRC authentication is not OAuth PASS".into());
-        }
-        let Some(username) = nick.strip_prefix("NICK ") else {
-            return Err("Captured Twitch IRC NICK is invalid".into());
-        };
-        if !valid_channel(username) || username.len() > 25 {
-            return Err("Invalid Twitch username".into());
-        }
-        if !cap.starts_with("CAP REQ :") || cap.len() > 256 ||
-            !cap.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b' ' | b':' | b'/' | b'_' | b'-' | b'.')) {
-            return Err("Invalid Twitch IRC capabilities".into());
-        }
-        Ok(Self { nick: nick.into(), pass: pass.into(), cap: cap.into() })
-    }
-}
-pub fn validate(value: &serde_json::Value) -> Result<(), String> {
-    IrcIdentity::from_browser(value).map(|_| ())
-}
-fn valid_channel(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 25 &&
-        value.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-}
-fn normalize_channels(channels: Vec<String>) -> Vec<String> {
-    channels.into_iter().map(|channel| channel.trim_start_matches('#').to_ascii_lowercase())
-        .filter(|channel| valid_channel(channel))
-        .collect::<BTreeSet<_>>().into_iter().take(MAX_ROOMS).collect()
-}
-fn write_irc(socket: &mut tungstenite::WebSocket<
-    tungstenite::stream::MaybeTlsStream<TcpStream>>, message: &str) -> Result<(), String> {
-    socket.send(Message::Text(format!("{message}\r\n").into()))
-        .map_err(|_| "Could not send data to Twitch".to_owned())
-}
-fn connect(identity: &IrcIdentity) -> Result<tungstenite::WebSocket<
-    tungstenite::stream::MaybeTlsStream<TcpStream>>, String> {
-    crate::native_tls::ensure()?;
-    let addrs = (IRC_HOST, 443).to_socket_addrs()
-        .map_err(|_| "Could not find Twitch. Check your internet connection.".to_owned())?;
-    let mut tcp = None;
-    for address in addrs {
-        if let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_secs(7)) {
-            tcp = Some(stream);
-            break;
-        }
-    }
-    let stream = tcp.ok_or_else(|| "Could not connect to Twitch. Check your internet connection.".to_owned())?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))
-        .map_err(|_| "Could not set up the Twitch connection".to_owned())?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))
-        .map_err(|_| "Could not set up Twitch messages".to_owned())?;
-    let mut request = IRC_URL.into_client_request()
-        .map_err(|_| "Invalid Twitch IRC URL".to_owned())?;
-    request.headers_mut().insert(header::ORIGIN,
-        header::HeaderValue::from_static("https://www.twitch.tv"));
-    let (mut socket, _) = client_tls(request, stream)
-        .map_err(|_| "Secure connection to Twitch failed".to_owned())?;
-    write_irc(&mut socket, &identity.cap)?;
-    write_irc(&mut socket, &identity.pass)?;
-    write_irc(&mut socket, &identity.nick)?;
-    let deadline = Instant::now() + AUTH_TIMEOUT;
-    while Instant::now() < deadline {
-        match socket.read() {
-            Ok(Message::Text(raw)) => {
-                for line in raw.split("\r\n") {
-                    if line.starts_with("PING ") {
-                        let response = line.replacen("PING ", "PONG ", 1);
-                        write_irc(&mut socket, &response)?;
-                    }
-                    if line.contains(" 001 ") { return Ok(socket); }
-                    if line.contains("Login authentication failed") ||
-                        line.contains("Improperly formatted auth") {
-                        return Err("Twitch rejected the captured OAuth authentication".into());
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => return Err("Twitch closed the connection during sign-in".into()),
-            Err(tungstenite::Error::Io(ref error))
-                if matches!(error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
-            Err(_) => return Err("Twitch disconnected during sign-in".into()),
-            _ => {}
-        }
-    }
-    Err("Twitch sign-in timed out".into())
+#[derive(Clone, Default)]
+pub struct TwitchControl {
+    inner: Option<moth_twitch::MinerControl>,
 }
 
-type IrcSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
-
-type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
-fn notify_phase_change(wake: &PhaseWake) {
-    let callback=wake.lock().ok().and_then(|slot|slot.clone());
-    if let Some(callback)=callback {callback();}
+impl TwitchControl {
+    pub fn set_channels(&self, channels: Vec<String>) {
+        if let Some(inner) = self.inner.as_ref() {
+            inner.set_channels(channels);
+        }
+    }
 }
 
 pub struct TwitchSession {
-    state: Arc<Mutex<TwitchSnapshot>>,
-    desired: Arc<Mutex<Vec<String>>>,
-    stop: Arc<AtomicBool>,
-    phase_wake:PhaseWake,
-}
-impl TwitchSession {
-    /// Server welcome is mandatory before we close the authentication
-    /// browser. Used by handoff and protected-cache cold starts.
-    pub fn start_verified(browser_bootstrap: &serde_json::Value) -> Result<Self, String> {
-        let identity = IrcIdentity::from_browser(browser_bootstrap)?;
-        let socket = connect(&identity)?;
-        Self::spawn(identity, Some(socket))
-    }
-    fn spawn(identity: IrcIdentity, first_socket: Option<IrcSocket>) -> Result<Self, String> {
-        let state = Arc::new(Mutex::new(TwitchSnapshot::default()));
-        let desired = Arc::new(Mutex::new(Vec::new()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_state = Arc::clone(&state);
-        let worker_desired = Arc::clone(&desired);
-        let worker_stop = Arc::clone(&stop);
-        let phase_wake:PhaseWake=Arc::new(Mutex::new(None));
-        let worker_phase_wake=Arc::clone(&phase_wake);
-        thread::Builder::new().name("moth-native-twitch".into())
-            .spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(identity, Arc::clone(&worker_state), worker_desired,
-                        Arc::clone(&worker_stop), first_socket,
-                        Arc::clone(&worker_phase_wake));
-                }));
-                if result.is_err() {
-                    if let Ok(mut state) = worker_state.lock() {
-                        state.phase = "Failed".into();
-                        state.error = Some("Twitch connection stopped unexpectedly. See the controller log.".into());
-                        state.joined = 0;
-                    }
-                    notify_phase_change(&worker_phase_wake);
-                    worker_stop.store(true, Ordering::Relaxed);
-                }
-            })
-            .map_err(|_| "Could not start the Twitch connection".to_owned())?;
-        Ok(Self { state, desired, stop, phase_wake })
-    }
-    pub fn snapshot(&self) -> TwitchSnapshot {
-        self.state.lock().map(|state| state.clone()).unwrap_or_default()
-    }
-    pub fn desired_handle(&self) -> Arc<Mutex<Vec<String>>> {
-        Arc::clone(&self.desired)
-    }
-    pub fn set_phase_waker(&self, wake:Arc<dyn Fn() + Send + Sync>) {
-        if let Ok(mut slot)=self.phase_wake.lock() {
-            *slot=Some(Arc::clone(&wake));
-        }
-        if self.snapshot().phase=="NeedsLogin" {wake();}
-    }
-    pub fn stop(&self) { self.stop.store(true, Ordering::Relaxed); }
-}
-impl Drop for TwitchSession {
-    fn drop(&mut self) { self.stop(); }
+    miner: Option<Miner>,
+    fallback: TwitchSnapshot,
 }
 
-fn run(identity: IrcIdentity, state: Arc<Mutex<TwitchSnapshot>>,
-       desired: Arc<Mutex<Vec<String>>>, stop: Arc<AtomicBool>,
-       first_socket: Option<IrcSocket>, phase_wake:PhaseWake) {
-    let mut first_socket = first_socket;
-    while !stop.load(Ordering::Relaxed) {
-        match first_socket.take().map(Ok).unwrap_or_else(|| connect(&identity)) {
-            Ok(mut socket) => {
-                crate::logging::info("Native Twitch IRC received authenticated welcome");
-                if let Ok(mut s) = state.lock() {
-                    s.phase = "Online".into();
-                    s.error = None;
-                    s.joined = 0;
-                    s.last_received = Some(Instant::now());
-                }
-                notify_phase_change(&phase_wake);
-                let mut joined = BTreeSet::new();
-                let mut next_join = Instant::now();
-                let mut auth_rejected = false;
-                let mut previous_desired: Vec<String> = Vec::new();
-                let mut targets: Vec<String> = Vec::new();
-                let mut target_set: BTreeSet<String> = BTreeSet::new();
-                loop {
-                    if stop.load(Ordering::Relaxed) { let _ = socket.close(None); break; }
-                    // An unchanged server room list must not allocate a new
-                    // vector, normalize names, and rebuild a set on every read.
-                    let changed = desired.lock().ok().and_then(|current|
-                        if *current != previous_desired {Some(current.clone())}
-                        else {None});
-                    if let Some(next) = changed {
-                        previous_desired = next.clone();
-                        targets = normalize_channels(next);
-                        target_set = targets.iter().cloned().collect();
-                    }
-                    // Leave removed channels, but keep every unchanged room
-                    // connected; never rebuild the socket on live-list deltas.
-                    for previous in joined.difference(&target_set).cloned().collect::<Vec<_>>() {
-                        {
-                            if write_irc(&mut socket, &format!("PART #{previous}")).is_err() {
-                                joined.clear();
-                                break;
-                            }
-                            joined.remove(&previous);
-                        }
-                    }
-                    if Instant::now() >= next_join {
-                        if let Some(missing) = targets.iter().find(|c| !joined.contains(*c)) {
-                            if write_irc(&mut socket, &format!("JOIN #{missing}")).is_err() {
-                                break;
-                            }
-                            joined.insert(missing.clone());
-                            next_join = Instant::now() + JOIN_GAP;
-                        }
-                    }
-                    if let Ok(mut s) = state.lock() {
-                        s.desired = targets.len();
-                        s.joined = joined.len();
-                    }
-                    match socket.read() {
-                        Ok(Message::Text(raw)) => {
-                            if let Ok(mut s) = state.lock() { s.last_received = Some(Instant::now()); }
-                            let mut rejected = false;
-                            for line in raw.split("\r\n") {
-                                if let Some(payload) = line.strip_prefix("PING ") {
-                                    if write_irc(&mut socket, &format!("PONG {payload}")).is_err() {
-                                        rejected = true; break;
-                                    }
-                                }
-                                if line.contains("Login authentication failed") ||
-                                   line.contains("Improperly formatted auth") {
-                                    auth_rejected = true;
-                                    rejected = true;
-                                    break;
-                                }
-                            }
-                            if rejected { break; }
-                        }
-                        Ok(Message::Ping(data)) => {
-                            if socket.send(Message::Pong(data)).is_err() { break; }
-                        }
-                        Ok(Message::Pong(_)) => {
-                            if let Ok(mut s) = state.lock() { s.last_received = Some(Instant::now()); }
-                        }
-                        Ok(Message::Close(_)) => break,
-                        Err(tungstenite::Error::Io(ref error))
-                            if matches!(error.kind(),
-                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {}
-                        Err(_) => break,
-                        _ => {}
+impl TwitchSession {
+    /// Twitch is optional for the game connection. If Firefox has already
+    /// exposed an authenticated Twitch token, start the miner; otherwise retain
+    /// a cheap NeedsLogin snapshot and let PokéIdle continue normally.
+    pub fn start_optional(browser_bootstrap: Option<&serde_json::Value>) -> Self {
+        let credentials = browser_bootstrap.and_then(|value| {
+            credentials_from_browser(value).map_err(|error| {
+                crate::logging::warn(&format!(
+                    "Twitch miner unavailable until Twitch sign-in: {error}"
+                ));
+                error
+            }).ok()
+        });
+
+        match credentials {
+            Some(credentials) => match Miner::start(credentials, MinerConfig::default()) {
+                Ok(miner) => Self {
+                    miner: Some(miner),
+                    fallback: TwitchSnapshot::default(),
+                },
+                Err(error) => {
+                    crate::logging::warn(&format!(
+                        "Twitch miner could not start; PokéIdle will continue: {error}"
+                    ));
+                    Self {
+                        miner: None,
+                        fallback: TwitchSnapshot {
+                            phase: "Failed".into(),
+                            error: Some(error),
+                            ..TwitchSnapshot::default()
+                        },
                     }
                 }
-                if !stop.load(Ordering::Relaxed) {
-                    if let Ok(mut s) = state.lock() {
-                        s.phase = if auth_rejected { "NeedsLogin" } else { "Reconnecting" }.into();
-                        s.joined = 0;
-                        if auth_rejected {
-                            s.error = Some("Your Twitch login expired. Sign in again.".into());
-                        }
-                    }
-                    notify_phase_change(&phase_wake);
-                    if auth_rejected { break; }
-                }
-            }
-            Err(error) => {
-                let auth_expired = error.contains("rejected the captured OAuth");
-                if let Ok(mut s) = state.lock() {
-                    s.phase = if auth_expired { "NeedsLogin" } else { "Reconnecting" }.into();
-                    s.error = Some(error);
-                    s.joined = 0;
-                }
-                notify_phase_change(&phase_wake);
-                // Network failures are handled within this native worker.
-                // No browser is opened for transient IRC outages.
-                if auth_expired { break; }
-            }
-        }
-        let until = Instant::now() + RETRY_DELAY;
-        while !stop.load(Ordering::Relaxed) && Instant::now() < until {
-            thread::sleep(Duration::from_millis(200));
+            },
+            None => Self {
+                miner: None,
+                fallback: TwitchSnapshot::default(),
+            },
         }
     }
-    if stop.load(Ordering::Relaxed) {
-        if let Ok(mut s) = state.lock() { s.phase = "Stopped".into(); s.joined = 0; }
-        notify_phase_change(&phase_wake);
+
+    pub fn control(&self) -> TwitchControl {
+        TwitchControl {
+            inner: self.miner.as_ref().map(Miner::control),
+        }
+    }
+
+    pub fn snapshot(&self) -> TwitchSnapshot {
+        let Some(miner) = self.miner.as_ref() else {
+            return self.fallback.clone();
+        };
+        let state = miner.snapshot();
+        TwitchSnapshot {
+            phase: state.phase.as_str().into(),
+            desired: state.desired,
+            joined: state.active,
+            last_received: state.last_received,
+            error: state.error,
+            points_gained: state.points_gained,
+            bonuses_claimed: state.bonuses_claimed,
+            streamers: state.streamers.into_iter().map(|streamer| TwitchStreamerSnapshot {
+                login: streamer.login,
+                points: streamer.points,
+                error: streamer.error,
+            }).collect(),
+        }
+    }
+
+    pub fn set_phase_waker(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        if let Some(miner) = self.miner.as_ref() {
+            miner.set_phase_waker(wake);
+        }
+    }
+
+    pub fn stop(&self) {
+        if let Some(miner) = self.miner.as_ref() {
+            miner.stop();
+        }
     }
 }
+
+pub fn validate(value: &serde_json::Value) -> Result<(), String> {
+    credentials_from_browser(value).map(|_| ())
+}
+
+fn credentials_from_browser(value: &serde_json::Value) -> Result<Credentials, String> {
+    let pass = value.get("pass").and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Twitch OAuth authentication was not captured".to_owned())?;
+    let nick = value.get("nick").and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Twitch username was not captured".to_owned())?;
+    let token = pass.strip_prefix("PASS oauth:")
+        .ok_or_else(|| "Captured Twitch authentication is not OAuth".to_owned())?;
+    let username = nick.strip_prefix("NICK ")
+        .ok_or_else(|| "Captured Twitch username is invalid".to_owned())?;
+    Credentials::new(username, token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
     #[test]
-    fn phase_waker_can_signal_background_auth_expiration() {
-        let observed=Arc::new(AtomicBool::new(false));
-        let flag=Arc::clone(&observed);
-        let wake:PhaseWake=Arc::new(Mutex::new(Some(Arc::new(move || {
-            flag.store(true,Ordering::Relaxed);
-        }))));
-        notify_phase_change(&wake);
-        assert!(observed.load(Ordering::Relaxed));
+    fn captured_irc_oauth_is_reused_without_irc_presence() {
+        let credentials = credentials_from_browser(&json!({
+            "url": "wss://irc-ws.chat.twitch.tv:443",
+            "pass": "PASS oauth:abc_123",
+            "nick": "NICK moth_user",
+            "cap": "CAP REQ :twitch.tv/tags"
+        })).unwrap();
+        assert_eq!(credentials.username, "moth_user");
+        assert_eq!(credentials.oauth_token, "abc_123");
     }
+
     #[test]
-    fn filters_invalid_rooms_and_deduplicates() {
-        let channels = normalize_channels(vec![
-            "a".into(), "#A".into(), "b".into(),
-            "x\r\nPART #everything".into(), "not-valid-!".into()
-        ]);
-        assert_eq!(channels, vec!["a", "b"]);
-    }
-    #[test]
-    fn rejects_unauthenticated_and_unexpected_hosts() {
-        let sample = json!({"url":"wss://irc-ws.chat.twitch.tv:443",
-            "nick":"NICK myusername", "pass":"PASS oauth:secret",
-            "cap":"CAP REQ :twitch.tv/tags twitch.tv/commands"});
-        assert!(validate(&sample).is_ok());
-        let without_cap = serde_json::json!({
-            "url":"wss://irc-ws.chat.twitch.tv:443",
-            "pass":"PASS oauth:secret", "nick":"NICK myusername", "cap":""
-        });
-        assert!(validate(&without_cap).is_ok());
-        let native_capture = json!({"url":"wss://irc-ws.chat.twitch.tv:443","nick":"NICK myusername","pass":"PASS oauth:secret","cap":"CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership"});
-        assert!(validate(&native_capture).is_ok());
-        assert!(validate(&json!({"url":"wss://evil.tld","nick":"NICK user","pass":"PASS oauth:secret"})).is_err());
-        assert!(validate(&json!({"url":"wss://irc-ws.chat.twitch.tv:443","nick":"NICK user","pass":"PASS SCHMOOPIIE"})).is_err());
+    fn twitch_is_not_required_for_native_game_startup() {
+        let session = TwitchSession::start_optional(None);
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.phase, "NeedsLogin");
+        assert_eq!(snapshot.desired, 0);
     }
 }
