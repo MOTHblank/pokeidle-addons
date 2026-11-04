@@ -33,9 +33,13 @@ mod native_twitch;
 mod native_tls;
 mod logging;
 mod diagnostics;
-mod diagnostics_recording;
 mod diagnostics_threads;
+mod diagnostics_recording;
 mod update;
+mod preferences;
+mod settings_backup;
+mod startup;
+mod alerts;
 
 fn main() {
     // rustls 0.23 cannot infer a default when transitive dependencies enable

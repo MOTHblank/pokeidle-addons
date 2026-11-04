@@ -1,7 +1,8 @@
 //! UI-only workspace selection and presentation preferences.
 //! No native sessions, worker channels, background jobs or timers live here.
 //! Keep defaults equivalent to the previous ControllerApp initialization.
-use super::{AccountsSection, AutomationSection, HuntRanking, HuntSubtab, PanelTab, UiOptions};
+use super::{AccountsSection, AutomationSection, HuntRanking, HuntSubtab, PanelTab, UiOptions,
+    AppPreferences, SettingsBackup, OptionsSection};
 
 #[derive(Default)]
 pub(super) struct BrowserTabEditor {
@@ -32,6 +33,11 @@ impl Default for HuntUiFilters {
 
 pub(super) struct WorkspaceState {
     pub(super) panel_tab: PanelTab,
+    pub(super) options_section: OptionsSection,
+    pub(super) preferences_failed_save: Option<(AppPreferences, String)>,
+    pub(super) backup_preview: Option<SettingsBackup>,
+    pub(super) exit_confirmation: bool,
+    pub(super) exit_approved: bool,
     /// An unsuccessful Options write retains the exact requested values for retry.
     pub(super) options_failed_save: Option<(UiOptions, String)>,
     pub(super) accounts_section: AccountsSection,
@@ -63,6 +69,11 @@ impl Default for WorkspaceState {
     fn default() -> Self {
         Self {
             panel_tab: PanelTab::Overview,
+            options_section: OptionsSection::General,
+            preferences_failed_save: None,
+            backup_preview: None,
+            exit_confirmation: false,
+            exit_approved: false,
             options_failed_save: None,
             accounts_section: AccountsSection::Profiles,
             kick_selected_account: 0,

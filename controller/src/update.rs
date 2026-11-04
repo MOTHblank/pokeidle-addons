@@ -11,37 +11,53 @@ pub const RELEASES_URL: &str = "https://github.com/MOTHblank/pokeidle-addons/rel
 #[derive(Debug, Default)]
 pub struct UpdateStatus {
     pub latest_version: Option<String>,
+    pub checking: bool,
+    pub last_error: Option<String>,
 }
 
 pub type SharedUpdateStatus = Arc<Mutex<UpdateStatus>>;
 
-/// Start a one-shot release check on a background thread. Network problems are
-/// logged but never prevent the controller from starting.
-pub fn start_update_check() -> SharedUpdateStatus {
+/// There is no polling timer: checks run once at startup if enabled, or
+/// explicitly on demand. No worker is created when checks are disabled.
+pub fn start_update_check(enabled: bool) -> SharedUpdateStatus {
     let status = Arc::new(Mutex::new(UpdateStatus::default()));
-    let worker_status = Arc::clone(&status);
+    if enabled { let _ = check_now(&status); }
+    status
+}
 
-    let spawn_result = thread::Builder::new()
-        .name("release-update-check".to_string())
-        .spawn(move || match fetch_latest_version() {
-            Ok(latest_version) => {
-                crate::logging::info(&format!(
-                    "GitHub release check completed; latest version is {latest_version}"
-                ));
-                if let Ok(mut state) = worker_status.lock() {
-                    state.latest_version = Some(latest_version);
+pub fn check_now(status: &SharedUpdateStatus) -> Result<bool, String> {
+    let mut state = status.lock().map_err(|_| "update status lock poisoned")?;
+    if state.checking { return Ok(false); }
+    state.checking = true;
+    state.last_error = None;
+
+    let worker_status = Arc::clone(status);
+    let spawn = thread::Builder::new().name("release-update-check".into())
+        .spawn(move || {
+            let result = fetch_latest_version();
+            if let Ok(mut state) = worker_status.lock() {
+                state.checking = false;
+                match result {
+                    Ok(latest) => {
+                        crate::logging::info(&format!(
+                            "GitHub release check completed; latest version is {latest}"
+                        ));
+                        state.latest_version = Some(latest);
+                        state.last_error = None;
+                    }
+                    Err(error) => {
+                        crate::logging::warn(&format!("GitHub release check failed: {error}"));
+                        state.last_error = Some(error);
+                    }
                 }
             }
-            Err(error) => {
-                crate::logging::warn(&format!("GitHub release check failed: {error}"));
-            }
         });
-
-    if let Err(error) = spawn_result {
-        crate::logging::warn(&format!("could not start release-check thread: {error}"));
+    if let Err(error) = spawn {
+        state.checking = false;
+        state.last_error = Some(format!("could not start release-check thread: {error}"));
+        return Err(state.last_error.clone().unwrap_or_default());
     }
-
-    status
+    Ok(true)
 }
 
 fn fetch_latest_version() -> Result<String, String> {
