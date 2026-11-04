@@ -1104,8 +1104,10 @@ pub struct ControllerApp {
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
-    // Exists only while the Diagnostics tab is actively viewed in foreground.
+    // Exists only while explicitly enabled on the focused Diagnostics tab.
     diagnostics: Option<DiagnosticsSampler>,
+    // Session-only gate. Opening Diagnostics never starts OS sampling by itself.
+    diagnostics_enabled: bool,
     // Explicit developer capture only; never spawned by opening Options.
     recording: Option<RecordingSession>,
     account_setup_checked_at: Option<Instant>,
@@ -1232,6 +1234,7 @@ impl ControllerApp {
             status_error: false,
             events: VecDeque::new(),
             diagnostics: None,
+            diagnostics_enabled: false,
             recording: None,
             account_setup_checked_at: None,
             update_status,
@@ -1478,7 +1481,8 @@ impl eframe::App for ControllerApp {
             .is_some_and(RecordingSession::is_running).then(Instant::now);
         // The clock is not even queried outside active diagnostics. Starting
         // here includes process refresh, connection work and all UI panels.
-        let diagnostics_frame_start = (self.workspace.panel_tab == PanelTab::Diagnostics
+        let diagnostics_frame_start = (self.diagnostics_enabled
+            && self.workspace.panel_tab == PanelTab::Diagnostics
             && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
             && {
                 #[cfg(windows)]
@@ -1522,14 +1526,19 @@ impl eframe::App for ControllerApp {
             && self.accounts.iter().filter(|account| account.enabled).take(2).count() == 2;
         draw_sidebar(self, ui);
 
-        // Diagnostics is strictly opt-in. Ignore background-refresh settings:
-        // an unfocused or tray-hidden window must never keep sampling.
+        // Live diagnostics is a session-only explicit action. Leaving the page
+        // turns it off rather than silently rearming it when the user returns.
+        if self.workspace.panel_tab != PanelTab::Diagnostics {
+            self.diagnostics_enabled = false;
+        }
+        // Ignore background-refresh settings: an unfocused or tray-hidden
+        // window must never keep live sampling.
         #[cfg(windows)]
         let tray_hidden = self.tray_hidden.load(Ordering::Relaxed);
         #[cfg(not(windows))]
         let tray_hidden = false;
         let focused = ui.ctx().input(|input| input.viewport().focused);
-        let diagnostics_active = should_sample(
+        let diagnostics_active = self.diagnostics_enabled && should_sample(
             self.workspace.panel_tab == PanelTab::Diagnostics, tray_hidden, focused
         );
         if !diagnostics_active {
