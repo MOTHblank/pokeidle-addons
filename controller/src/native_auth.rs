@@ -172,48 +172,9 @@ mod capture_handoff_tests {
         assert_eq!(preserve_native_capture_preferences(&firefox,Some(&no_old_settings)),firefox);
     }
 
-    #[test]
-    fn legacy_cache_requires_one_twitch_profile_probe() {
-        assert!(twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"legacy"},"twitch":null
-        })));
-        assert!(!twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"new"},"twitchProbeVersion":1,"twitch":null
-        })));
-        assert!(twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"token"},"twitch":{"token":"possibly-stale"}
-        })));
-        assert!(!twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"refreshed"},"twitchProbeVersion":1,
-            "twitch":{"token":"current"}
-        })));
-    }
 
-    #[test]
-    fn twitch_profile_probe_preserves_game_and_capture_state() {
-        let cached=json!({
-            "bootstrap":{"hello":"game"},
-            "cookies":[{"name":"session"}],
-            "autocatch":{"enabled":true},
-            "twitch":null
-        });
-        let updated=with_twitch_profile_probe(&cached,Some(" twitch-token "));
-        assert_eq!(updated["bootstrap"],cached["bootstrap"]);
-        assert_eq!(updated["cookies"],cached["cookies"]);
-        assert_eq!(updated["autocatch"],cached["autocatch"]);
-        assert_eq!(updated["twitch"]["token"],"twitch-token");
-        assert_eq!(updated["twitchProbeVersion"],1);
-        assert!(!twitch_profile_probe_needed(&updated));
-    }
 
-    #[test]
-    fn completed_twitch_probe_records_logged_out_profiles() {
-        let updated=with_twitch_profile_probe(
-            &json!({"bootstrap":{"hello":"game"}}),None);
-        assert!(updated["twitch"].is_null());
-        assert_eq!(updated["twitchProbeVersion"],1);
-        assert!(!twitch_profile_probe_needed(&updated));
-    }
+
 }
 
 /// Kick uses a dedicated OS-vault entry, never the PokéIdle game cache.
@@ -307,68 +268,6 @@ pub fn load_for_auth(profile:GameProfile,
         return Err("Cached login canceled: launch changed".into());
     }
     Ok(cached)
-}
-
-const TWITCH_PROFILE_PROBE_VERSION: u64 = 1;
-
-/// Old encrypted PokéIdle bootstraps predate automatic Twitch profile
-/// detection. Probe every pre-marker cache exactly once, even if it contains
-/// an older token, so Firefox can refresh a stale Twitch login transparently.
-pub fn twitch_profile_probe_needed(cached: &Value) -> bool {
-    cached.get("twitchProbeVersion").and_then(Value::as_u64)
-        .unwrap_or(0) < TWITCH_PROFILE_PROBE_VERSION
-}
-
-fn with_twitch_profile_probe(cached: &Value, token: Option<&str>) -> Value {
-    let mut updated = cached.clone();
-    updated["twitchProbeVersion"] = Value::from(TWITCH_PROFILE_PROBE_VERSION);
-    updated["twitch"] = token.map(str::trim).filter(|token| !token.is_empty())
-        .map(|token| serde_json::json!({"token":token}))
-        .unwrap_or(Value::Null);
-    updated
-}
-
-/// Persist a completed automatic profile probe without touching game
-/// credentials or controller-managed capture settings.
-pub fn cache_twitch_profile_probe(
-    profile: GameProfile,
-    cached: &Value,
-    token: Option<&str>,
-    generation: &std::sync::atomic::AtomicU64,
-    expected: u64,
-) -> (Value, Option<String>) {
-    let fallback = with_twitch_profile_probe(cached, token);
-    let _guard = match preference_write(profile).lock() {
-        Ok(guard) => guard,
-        Err(_) => return (fallback, Some("Native settings writer unavailable".into())),
-    };
-    if !capture_generation_is_current(generation, expected) {
-        return (cached.clone(), Some("Twitch login detection canceled: launch changed".into()));
-    }
-    let (current, read_warning) = match load(profile) {
-        Ok(Some(current)) => (current, None),
-        Ok(None) => (cached.clone(), None),
-        Err(error) => (cached.clone(), Some(error)),
-    };
-    let updated = with_twitch_profile_probe(&current, token);
-    if !capture_generation_is_current(generation, expected) {
-        return (cached.clone(), Some("Twitch login detection canceled: launch changed".into()));
-    }
-    let saved = save(profile, &updated);
-    if saved.is_ok() && !capture_generation_is_current(generation, expected) {
-        let warning = match save(profile, &current) {
-            Ok(()) => "Twitch login detection canceled: launch changed".to_owned(),
-            Err(error) => format!(
-                "Canceled Twitch login detection rollback failed: {error}"
-            ),
-        };
-        return (cached.clone(), Some(warning));
-    }
-    let warning = match saved {
-        Ok(()) => read_warning,
-        Err(error) => Some(error),
-    };
-    (updated, warning)
 }
 
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
