@@ -66,6 +66,17 @@ fn main() {
         }
     };
 
+    // v0.2.2 still updated installed copies by replacing only the executable.
+    // Repair its stale Inno Setup DisplayVersion once the newer binary starts;
+    // future installed-edition updates run through Setup and keep metadata current.
+    match update::repair_windows_install_metadata() {
+        Ok(true) => logging::info("Repaired Windows installed-app version metadata"),
+        Ok(false) => {}
+        Err(error) => logging::warn(&format!(
+            "Could not repair Windows installed-app version metadata: {error}"
+        )),
+    }
+
     // rustls 0.23 cannot infer a default when transitive dependencies enable
     // both ring and aws-lc-rs. Initialize ONE process-wide provider before
     // spawning cache or game TLS workers. No authentication is sent
