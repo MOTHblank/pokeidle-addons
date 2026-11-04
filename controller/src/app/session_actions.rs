@@ -156,7 +156,7 @@ impl ControllerApp {
                             match NativeSession::start_verified(profile, bootstrap) {
                                 Ok(native) => Ok(Some(native)),
                                 Err(error) => {
-                                    browser_required = error.starts_with("AUTH_REQUIRED:");
+                                    browser_required = crate::native_background::authentication_rejected(&error);
                                     Err(error)
                                 }
                             }
