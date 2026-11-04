@@ -17,6 +17,9 @@ const WATCH_SLOTS: usize = 2;
 const STREAK_PRIORITY_BASE: Duration = Duration::from_secs(7 * 60);
 const STREAK_PRIORITY_EXTENDED: Duration = Duration::from_secs(20 * 60);
 const LONG_SESSION: Duration = Duration::from_secs(10 * 60 * 60);
+const MIN_POLL_INTERVAL: Duration = Duration::from_secs(60);
+const LIVE_STATUS_INTERVAL: Duration = Duration::from_secs(60);
+const OFFLINE_STATUS_INTERVAL: Duration = Duration::from_secs(120);
 
 #[derive(Clone)]
 pub struct MinerControl {
@@ -500,7 +503,7 @@ fn run(
     let (pubsub_tx,pubsub_rx)=mpsc::channel();
     let mut pubsub_started=false;
     let mut pending_pubsub=VecDeque::new();
-    let interval = config.poll_interval.max(Duration::from_secs(10));
+    let interval = config.poll_interval.max(MIN_POLL_INTERVAL);
 
     while !stop.load(Ordering::Acquire) {
         if identity.is_none() {
@@ -646,7 +649,6 @@ fn poll_channels(
             .then_with(||a.cmp(b))
     });
     let mut checked_this_tick=0usize;
-    let mut id_checks=0usize;
     for login in ordered {
         if stop.load(Ordering::Acquire) {return false;}
         let channel = cache.entry(login.clone()).or_default();
@@ -656,11 +658,6 @@ fn poll_channels(
             Duration::from_secs(180)
         };
         if channel.channel_id.is_none() {
-            if id_checks>=8 {
-                update_streamer(snapshot,login,channel,None);
-                continue;
-            }
-            id_checks+=1;
             match gql.lookup_channel_id(login) {
                 Ok(id) => channel.channel_id = Some(id),
                 Err(error) => {
@@ -755,21 +752,22 @@ fn poll_channels(
     // Mirror the reference miner's lightweight WithIsStreamLiveQuery instead
     // of trusting PokéIdle's legacy estado.twitch.lives roster. The latter can
     // legitimately be absent/empty now that Twitch rewards are redemption-based.
-    let mut live_checks=0usize;
+    // Live status is intentionally a complete roster sweep. It is lightweight,
+    // independent from points/streak polling, and must not be truncated just
+    // because many official channels are online at once.
     for login in channels {
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(login) else {continue};
         let Some(channel_id)=channel.channel_id.clone() else {continue};
         let interval=if channel.live==Some(true) {
-            Duration::from_secs(30)
+            LIVE_STATUS_INTERVAL
         } else {
-            Duration::from_secs(90)
+            OFFLINE_STATUS_INTERVAL
         };
-        if live_checks>=8 || channel.last_live_checked
+        if channel.last_live_checked
             .is_some_and(|at|at.elapsed()<interval) {
             continue;
         }
-        live_checks+=1;
         channel.last_live_checked=Some(Instant::now());
         match gql.is_stream_live(&channel_id) {
             Ok(Some(live_stream)) => {
