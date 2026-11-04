@@ -45,6 +45,10 @@ mod alerts;
 mod single_instance;
 
 fn main() {
+    // Give the eframe/application thread a stable diagnostics identity. Rust's
+    // main thread does not reliably expose an OS thread description on Windows.
+    diagnostics_threads::register_current("moth-ui-main");
+
     // The downloaded replacement binary doubles as a tiny updater helper.
     // Handle that mode before touching single-instance state, TLS or user data.
     if update::maybe_run_update_helper() {
