@@ -6,6 +6,35 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlertKind { Auth = 0, Disconnect = 1, Automation = 2, Boss = 3 }
 
+/// A transient socket interruption is not an actionable desktop alert.
+/// Only an account that was previously online can enter this grace period.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DisconnectAlertState {
+    since: Option<Instant>,
+    alerted: bool,
+}
+
+impl DisconnectAlertState {
+    pub fn pending(&self) -> bool { self.since.is_some() }
+
+    pub fn observe(&mut self, was_online: bool, phase: Option<&str>,
+        still_active: bool, now: Instant) -> bool {
+        if !still_active || matches!(phase, Some("Online" | "NeedsLogin")) {
+            *self = Self::default();
+            return false;
+        }
+        if self.since.is_none() && was_online {
+            self.since = Some(now);
+        }
+        if !self.alerted && self.since.is_some_and(|start|
+            now.saturating_duration_since(start) >= Duration::from_secs(90)) {
+            self.alerted = true;
+            return true;
+        }
+        false
+    }
+}
+
 pub fn classify(message: &str, error: bool) -> Option<AlertKind> {
     let text = message.to_ascii_lowercase();
     if text.contains("boss run complete") || text.contains("boss farming complete") {
@@ -16,9 +45,11 @@ pub fn classify(message: &str, error: bool) -> Option<AlertKind> {
         "session expired", "invalid credential", "invalid token"].iter().any(|s| text.contains(s)) {
         return Some(AlertKind::Auth);
     }
-    if ["disconnected", "connection lost", "connection interrupted", "reconnecting",
-        "socket closed"].iter().any(|s| text.contains(s)) {
-        return Some(AlertKind::Disconnect);
+    // Connection state is observed with a 90-second grace period elsewhere.
+    // Text errors must never notify immediately about transient disconnections.
+    if ["disconnected", "connection lost", "connection interrupted",
+        "reconnecting", "socket closed"].iter().any(|text_part| text.contains(text_part)) {
+        return None;
     }
     if ["auto catch", "restock", "automation", "market", "capture settings", "purchase"]
         .iter().any(|s| text.contains(s)) {
@@ -84,6 +115,11 @@ fn show_notification(message: &'static str) {
 pub fn maybe_notify(message: &str, error: bool, preferences: AppPreferences,
     last_alert: &mut [Option<Instant>; 4]) {
     let Some(kind) = classify(message, error) else { return; };
+    maybe_notify_kind(kind, preferences, last_alert);
+}
+
+pub fn maybe_notify_kind(kind: AlertKind, preferences: AppPreferences,
+    last_alert: &mut [Option<Instant>; 4]) {
     if !allowed(kind, preferences) { return; }
     let slot = kind as usize;
     let now = Instant::now();
@@ -109,10 +145,42 @@ mod tests {
         assert_eq!(classify("Boss run complete at Pokémon Center", false), Some(AlertKind::Boss));
         assert_eq!(classify("Native restock: request failed", true), Some(AlertKind::Automation));
         assert_eq!(classify("session expired", true), Some(AlertKind::Auth));
-        assert_eq!(classify("Connection lost", true), Some(AlertKind::Disconnect));
+        assert_eq!(classify("Connection lost", true), None);
         assert_eq!(classify("password: secret", true), None);
         assert_eq!(classify("Socket closed", false), None);
     }
+    #[test]
+    fn disconnection_must_outlast_grace_period_and_notify_once() {
+        let start = Instant::now();
+        let mut state = DisconnectAlertState::default();
+        assert!(!state.observe(true, Some("Reconnecting"), true, start));
+        assert!(!state.observe(false, Some("Offline"), true,
+            start + Duration::from_secs(89)));
+        assert!(state.observe(false, Some("Offline"), true,
+            start + Duration::from_secs(90)));
+        assert!(!state.observe(false, Some("Offline"), true,
+            start + Duration::from_secs(200)));
+        assert!(!state.observe(false, Some("Online"), true,
+            start + Duration::from_secs(210)));
+        assert!(!state.observe(true, None, true,
+            start + Duration::from_secs(215)));
+        assert!(state.observe(false, None, true,
+            start + Duration::from_secs(306)));
+    }
+
+    #[test]
+    fn manual_stop_and_new_login_clear_disconnection_grace() {
+        let start = Instant::now();
+        let mut state = DisconnectAlertState::default();
+        assert!(!state.observe(true, Some("Reconnecting"), true, start));
+        assert!(!state.observe(false, Some("Reconnecting"), false,
+            start + Duration::from_secs(180)));
+        assert!(!state.observe(true, Some("NeedsLogin"), true,
+            start + Duration::from_secs(181)));
+        assert!(!state.observe(false, Some("Offline"), true,
+            start + Duration::from_secs(500)));
+    }
+
     #[test]
     fn notifications_are_disabled_by_default() {
         let preferences = AppPreferences::default();

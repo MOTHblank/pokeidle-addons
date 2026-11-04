@@ -41,8 +41,20 @@ mod preferences;
 mod settings_backup;
 mod startup;
 mod alerts;
+mod single_instance;
 
 fn main() {
+    // A second launch only signals the original window. Do this before
+    // initializing TLS, opening accounts or scheduling any background work.
+    let instance = match single_instance::acquire() {
+        Ok(single_instance::Launch::Primary(instance)) => instance,
+        Ok(single_instance::Launch::Existing) => return,
+        Err(error) => {
+            single_instance::report_acquire_error(&error);
+            return;
+        }
+    };
+
     // rustls 0.23 cannot infer a default when transitive dependencies enable
     // both ring and aws-lc-rs. Initialize ONE process-wide provider before
     // spawning cache, game, or Twitch TLS workers. No authentication is sent
@@ -65,7 +77,7 @@ fn main() {
             "Rust panic in thread {name} at {location} (payload redacted)"
         ));
     }));
-    if let Err(error) = app::run() {
+    if let Err(error) = app::run(instance) {
         crate::logging::error(&format!("Controller UI exited with error: {error}"));
         eprintln!("moth-controller: {error}");
     } else {

@@ -492,6 +492,9 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Optional, rate-limited system alerts. No account names or server messages are included." => "Alertas opcionais e limitados por frequência, sem nomes de contas ou mensagens do servidor.",
         "Enable desktop notifications" => "Ativar notificações da área de trabalho",
         "Connection issues" => "Problemas de conexão",
+        "Prolonged disconnections (90 seconds)" => "Desconexões prolongadas (90 segundos)",
+        "Opening Moth again restores this window instead of running another controller." =>
+            "Abrir o Moth novamente restaura esta janela em vez de executar outro controlador.",
         "Automation failures" => "Falhas de automação",
         "Boss farming completed" => "Farm de boss concluído",
         "Quiet mode (suppress alerts)" => "Modo silencioso (suprimir alertas)",
@@ -520,6 +523,12 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
             "Os relatórios de suporte incluem apenas contagens agregadas, nunca detalhes privados das sessões.",
         "Opened data folder" => "Pasta de dados aberta",
         "Settings backup" => "Backup de configurações",
+        "Exports local app, account, and Kick stream preferences. Game server automation and credentials remain excluded." =>
+            "Exporta opções locais, contas e preferências de streams da Kick. Automações do servidor e credenciais ficam de fora.",
+        "Kick stream preferences" => "Preferências de streams da Kick",
+        "Channels" => "Canais",
+        "Maximum streams" => "Máximo de streams",
+        "Favorites" => "Favoritos",
         "Export only local app options and account labels/enabled flags. No credentials or server automation data." => "Exporta apenas opções locais e nomes/estado das contas. Sem credenciais ou automações do servidor.",
         "Export safe settings backup" => "Exportar backup seguro das configurações",
         "Settings backup saved" => "Backup de configurações salvo",
