@@ -44,6 +44,8 @@ pub(super) struct WorkspaceState {
     pub(super) hunt_page: usize,
     pub(super) boss_selected: [String;4],
     pub(super) boss_leave_confirm: [bool;4],
+    pub(super) boss_history_page: [usize;4],
+    pub(super) boss_history_filter: [String;4],
     pub(super) selected_details: Option<usize>,
     pub(super) restock_open: [bool;4],
     pub(super) session_reset_confirm: [bool;4],
@@ -70,6 +72,8 @@ impl Default for WorkspaceState {
             hunt_page: 0,
             boss_selected: std::array::from_fn(|_| String::new()),
             boss_leave_confirm: [false;4],
+            boss_history_page: [0;4],
+            boss_history_filter: std::array::from_fn(|_| String::new()),
             selected_details: None,
             restock_open: [false;4],
             session_reset_confirm: [false;4],
@@ -98,13 +102,26 @@ impl WorkspaceState {
         }
         self.automation_account = index;
         self.hunt_page = 0;
-        self.boss_leave_confirm[index] = false;
+        // A leave confirmation must never survive a switch between accounts.
+        self.boss_leave_confirm = [false;4];
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn switching_accounts_discards_leave_confirmations_but_keeps_history_views() {
+        let mut workspace = WorkspaceState::default();
+        workspace.boss_leave_confirm = [true;4];
+        workspace.boss_history_page[1] = 2;
+        workspace.boss_history_filter[1] = "example".into();
+        workspace.select_account(2);
+        assert_eq!(workspace.boss_leave_confirm, [false;4]);
+        assert_eq!(workspace.boss_history_page[1], 2);
+        assert_eq!(workspace.boss_history_filter[1], "example");
+    }
 
     #[test]
     fn selecting_account_synchronizes_automation_when_hunt_already_matches() {
