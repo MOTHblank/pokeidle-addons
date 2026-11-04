@@ -408,19 +408,24 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         );
                     } else {
                         ui.add_space(7.0);
-                        ui.label(
-                            RichText::new(tr("Items acquired (retained history)"))
-                                .size(10.0)
-                                .strong()
-                                .color(MUTED),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            for (id, quantity) in totals {
-                                let name = app.inventory_catalog.as_ref()
-                                    .map(|catalog| catalog.name(id))
-                                    .unwrap_or_else(|| format!("Item #{id}"));
-                                resource_chip(ui, &format!("×{quantity} {name}"));
-                            }
+                        // Keep the history controls reachable even after
+                        // hundreds of distinct recorded item drops.
+                        egui::CollapsingHeader::new(format!(
+                            "{} ({})",
+                            tr("Items acquired (retained history)"),
+                            totals.len(),
+                        ))
+                        .id_salt(("boss-loot-totals", index))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                for (id, quantity) in &totals {
+                                    let name = app.inventory_catalog.as_ref()
+                                        .map(|catalog| catalog.name(*id))
+                                        .unwrap_or_else(|| format!("Item #{id}"));
+                                    resource_chip(ui, &format!("×{quantity} {name}"));
+                                }
+                            });
                         });
                     }
 
@@ -449,11 +454,12 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     .size(10.0)
                                     .color(MUTED),
                             );
+                            let selected_name = boss_names
+                                .get(filter.as_str()).map(String::as_str)
+                                .unwrap_or(tr("All bosses"));
+                            let max_chars = if ui.available_width() < 340.0 { 24 } else { 42 };
                             egui::ComboBox::from_id_salt(("boss-history-filter", index))
-                                .selected_text(
-                                    boss_names.get(filter.as_str()).map(String::as_str)
-                                        .unwrap_or(tr("All bosses")),
-                                )
+                                .selected_text(compact_text(selected_name, max_chars))
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut *filter,
@@ -461,9 +467,15 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         tr("All bosses"),
                                     );
                                     for (key, name) in &boss_names {
-                                        ui.selectable_value(&mut *filter, key.clone(), name);
+                                        ui.selectable_value(
+                                            &mut *filter,
+                                            key.clone(),
+                                            compact_text(name, 42),
+                                        ).on_hover_text(name);
                                     }
-                                });
+                                })
+                                .response
+                                .on_hover_text(selected_name);
                         });
                         if *filter != previous_filter {
                             app.workspace.boss_history_page[index] = 0;
@@ -473,16 +485,10 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .collect();
                         let count = filtered.len();
                         let page = &mut app.workspace.boss_history_page[index];
-                        let range = history_range(page, count);
                         let page_count = count.div_ceil(BOSS_HISTORY_PAGE_SIZE).max(1);
-                        ui.horizontal_wrapped(|ui| {
-                            let first = if count == 0 { 0 } else { range.start + 1 };
-                            ui.label(
-                                RichText::new(format!("{first}–{} / {count}", range.end))
-                                    .size(10.0)
-                                    .color(DIM),
-                            );
-                            if page_count > 1 {
+                        *page = (*page).min(page_count - 1);
+                        if page_count > 1 {
+                            ui.horizontal_wrapped(|ui| {
                                 if ui.add_enabled(
                                     *page > 0,
                                     egui::Button::new(tr("← Previous")),
@@ -500,8 +506,17 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 ).clicked() {
                                     *page += 1;
                                 }
-                            }
-                        });
+                            });
+                        }
+                        // Compute the range after clicks: the count and rows
+                        // now describe the same page in this exact frame.
+                        let range = history_range(page, count);
+                        let first = if count == 0 { 0 } else { range.start + 1 };
+                        ui.label(
+                            RichText::new(format!("{first}–{} / {count}", range.end))
+                                .size(10.0)
+                                .color(DIM),
+                        );
                         if filtered.is_empty() {
                             ui.label(
                                 RichText::new(tr("No victories match this boss."))
@@ -525,11 +540,11 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             };
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(
-                                    RichText::new(&result.boss)
+                                    RichText::new(compact_text(&result.boss, 42))
                                         .size(11.0)
                                         .strong()
                                         .color(TEXT),
-                                );
+                                ).on_hover_text(&result.boss);
                                 ui.label(
                                     RichText::new(loot_age(now, result.at))
                                         .size(10.0)
