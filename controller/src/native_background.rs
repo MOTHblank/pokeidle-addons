@@ -1565,8 +1565,7 @@ mod tests {
         let status = Arc::new(Mutex::new(NativeSnapshot::default()));
         observe(&status, r#"{"t":"welcome","estado":{"twitch":{
             "vinculado":true,"login":"trainer","pct":15,
-            "bonus":{"xp":200,"captura":300,"shiny":400},
-            "assistindoEm":["obsolete"],"pctAtual":99
+            "bonus":{"xp":200,"captura":300,"shiny":400}
         }}}"#);
         let observed=status.lock().unwrap().clone();
         assert_eq!(observed.twitch_linked,Some(true));
