@@ -274,6 +274,7 @@ pub struct NativeSession {
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     pvp_preference: Arc<AtomicU8>,
+    pvp_toggle_epoch: Arc<AtomicU64>,
     capture_config: Arc<Mutex<CatchSettings>>,
     market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
@@ -337,6 +338,8 @@ impl NativeSession {
             None => 0, Some(false) => 1, Some(true) => 2,
         }));
         let worker_pvp_preference = Arc::clone(&pvp_preference);
+        let pvp_toggle_epoch = Arc::new(AtomicU64::new(0));
+        let worker_pvp_toggle_epoch = Arc::clone(&pvp_toggle_epoch);
         let (command_tx, command_rx) = mpsc::sync_channel(64);
         let (forecast_tx,forecast_rx)=mpsc::sync_channel(8);
         let background_forecast_reference=Arc::new(Mutex::new(None));
@@ -356,7 +359,8 @@ impl NativeSession {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
-                        worker_restock_enabled, worker_pvp_preference, worker_capture_config,
+                        worker_restock_enabled, worker_pvp_preference,
+                        worker_pvp_toggle_epoch, worker_capture_config,
                         worker_market_rules, worker_rules_revision, worker_session_reset,
                         Arc::clone(&worker_phase_wake), worker_kick_roster_publisher,
                         hunt_intel, worker_hunts, boss_manager, worker_boss,
@@ -376,7 +380,7 @@ impl NativeSession {
         track_game_worker(worker);
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
-            pvp_preference, capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
+            pvp_preference, pvp_toggle_epoch, capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
             background_forecast_reference, phase_wake, kick_roster_publisher
         })
     }
@@ -385,6 +389,7 @@ impl NativeSession {
         self.pvp_preference.store(match preference {
             None => 0, Some(false) => 1, Some(true) => 2,
         }, Ordering::Release);
+        self.pvp_toggle_epoch.fetch_add(1, Ordering::AcqRel);
     }
     pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
         rules.save(self.profile)?;
@@ -771,6 +776,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
     pvp_preference: Arc<AtomicU8>,
+    pvp_toggle_epoch: Arc<AtomicU64>,
     capture_config: Arc<Mutex<CatchSettings>>,
     market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
@@ -789,6 +795,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
     let mut pvp = PvpAutomation::default();
+    let mut seen_pvp_toggle_epoch = 0u64;
     let mut market = MarketBuyer::new(profile);
     let mut pending_sale: Option<(u64, Instant)> = None;
     let mut next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;
@@ -1075,6 +1082,11 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     );
                     // Only queue management; neither matchmaking path touches hunts.
                     if last_pvp_tick.elapsed() >= Duration::from_secs(1) {
+                        let toggle_epoch = pvp_toggle_epoch.load(Ordering::Acquire);
+                        if toggle_epoch != seen_pvp_toggle_epoch {
+                            seen_pvp_toggle_epoch = toggle_epoch;
+                            pvp.on_user_toggle();
+                        }
                         let pref = match pvp_preference.load(Ordering::Acquire) {
                             1 => Some(false), 2 => Some(true), _ => None,
                         };
