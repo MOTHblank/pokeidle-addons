@@ -1,6 +1,6 @@
 use crate::client::{
     extract_twilight_build_id, random_hex, random_string, ANDROID_TV_USER_AGENT,
-    DEFAULT_CLIENT_VERSION, REFERENCE_CLIENT_ID,
+    DEFAULT_CLIENT_VERSION,
 };
 use crate::Credentials;
 use reqwest::blocking::Client;
@@ -258,10 +258,6 @@ impl TwitchGql {
         &self.credentials.oauth_token
     }
 
-    pub(crate) fn reference_client(&self)->bool {
-        self.client_id.as_deref()==Some(REFERENCE_CLIENT_ID)
-    }
-
     pub(crate) fn playback_access(&self, login:&str) -> Result<PlaybackAccess,GqlError> {
         let value=self.post(
             "PlaybackAccessToken",
@@ -447,6 +443,6 @@ mod tests {
 
     #[test]
     fn reference_client_id_matches_reference_miner() {
-        assert_eq!(REFERENCE_CLIENT_ID,"ue6666qo983tsx6so1t0vnawi233wa");
+        assert_eq!(crate::client::REFERENCE_CLIENT_ID,"ue6666qo983tsx6so1t0vnawi233wa");
     }
 }
