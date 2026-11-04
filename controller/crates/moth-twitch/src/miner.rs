@@ -1083,7 +1083,7 @@ fn poll_channels(
                 channel.watch_attempts=channel.watch_attempts.saturating_add(1);
                 channel.last_error=None;
                 if first_watch {
-                    push_event(events,MinerEvent::WatchActive {
+                    push_event(events,MinerEvent::WatchSignalAccepted {
                         channel:slot.login.clone()
                     });
                 }
