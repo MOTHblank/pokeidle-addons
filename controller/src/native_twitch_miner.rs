@@ -91,6 +91,12 @@ fn log_miner_event(account:&str,event:MinerEvent) {
             "{prefix} authenticated as {login} ({})",
             if reference_client {"reference device session"} else {"Firefox compatibility session"}
         )),
+        MinerEvent::Stopped => crate::logging::info(&format!(
+            "{prefix} miner stopped"
+        )),
+        MinerEvent::RosterUpdated {channels} => crate::logging::info(&format!(
+            "{prefix} official channel roster loaded: {channels} channel(s)"
+        )),
         MinerEvent::PubSubConnected => crate::logging::info(&format!(
             "{prefix} channel-points events connected"
         )),
@@ -153,7 +159,11 @@ pub struct TwitchMinerSession {
 }
 
 impl TwitchMinerSession {
-    pub fn start_optional(account_label:impl Into<String>,token: Option<&str>) -> Self {
+    pub fn start_optional(token: Option<&str>) -> Self {
+        Self::start_optional_for("Twitch",token)
+    }
+
+    pub fn start_optional_for(account_label:impl Into<String>,token: Option<&str>) -> Self {
         let control = TwitchMinerControl::default();
         let session = Self {
             account_label:account_label.into(),
@@ -202,8 +212,9 @@ impl TwitchMinerSession {
         let event_sink:MinerEventSink=Arc::new(move |event| {
             let _=log_sender.try_send((account_label.clone(),event));
         });
-        let miner = Miner::start(credentials, MinerConfig::default(), Some(event_sink))
-            .map_err(|error| error.to_string())?;
+        let miner = Miner::start_with_sink(
+            credentials, MinerConfig::default(), Some(event_sink)
+        ).map_err(|error| error.to_string())?;
         if let Some(wake)=self.phase_wake.lock().ok().and_then(|current|current.clone()) {
             miner.set_phase_waker(wake);
         }
