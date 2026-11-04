@@ -84,6 +84,8 @@ fn general(app: &mut ControllerApp, ui: &mut egui::Ui) {
     });
     ui.add_space(10.0);
     card(ui, "Window and exit behavior", "", |ui| {
+        description(ui, "Opening Moth again restores this window instead of running another controller.");
+        ui.add_space(8.0);
         ui.checkbox(&mut next.confirm_exit_with_accounts, tr("Confirm exit while accounts are active"));
         description(ui, "Exiting stops Moth's active sessions; the confirmation is shown only when needed.");
         #[cfg(windows)]
@@ -169,7 +171,7 @@ fn notifications(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_enabled_ui(next.notifications_enabled, |ui| {
                 ui.add_space(10.0);
                 ui.checkbox(&mut next.notify_auth, tr("Sign-in required"));
-                ui.checkbox(&mut next.notify_disconnect, tr("Connection issues"));
+                ui.checkbox(&mut next.notify_disconnect, tr("Prolonged disconnections (90 seconds)"));
                 ui.checkbox(&mut next.notify_automation, tr("Automation failures"));
                 ui.checkbox(&mut next.notify_boss, tr("Boss farming completed"));
                 ui.separator();
