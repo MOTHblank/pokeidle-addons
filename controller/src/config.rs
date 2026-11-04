@@ -310,7 +310,7 @@ impl Default for UiOptions {
 }
 
 impl UiOptions {
-    fn from_value(value: &Value) -> Self {
+    pub(crate) fn from_value(value: &Value) -> Self {
         let defaults = Self::default();
         Self {
             reduce_updates_unfocused: value.get("reduceUpdatesUnfocused")
@@ -327,7 +327,7 @@ impl UiOptions {
         }
     }
 
-    fn to_value(self) -> Value {
+    pub(crate) fn to_value(self) -> Value {
         json!({
             "version": 1,
             "reduceUpdatesUnfocused": self.reduce_updates_unfocused,

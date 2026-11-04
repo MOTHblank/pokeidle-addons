@@ -1,6 +1,9 @@
 use crate::accounts;
 use crate::icon;
 use crate::config::{AccountConfig, Config, GameProfile, KickStreamPreferences, UiOptions};
+use crate::preferences::AppPreferences;
+use crate::settings_backup::SettingsBackup;
+use crate::{alerts, startup};
 use crate::firefox;
 use crate::kick::KickStream;
 use crate::native_kick::KickSupervisor;
@@ -22,6 +25,7 @@ mod translations;
 mod localization;
 mod workspace_nav;
 mod workspace_state;
+mod options_panel;
 mod overview_panel;
 mod automation_panel;
 mod automation_game;
@@ -43,7 +47,8 @@ mod session_actions;
 
 // Each shared symbol is intentional: no wildcard panel imports.
 use localization::{pt_br, localize_status, tr_dynamic, tr};
-use workspace_nav::{draw_header_actions, draw_account_switcher, draw_options_panel, draw_sidebar, draw_instance_section};
+use workspace_nav::{draw_header_actions, draw_account_switcher, draw_sidebar, draw_instance_section};
+use options_panel::draw_options_panel;
 use workspace_state::WorkspaceState;
 use account_runtime::AccountRuntime;
 use overview_panel::{OverviewAccountSample, collect_overview_totals, draw_overview_totals, request_item_catalog, draw_native_missing_panel, format_hunt_amount, draw_overview_card, selected_restock_stock, OverviewCombatState, overview_combat_state, draw_history_panel, workspace_tab_button};
@@ -754,7 +759,7 @@ struct TrayRuntime {
 
 #[cfg(windows)]
 impl TrayRuntime {
-    fn new(ctx: egui::Context, hidden: Arc<AtomicBool>) -> Result<Self, String> {
+    fn new(ctx: egui::Context, hidden: Arc<AtomicBool>, exit_requested: Arc<AtomicBool>) -> Result<Self, String> {
         let menu = Menu::new();
         let show_item = MenuItem::new("Mostrar / Show Moth", true, None);
         let separator = PredefinedMenuItem::separator();
@@ -811,6 +816,7 @@ impl TrayRuntime {
                         if event.id == show_id {
                             restore_from_tray(&ctx, &hidden);
                         } else if event.id == quit_id {
+                            exit_requested.store(true, Ordering::Release);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             ctx.request_repaint();
                         }
@@ -982,6 +988,9 @@ enum AfterStop {
 enum PanelTab { Overview, Hunts, Boss, Accounts, Automation, Diagnostics, Options }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum OptionsSection { General, Appearance, Performance, Notifications, Updates, Data }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum AccountsSection { Profiles, Kick }
 
 /// Profile commands are application actions, not sidebar presentation state.
@@ -1071,6 +1080,10 @@ pub struct ControllerApp {
     kick_token_tx: WakeSender<KickTokenLoadedEvent>,
     kick_token_rx: Receiver<KickTokenLoadedEvent>,
     ui_options: UiOptions,
+    preferences: AppPreferences,
+    last_alert: [Option<Instant>; 4],
+    last_native_phase: [Option<String>; 4],
+    last_notification_inspection: Option<Instant>,
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
     hunt_reference_busy: bool,
@@ -1090,7 +1103,7 @@ pub struct ControllerApp {
     events: VecDeque<UiEvent>,
     // Exists only while the Diagnostics tab is actively viewed in foreground.
     diagnostics: Option<DiagnosticsSampler>,
-    // Created only by Start recording; remains active across tabs/focus/tray.
+    // Explicit developer capture only; never spawned by opening Options.
     recording: Option<RecordingSession>,
     account_setup_checked_at: Option<Instant>,
     update_status: SharedUpdateStatus,
@@ -1098,11 +1111,18 @@ pub struct ControllerApp {
     tray: Option<TrayRuntime>,
     #[cfg(windows)]
     tray_hidden: Arc<AtomicBool>,
+    #[cfg(windows)]
+    tray_exit_requested: Arc<AtomicBool>,
 }
 
 impl ControllerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        configure_style(&cc.egui_ctx);
+        let preferences = AppPreferences::load().unwrap_or_else(|error| {
+            logging::warn(&format!("application options load failed: {error}"));
+            AppPreferences::default()
+        });
+        apply_visual_preferences(&cc.egui_ctx, preferences);
+        PT_BR.store(preferences.language_pt_br, Ordering::Relaxed);
 
         logging::init();
         logging::info(&format!(
@@ -1111,7 +1131,7 @@ impl ControllerApp {
             rustls::crypto::CryptoProvider::get_default().is_some()
         ));
         logging::info("controller UI initialized with egui/eframe");
-        let update_status = update::start_update_check();
+        let update_status = update::start_update_check(preferences.check_updates_on_start);
         let (native_handoff_tx, native_handoff_rx) = wake_channel(&cc.egui_ctx);
         let (cached_native_tx, cached_native_rx) = wake_channel(&cc.egui_ctx);
         let (native_closed_tx, native_closed_rx) = wake_channel(&cc.egui_ctx);
@@ -1125,7 +1145,11 @@ impl ControllerApp {
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
         #[cfg(windows)]
-        let tray = match TrayRuntime::new(cc.egui_ctx.clone(), Arc::clone(&tray_hidden)) {
+        let tray_exit_requested = Arc::new(AtomicBool::new(false));
+        #[cfg(windows)]
+        let tray = match TrayRuntime::new(
+            cc.egui_ctx.clone(), Arc::clone(&tray_hidden), Arc::clone(&tray_exit_requested)
+        ) {
             Ok(tray) => Some(tray),
             Err(error) => {
                 logging::warn(&format!("system tray initialization failed: {error}"));
@@ -1143,7 +1167,7 @@ impl ControllerApp {
                 std::array::from_fn(|_| KickStreamPreferences::default())
             });
 
-        Self {
+        let mut app = Self {
             workspace: WorkspaceState::default(),
             runtimes: std::array::from_fn(|index| AccountRuntime::new(
                 index,
@@ -1167,6 +1191,10 @@ impl ControllerApp {
                 logging::warn(&format!("controller options load failed: {error}"));
                 UiOptions::default()
             }),
+            preferences,
+            last_alert: [None; 4],
+            last_native_phase: std::array::from_fn(|_| None),
+            last_notification_inspection: None,
             hunt_reference: None,
             hunt_reference_error: None,
             hunt_reference_busy: false,
@@ -1197,7 +1225,19 @@ impl ControllerApp {
             tray,
             #[cfg(windows)]
             tray_hidden,
+            #[cfg(windows)]
+            tray_exit_requested,
+        };
+        #[cfg(windows)]
+        if app.preferences.start_minimized && app.tray.is_some() {
+            app.tray_hidden.store(true, Ordering::Relaxed);
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
+        // Explicitly opt-in. Never auto-launch an enabled account by default.
+        if app.preferences.launch_enabled_on_start {
+            app.launch_enabled();
+        }
+        app
     }
 
     // A session transition is serialized with in-flight encrypted writes.
@@ -1259,15 +1299,107 @@ impl ControllerApp {
         if error {
             logging::warn(&self.status);
         }
+        alerts::maybe_notify(&self.status, error, self.preferences, &mut self.last_alert);
     }
 
+    fn inspect_notification_transitions(&mut self) {
+        if !self.preferences.notifications_enabled || self.preferences.quiet_notifications {
+            self.last_notification_inspection = None;
+            return;
+        }
+        let now = Instant::now();
+        if self.last_notification_inspection
+            .is_some_and(|previous| now.duration_since(previous) < Duration::from_secs(15)) {
+            return;
+        }
+        self.last_notification_inspection = Some(now);
+        for index in 0..self.runtimes.len() {
+            let game = &self.runtimes[index].game;
+            if game.stopping {
+                self.last_native_phase[index] = None;
+                continue;
+            }
+            let phase = game.native.as_ref().map(|native| native.snapshot().phase);
+            let was_online = self.last_native_phase[index].as_deref() == Some("Online");
+            let changed = self.last_native_phase[index].as_deref() != phase.as_deref();
+            if changed {
+                if phase.as_deref() == Some("NeedsLogin") {
+                    alerts::maybe_notify("sign-in required", true,
+                        self.preferences, &mut self.last_alert);
+                } else if was_online && matches!(phase.as_deref(),
+                    Some("Offline" | "Reconnecting")) {
+                    alerts::maybe_notify("connection lost", true,
+                        self.preferences, &mut self.last_alert);
+                }
+            }
+            self.last_native_phase[index] = phase;
+        }
+    }
 
+    fn accounts_have_live_work(&self) -> bool {
+        self.runtimes.iter().any(|runtime| {
+            let game = &runtime.game;
+            let session = &runtime.session;
+            game.child.is_some() || game.orphaned_pid.is_some() || game.native.is_some()
+                || game.stopping || game.handoff_closing
+                || session.cached_native_busy || session.native_handoff_busy
+                || runtime.kick.kick_monitor.is_some()
+        })
+    }
+
+    fn handle_window_close(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.viewport().close_requested())
+            || self.workspace.exit_approved { return; }
+        #[cfg(windows)]
+        let explicit_tray_exit = self.tray_exit_requested.swap(false, Ordering::AcqRel);
+        #[cfg(not(windows))]
+        let explicit_tray_exit = false;
+
+        #[cfg(windows)]
+        if !explicit_tray_exit && self.preferences.close_to_tray && self.tray.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.tray_hidden.store(true, Ordering::Relaxed);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            return;
+        }
+        #[cfg(not(windows))]
+        let _ = explicit_tray_exit;
+
+        if self.preferences.confirm_exit_with_accounts && self.accounts_have_live_work() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.workspace.exit_confirmation = true;
+            #[cfg(windows)]
+            if explicit_tray_exit && self.hidden_in_tray() {
+                restore_from_tray(ctx, &self.tray_hidden);
+            }
+        }
+    }
+
+    fn draw_exit_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.workspace.exit_confirmation { return; }
+        let mut approve = false;
+        let mut cancel = false;
+        egui::Window::new(tr("Exit Moth Controller?"))
+            .collapsible(false).resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(tr("Active accounts and automations will be stopped."));
+                ui.horizontal(|ui| {
+                    if ui.button(tr("Cancel")).clicked() { cancel = true; }
+                    if ui.button(tr("Exit and stop accounts")).clicked() { approve = true; }
+                });
+            });
+        if cancel { self.workspace.exit_confirmation = false; }
+        if approve {
+            self.workspace.exit_confirmation = false;
+            self.workspace.exit_approved = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
 }
 
 impl Drop for ControllerApp {
     fn drop(&mut self) {
-        // A capture may have been started and the window then hidden.
-        // Wake its dedicated worker immediately; never block shutdown.
         if let Some(recording) = self.recording.as_mut() { recording.stop(); }
         #[cfg(windows)]
         if let Some(tray) = self.tray.as_mut() {
@@ -1310,10 +1442,13 @@ impl Drop for ControllerApp {
 
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // The clock is not even queried outside active diagnostics. Starting
-        // here includes process refresh, connection work and all UI panels.
+        self.handle_window_close(ui.ctx());
+        // Explicit developer capture may follow other pages, but ordinary
+        // diagnostics never starts it or leaves any background worker.
         let recording_frame_start = self.recording.as_ref()
             .is_some_and(RecordingSession::is_running).then(Instant::now);
+        // The clock is not even queried outside active diagnostics. Starting
+        // here includes process refresh, connection work and all UI panels.
         let diagnostics_frame_start = (self.workspace.panel_tab == PanelTab::Diagnostics
             && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
             && {
@@ -1324,6 +1459,7 @@ impl eframe::App for ControllerApp {
                 should_sample(true, hidden, ui.ctx().input(|input| input.viewport().focused))
             }).then(Instant::now);
         self.refresh_processes();
+        self.inspect_notification_transitions();
         self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
         // resetting the current frame's Pokémon sprite usage.
@@ -1470,6 +1606,7 @@ impl eframe::App for ControllerApp {
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
+        self.draw_exit_confirmation(ui.ctx());
         let diagnostics_panel_elapsed = diagnostics_panel_start.map(|start| start.elapsed());
 
         // Keep exactly the Pokémon art used by Overview this frame (at most
@@ -1528,6 +1665,19 @@ impl eframe::App for ControllerApp {
                 multi_account_overview)
         });
     }
+}
+
+fn apply_visual_preferences(ctx: &egui::Context, preferences: AppPreferences) {
+    configure_style(ctx);
+    ctx.set_zoom_factor(preferences.ui_scale_percent as f32 / 100.0);
+    ctx.global_style_mut(|style| {
+        if preferences.compact_spacing {
+            style.spacing.item_spacing = egui::vec2(5.0, 3.0);
+            style.spacing.button_padding = egui::vec2(9.0, 5.0);
+            style.spacing.interact_size.y = 26.0;
+        }
+        if preferences.reduce_motion { style.animation_time = 0.0; }
+    });
 }
 
 fn configure_style(ctx: &egui::Context) {

@@ -34,6 +34,90 @@ impl ControllerApp {
         }
     }
 
+    fn try_save_app_preferences(&mut self, next: AppPreferences) -> Result<(), String> {
+        if next == self.preferences { return Ok(()); }
+        let before = self.preferences;
+        if next.start_with_windows != before.start_with_windows {
+            startup::set_start_with_windows(next.start_with_windows)?;
+        }
+        if let Err(error) = next.save() {
+            if next.start_with_windows != before.start_with_windows {
+                let _ = startup::set_start_with_windows(before.start_with_windows);
+            }
+            return Err(error);
+        }
+        self.preferences = next;
+        PT_BR.store(next.language_pt_br, Ordering::Relaxed);
+        apply_visual_preferences(&self.lifecycle_ctx, next);
+        logging::set_limits(next.log_max_megabytes, next.log_retention_days);
+        if next.check_updates_on_start && !before.check_updates_on_start {
+            let _ = update::check_now(&self.update_status);
+        }
+        self.lifecycle_ctx.request_repaint();
+        Ok(())
+    }
+
+    pub(super) fn save_app_preferences(&mut self, next: AppPreferences) {
+        match self.try_save_app_preferences(next) {
+            Ok(()) => {
+                self.workspace.preferences_failed_save = None;
+                self.set_status(tr("Application options saved").to_owned(), false);
+            }
+            Err(error) => {
+                self.workspace.preferences_failed_save = Some((next, error.clone()));
+                self.set_status(error, true);
+            }
+        }
+    }
+
+    pub(super) fn restore_settings_backup(&mut self, backup: SettingsBackup) -> Result<(), String> {
+        if self.accounts_have_live_work() {
+            return Err("Stop all accounts before restoring settings".into());
+        }
+        // Exclude non-portable Windows startup/tray state on Linux.
+        #[cfg(not(windows))]
+        let backup = {
+            let mut backup = backup;
+            backup.app.start_with_windows = false;
+            backup.app.start_minimized = false;
+            backup.app.close_to_tray = false;
+            backup
+        };
+        let previous = SettingsBackup::from_active(
+            self.preferences, self.ui_options, &self.accounts);
+        if backup.app.start_with_windows != previous.app.start_with_windows {
+            startup::set_start_with_windows(backup.app.start_with_windows)?;
+        }
+        let result = (|| {
+            Config::save_accounts(&backup.accounts)?;
+            Config::save_ui_options(&backup.ui)?;
+            backup.app.save()?;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            // Best effort rollback of all three persisted settings files.
+            let _ = Config::save_accounts(&previous.accounts);
+            let _ = Config::save_ui_options(&previous.ui);
+            let _ = previous.app.save();
+            if backup.app.start_with_windows != previous.app.start_with_windows {
+                let _ = startup::set_start_with_windows(previous.app.start_with_windows);
+            }
+            return Err(format!("Could not restore settings (rollback attempted): {error}"));
+        }
+        self.accounts = backup.accounts;
+        self.ui_options = backup.ui;
+        self.preferences = backup.app;
+        self.workspace.options_failed_save = None;
+        self.workspace.preferences_failed_save = None;
+        self.workspace.backup_preview = None;
+        PT_BR.store(self.preferences.language_pt_br, Ordering::Relaxed);
+        apply_visual_preferences(&self.lifecycle_ctx, self.preferences);
+        logging::set_limits(self.preferences.log_max_megabytes, self.preferences.log_retention_days);
+        self.refresh_account_setup();
+        self.lifecycle_ctx.request_repaint();
+        Ok(())
+    }
+
     pub(super) fn sync_monitor_paces(&self, background: bool) {
         // Exactly one account may be expanded when focused. Background mode
         // overrides that selection without clearing the open details panel.

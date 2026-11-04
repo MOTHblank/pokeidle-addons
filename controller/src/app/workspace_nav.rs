@@ -121,139 +121,6 @@ pub(super) fn draw_account_switcher(
     next
 }
 
-/// Performance preferences persist independently of accounts and profiles.
-pub(super) fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    egui::ScrollArea::vertical()
-        .id_salt("options-page")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let width = ui.available_width().min(720.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(width, 0.0), Layout::top_down(Align::Min),
-                |ui| draw_options_contents(app, ui),
-            );
-        });
-}
-
-fn default_performance_options(current: UiOptions) -> UiOptions {
-    UiOptions {
-        atlas_aoe_enabled: current.atlas_aoe_enabled,
-        ..UiOptions::default()
-    }
-}
-
-fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    ui.label(RichText::new(tr("Background performance"))
-        .size(17.0).strong().color(TEXT));
-    ui.add_space(5.0);
-    ui.label(RichText::new(tr(
-        "Control how often the controller redraws its window and checks Firefox in the background."
-    )).size(11.0).color(MUTED));
-    ui.add_space(12.0);
-
-    let mut next = app.ui_options;
-    egui::Frame::new().fill(PANEL).corner_radius(10.0)
-        .stroke(Stroke::new(1.0, BORDER))
-        .inner_margin(egui::Margin::same(16)).show(ui, |ui| {
-            ui.label(RichText::new(tr("Refresh behavior"))
-                .size(13.0).strong().color(TEXT));
-            ui.add_space(8.0);
-
-            ui.checkbox(
-                &mut next.reduce_updates_unfocused,
-                tr("Reduce updates when the window is not focused"),
-            );
-            ui.label(RichText::new(tr(
-                "Reduces window redraws and Firefox monitoring while another app is focused."
-            )).size(10.0).color(MUTED));
-
-            // The controller only implements a system tray on Windows.
-            // Do not advertise a nonfunctional preference on Linux.
-            #[cfg(windows)]
-            {
-                ui.add_space(10.0);
-                ui.checkbox(
-                    &mut next.reduce_updates_in_tray,
-                    tr("Reduce updates when minimized to the system tray"),
-                );
-                ui.label(RichText::new(tr(
-                    "Reduces window redraws and Firefox monitoring while hidden in the system tray."
-                )).size(10.0).color(MUTED));
-            }
-
-            ui.add_space(10.0);
-            ui.separator();
-            ui.label(RichText::new(tr(
-                "PokéIdle, Twitch and automation run independently of these display and Firefox monitoring settings."
-            )).size(10.0).color(DIM));
-        });
-
-    if next != app.ui_options {
-        // Keep the active setting unchanged until the disk write succeeds.
-        app.save_ui_options(next);
-        ui.ctx().request_repaint();
-    }
-
-    if let Some((retry, error)) = app.workspace.options_failed_save.clone() {
-        ui.add_space(12.0);
-        egui::Frame::new().fill(PANEL).corner_radius(8.0)
-            .stroke(Stroke::new(1.0, BAD.linear_multiply(0.6)))
-            .inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-                ui.label(RichText::new(tr(
-                    "Could not save options. Previous settings are still active."
-                )).size(11.0).color(BAD));
-                ui.label(RichText::new(error).size(10.0).color(MUTED));
-                if ui.small_button(tr("Retry saving options")).clicked() {
-                    app.save_ui_options(retry);
-                    ui.ctx().request_repaint();
-                }
-            });
-    }
-
-    ui.add_space(12.0);
-    let slowed = app.controller_in_background(ui.ctx());
-    ui.label(RichText::new(format!("{}: {}",
-        tr("Current refresh mode"),
-        tr(if slowed { "Reduced background updates" } else { "Normal updates" })))
-        .size(11.0).color(if slowed { GOOD } else { MUTED }));
-
-    ui.add_space(6.0);
-    ui.horizontal_wrapped(|ui| {
-        if ui.small_button(tr("Restore default performance settings")).clicked() {
-            // Performance reset must not wipe per-account Hunt Atlas choices.
-            app.save_ui_options(default_performance_options(app.ui_options));
-        }
-        if ui.small_button(tr("Open performance diagnostics")).clicked() {
-            // Sampling is still strictly opt-in on the focused Diagnostics page.
-            app.workspace.panel_tab = PanelTab::Diagnostics;
-            ui.ctx().request_repaint();
-        }
-    });
-    ui.label(RichText::new(tr(
-        "Live measurements stop off-page; explicit recordings continue until stopped."
-    )).size(10.0).color(DIM));
-    ui.label(RichText::new(tr(
-        "Changes take effect after a successful save and are restored on the next launch."
-    )).size(11.0).color(DIM));
-}
-
-#[cfg(test)]
-mod options_tests {
-    use super::*;
-
-    #[test]
-    fn performance_reset_preserves_all_account_atlas_choices() {
-        let mut current = UiOptions::default();
-        current.reduce_updates_unfocused = false;
-        current.reduce_updates_in_tray = false;
-        current.atlas_aoe_enabled = [true, false, true, true];
-        let reset = default_performance_options(current);
-        assert!(reset.reduce_updates_unfocused);
-        assert!(reset.reduce_updates_in_tray);
-        assert_eq!(reset.atlas_aoe_enabled, [true, false, true, true]);
-    }
-}
-
 pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
     egui::Panel::left("sidebar")
         .resizable(false)
@@ -313,11 +180,9 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.open_logs();
             }
 
-            // The persistent recording indicator is a constant-time Option
-            // check; it does not create or query any diagnostics machinery.
+            // This does not query a sampler: the indicator is a cheap state check.
             let recording = app.recording.as_ref()
                 .is_some_and(|session| session.is_running());
-            // Do not allocate or format anything for ordinary users.
             let recording_label = recording.then(|| format!("● {} · REC", tr("Diagnostics")));
             let diagnostics_name = recording_label.as_deref().unwrap_or(tr("Diagnostics"));
             if sidebar_button(ui, diagnostics_name,
@@ -332,50 +197,6 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             // Global start/stop actions are in the header; avoid a duplicate
             // control set that crowds the persistent navigation.
             ui.add_space(18.0);
-            section_label(ui, tr("LANGUAGE"));
-
-            ui.horizontal(|ui| {
-                let en_selected = !pt_br();
-                let pt_selected = pt_br();
-
-                let en_button = egui::Button::new(
-                    RichText::new("EN").size(10.0).strong(),
-                )
-                .fill(if en_selected {
-                    ACCENT.linear_multiply(0.22)
-                } else {
-                    PANEL_ALT
-                })
-                .stroke(Stroke::new(
-                    1.0,
-                    if en_selected { ACCENT } else { BORDER },
-                ))
-                .corner_radius(7.0);
-
-                if ui.add_sized([78.0, 30.0], en_button).clicked() {
-                    PT_BR.store(false, Ordering::Relaxed);
-                }
-
-                let pt_button = egui::Button::new(
-                    RichText::new("PT-BR").size(10.0).strong(),
-                )
-                .fill(if pt_selected {
-                    ACCENT.linear_multiply(0.22)
-                } else {
-                    PANEL_ALT
-                })
-                .stroke(Stroke::new(
-                    1.0,
-                    if pt_selected { ACCENT } else { BORDER },
-                ))
-                .corner_radius(7.0);
-
-                if ui.add_sized([78.0, 30.0], pt_button).clicked() {
-                    PT_BR.store(true, Ordering::Relaxed);
-                }
-            });
-
-            ui.add_space(20.0);
 
             egui::Frame::new()
                 .fill(PANEL_ALT)
