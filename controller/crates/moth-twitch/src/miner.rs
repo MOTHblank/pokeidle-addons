@@ -17,6 +17,7 @@ type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 pub struct MinerControl {
     desired: Arc<Mutex<Vec<String>>>,
     expected_login: Arc<Mutex<Option<String>>>,
+    favorites: Arc<Mutex<Vec<String>>>,
     wake: SyncSender<()>,
 }
 
@@ -36,6 +37,20 @@ impl MinerControl {
         if changed {
             let _ = self.wake.try_send(());
         }
+    }
+
+    /// Favorites affect selection order, never the fixed two watch slots.
+    pub fn set_favorites(&self, channels: Vec<String>) {
+        let mut unique = Vec::new();
+        for raw in channels.into_iter().take(128) {
+            if let Some(login)=crate::model::normalize_login(&raw) {
+                if !unique.contains(&login) { unique.push(login); }
+            }
+        }
+        let changed=self.favorites.lock().map(|mut current|{
+            if *current==unique {false} else {*current=unique;true}
+        }).unwrap_or(false);
+        if changed {let _=self.wake.try_send(());}
     }
 
     pub fn set_expected_login(&self, login: Option<String>) {
@@ -70,6 +85,7 @@ impl Miner {
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let desired = Arc::new(Mutex::new(Vec::new()));
         let expected_login = Arc::new(Mutex::new(None));
+        let favorites = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let phase_wake: PhaseWake = Arc::new(Mutex::new(None));
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
@@ -78,6 +94,7 @@ impl Miner {
         let worker_events = Arc::clone(&events);
         let worker_desired = Arc::clone(&desired);
         let worker_expected_login = Arc::clone(&expected_login);
+        let worker_favorites = Arc::clone(&favorites);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
         thread::Builder::new()
@@ -90,6 +107,7 @@ impl Miner {
                     worker_events,
                     worker_desired,
                     worker_expected_login,
+                    worker_favorites,
                     worker_stop,
                     worker_phase_wake,
                     wake_rx,
@@ -100,7 +118,7 @@ impl Miner {
         Ok(Self {
             snapshot,
             events,
-            control: MinerControl { desired, expected_login, wake: wake_tx },
+            control: MinerControl { desired, expected_login, favorites, wake: wake_tx },
             stop,
             phase_wake,
         })
@@ -190,6 +208,7 @@ fn run(
     events: Arc<Mutex<VecDeque<MinerEvent>>>,
     desired: Arc<Mutex<Vec<String>>>,
     expected_login: Arc<Mutex<Option<String>>>,
+    favorites: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
     wake_rx: Receiver<()>,
@@ -264,6 +283,7 @@ fn run(
                     viewer,
                     &config,
                     &channels,
+                    &favorites.lock().map(|items|items.clone()).unwrap_or_default(),
                     &mut cache,
                     &snapshot,
                     &events,
@@ -293,6 +313,7 @@ fn poll_channels(
     viewer: &ViewerIdentity,
     config: &MinerConfig,
     channels: &[String],
+    favorites: &[String],
     cache: &mut HashMap<String, ChannelCache>,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
@@ -302,6 +323,7 @@ fn poll_channels(
     let mut first_error: Option<GqlError> = None;
     let mut auth_failed = false;
     let mut watch_slots = config.max_watched_channels.min(channels.len());
+    let _ = favorites;
 
     for login in channels {
         let channel = cache.entry(login.clone()).or_default();
