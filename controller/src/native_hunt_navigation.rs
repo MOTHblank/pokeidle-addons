@@ -203,14 +203,15 @@ impl HuntNavigator {
             Destination::Center => {}
         }
 
-        if !view.in_center && !self.give_up_sent &&
+        let switch_open = self.switch_open(view, now);
+        if !view.in_center && !switch_open && !self.give_up_sent &&
             self.started.is_some_and(|at|
                 now.saturating_duration_since(at) >= FORCE_GIVE_UP_AFTER) {
             self.give_up_sent = true;
             self.last_select = Some(now);
             return Some(GameCommand::GiveUp);
         }
-        if !self.switch_open(view, now) { return None; }
+        if !switch_open { return None; }
         if self.last_select.is_some_and(|sent|
             now.saturating_duration_since(sent) < SELECT_RETRY) {
             return None;
