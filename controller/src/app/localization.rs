@@ -526,6 +526,9 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Exports local app, account, and Kick stream preferences. Game server automation and credentials remain excluded." =>
             "Exporta opções locais, contas e preferências de streams da Kick. Automações do servidor e credenciais ficam de fora.",
         "Kick stream preferences" => "Preferências de streams da Kick",
+        "Channels" => "Canais",
+        "Maximum streams" => "Máximo de streams",
+        "Favorites" => "Favoritos",
         "Export only local app options and account labels/enabled flags. No credentials or server automation data." => "Exporta apenas opções locais e nomes/estado das contas. Sem credenciais ou automações do servidor.",
         "Export safe settings backup" => "Exportar backup seguro das configurações",
         "Settings backup saved" => "Backup de configurações salvo",
