@@ -178,7 +178,9 @@ impl TwitchGql {
             }
             Err(_) => DEFAULT_CLIENT_VERSION.to_owned(),
         };
-        let updated=self.client.get(TWITCH_URL).send().ok()
+        let updated=self.client.get(TWITCH_URL)
+            .header("Cookie",self.session_cookie())
+            .send().ok()
             .filter(|response|response.status().is_success())
             .and_then(|response|response.text().ok())
             .and_then(|page|extract_twilight_build_id(&page));
