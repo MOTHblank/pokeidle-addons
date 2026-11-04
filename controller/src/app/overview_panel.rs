@@ -559,19 +559,20 @@ pub(super) fn draw_overview_card(
                     if let (Some(native), Some(game)) =
                         (app.runtimes[index].game.native.as_ref(), sample.native.as_ref()) {
                         let twitch = native.twitch_snapshot();
-                        let online = game.phase == "Online" && twitch.phase == "Online";
-                        let summary = if online {
-                            format!("Twitch: {}/{} channels", twitch.joined, twitch.desired)
+                        let miner_online = twitch.phase == "Online";
+                        let summary = if miner_online {
+                            format!("Twitch miner: {}/{} · +{} pts",
+                                twitch.joined, twitch.desired, twitch.points_gained)
                         } else {
-                            format!("Twitch: {}", tr(&twitch.phase))
+                            format!("Twitch miner: {}", tr(&twitch.phase))
                         };
                         ui.add(egui::Label::new(
                             RichText::new(summary).size(10.0)
-                                .color(if online { GOOD } else { WARN })
+                                .color(if miner_online { GOOD } else { MUTED })
                         ).truncate()).on_hover_text(format!(
-                            "PokéIdle: {} · {} updates · {} battles · {} captures\nTwitch: {} · {}/{} channels",
+                            "PokéIdle: {} · {} updates · {} battles · {} captures\nTwitch miner: {} · {}/{} channels · {} bonuses claimed",
                             game.phase, game.frames, game.battle_kills, game.captures,
-                            twitch.phase, twitch.joined, twitch.desired
+                            twitch.phase, twitch.joined, twitch.desired, twitch.bonuses_claimed
                         ));
                     } else if running {
                         let stage = if app.runtimes[index].game.browser_only {
@@ -588,7 +589,7 @@ pub(super) fn draw_overview_card(
                         ).truncate()).on_hover_text(tr(if app.runtimes[index].game.browser_only {
                             "Firefox remains open until you stop this account."
                         } else {
-                            "Firefox closes after sign-in. PokéIdle and Twitch keep running in the app."
+                            "Firefox closes after sign-in. PokéIdle keeps running in the app; Twitch mining runs when signed in."
                         }));
                     }
                 });
