@@ -1344,8 +1344,7 @@ impl eframe::App for ControllerApp {
         let tray_hidden = false;
         let focused = ui.ctx().input(|input| input.viewport().focused);
         let diagnostics_active = should_sample(
-            self.workspace.panel_tab == PanelTab::Diagnostics,
-            !controller_is_background(tray_hidden, focused),
+            self.workspace.panel_tab == PanelTab::Diagnostics, tray_hidden, focused
         );
         if !diagnostics_active {
             // This frees the short history and CPU baseline immediately.
