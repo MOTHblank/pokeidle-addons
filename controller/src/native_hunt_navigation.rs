@@ -117,7 +117,7 @@ impl HuntNavigator {
         self.last_select = None;
     }
     pub fn boss_pending(&self) -> bool {
-        matches!(self.target, Some(Destination::Boss { .. }))
+        matches!(self.target.as_ref(), Some(Destination::Boss { .. }))
     }
     pub fn confirm_boss(&mut self, key: &str) {
         if matches!(self.target.as_ref(),
