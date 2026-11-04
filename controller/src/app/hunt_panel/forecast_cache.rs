@@ -10,7 +10,7 @@ pub(in crate::app) struct EstimateCache {
     pub(super) active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     pub(super) active_species_id: Option<u64>,
     pub(super) active_max_hp: Option<u64>,
-    pub(super) bonus_signature: [u64;12],
+    pub(super) bonus_signature: [u64;13],
     pub(super) geo_revisions:Option<Arc<std::collections::BTreeMap<String,u64>>>,
     pub(super) geometry_dirty:std::collections::BTreeSet<String>,
     pub(super) full_required:bool,
@@ -48,7 +48,7 @@ impl EstimateCache {
             b.shop_trainer_xp_multiplier.to_bits(),
             b.shop_pokemon_xp_multiplier.to_bits(),
             b.delayed_xp_multiplier.to_bits(),b.extra_loot_pct.to_bits(),
-            b.guild_known as u64,
+            b.guild_known as u64,b.sacrifice_xp_active as u64,
         ];
         let active_species_id=view.active_pokemon.as_ref().and_then(|p|p.species_id);
         let active_max_hp=view.active_pokemon.as_ref().and_then(|p|p.max_hp);
