@@ -206,6 +206,13 @@ pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
 }
 
 const MAX_TWITCH_TOKEN_BYTES: usize = 2048;
+static TWITCH_WRITE:[std::sync::Mutex<()>;4]=
+    [const {std::sync::Mutex::new(())};4];
+
+fn twitch_write(profile:GameProfile)->&'static std::sync::Mutex<()> {
+    &TWITCH_WRITE[profile.index()]
+}
+
 fn check_twitch_token(token: &str) -> Result<&str, String> {
     let token = token.trim();
     if token.is_empty() || token.len() > MAX_TWITCH_TOKEN_BYTES ||
@@ -215,7 +222,10 @@ fn check_twitch_token(token: &str) -> Result<&str, String> {
     }
     Ok(token)
 }
+
 pub fn load_twitch_token(profile: GameProfile) -> Result<Option<String>, String> {
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
     platform::load_twitch(profile)?.map(|bytes| {
         if bytes.len() > MAX_TWITCH_TOKEN_BYTES {
             return Err("Stored Twitch token is oversized".into());
@@ -225,10 +235,35 @@ pub fn load_twitch_token(profile: GameProfile) -> Result<Option<String>, String>
         check_twitch_token(&token).map(str::to_owned)
     }).transpose()
 }
-pub fn save_twitch_token(profile: GameProfile, token: &str) -> Result<(), String> {
-    platform::save_twitch(profile, check_twitch_token(token)?.as_bytes())
+
+/// Commit a Twitch token only while the caller's account-local credential
+/// generation remains current. All saves/clears share the same per-profile
+/// lock so an obsolete worker cannot overwrite a later Refresh/Forget.
+pub fn save_twitch_token_checked(
+    profile:GameProfile,
+    token:&str,
+    is_current:impl Fn()->bool,
+)->Result<bool,String> {
+    let token=check_twitch_token(token)?.to_owned();
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
+    if !is_current(){return Ok(false)}
+    platform::save_twitch(profile,token.as_bytes())?;
+    if !is_current() {
+        platform::clear_twitch(profile).map_err(|error|
+            format!("Canceled Twitch credential rollback failed: {error}"))?;
+        return Ok(false);
+    }
+    Ok(true)
 }
+
+pub fn save_twitch_token(profile: GameProfile, token: &str) -> Result<(), String> {
+    save_twitch_token_checked(profile,token,||true).map(|_|())
+}
+
 pub fn clear_twitch_token(profile: GameProfile) -> Result<(), String> {
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
     platform::clear_twitch(profile)
 }
 
