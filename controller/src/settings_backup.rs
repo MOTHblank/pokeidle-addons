@@ -102,11 +102,20 @@ mod tests {
 
     #[test]
     fn backup_contains_only_allowlisted_settings_and_account_names() {
-        let accounts = std::array::from_fn(|i| AccountConfig::default_for(
+        let mut accounts = std::array::from_fn(|i| AccountConfig::default_for(
             crate::config::GameProfile::from_index(i).unwrap()));
+        accounts[0].auto_pvp = Some(true);
+        accounts[1].auto_pvp = Some(false);
         let backup = SettingsBackup::from_active(AppPreferences::default(), UiOptions::default(), &accounts);
         let value = backup.to_value();
-        assert_eq!(SettingsBackup::from_value(&value).unwrap().accounts[0].name, accounts[0].name);
+        let restored = SettingsBackup::from_value(&value).unwrap();
+        assert_eq!(restored.accounts[0].name, accounts[0].name);
+        assert_eq!(restored.accounts[0].auto_pvp, Some(true));
+        assert_eq!(restored.accounts[1].auto_pvp, Some(false));
+        assert_eq!(restored.accounts[2].auto_pvp, None);
+        let mut legacy = value.clone();
+        legacy["accounts"][0].as_object_mut().unwrap().remove("autoPvp");
+        assert_eq!(SettingsBackup::from_value(&legacy).unwrap().accounts[0].auto_pvp, None);
         let raw = value.to_string();
         assert!(!raw.contains("token"));
         assert!(!raw.contains("password"));
