@@ -277,7 +277,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(format!(
                             "#{} · {} · {} · {} {} / {}",
-                            t.id,if t.kind=="pokemon"{"Pokémon"}else{
+                            t.id,if t.kind=="pokemon"{"Pokémon".to_owned()}else{
                                 item_name(item_catalog.as_deref(),t.item_id)
                             },
                             if t.currency=="orb"{tr("Gems")}else{tr("Gold")},
