@@ -301,8 +301,9 @@ impl NativeSession {
         let initial = open_session(&credentials)?;
 
         // Twitch authentication has its own protected vault, like Kick.
-        // Migrate an older bootstrap token once, then prefer the current
-        // Firefox cookie when no dedicated credential exists yet.
+        // Existing installations are migrated without a browser launch:
+        // prefer the dedicated vault, then the current Firefox cookie DB,
+        // and only then an older bootstrap token captured before this split.
         let mut twitch_token = crate::native_auth::load_twitch_token(profile)
             .unwrap_or_else(|error| {
                 crate::logging::warn(&format!(
@@ -310,6 +311,15 @@ impl NativeSession {
                 ));
                 None
             });
+        if twitch_token.is_none() {
+            match crate::native_twitch_login::import_existing(profile) {
+                Ok(found) => twitch_token = found,
+                Err(error) => crate::logging::warn(&format!(
+                    "{} automatic Twitch login import unavailable: {error}",
+                    profile.name()
+                )),
+            }
+        }
         if twitch_token.is_none() {
             let legacy = bootstrap.get("twitch")
                 .and_then(|value| value.get("token"))
@@ -327,14 +337,11 @@ impl NativeSession {
                 twitch_token = Some(token);
             }
         }
-        if twitch_token.is_none() {
-            match crate::native_twitch_login::import_existing(profile) {
-                Ok(found) => twitch_token = found,
-                Err(error) => crate::logging::warn(&format!(
-                    "{} automatic Twitch login import unavailable: {error}",
-                    profile.name()
-                )),
-            }
+        if let Err(error)=crate::native_auth::scrub_legacy_twitch_from_game_cache(profile) {
+            crate::logging::warn(&format!(
+                "{} could not scrub legacy Twitch data from game credentials: {error}",
+                profile.name()
+            ));
         }
 
         let twitch_miner = TwitchMinerSession::start_optional(twitch_token.as_deref());
