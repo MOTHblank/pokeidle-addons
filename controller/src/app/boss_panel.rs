@@ -351,7 +351,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .color(TEXT),
             );
             ui.label(
-                RichText::new(tr("The game server repeats the chosen boss, heals and spends its entry tokens. Moth travels to the Pokémon Center and restores your original hunt when the run ends. It never uses Give Up automatically."))
+                RichText::new(tr("Boss entry waits for the same safe switch opening used by Hunt Atlas, then changes directly from the current hunt. Server repetition heals and spends entry tokens; Moth restores your original hunt when the run ends."))
                     .size(10.0)
                     .color(MUTED),
             );
