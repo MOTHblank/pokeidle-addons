@@ -51,14 +51,10 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let native_online = app.runtimes.iter().map(|runtime| &runtime.game).filter(|game|
                     game.native.as_ref().is_some_and(|native| native.snapshot().phase == "Online")
                 ).count();
-                let native_twitch_online = app.runtimes.iter().map(|runtime| &runtime.game).filter(|game|
-                    game.native.as_ref().is_some_and(|native| native.twitch_snapshot().phase == "Online")
-                ).count();
                 let firefox_state = format!("{running} {} · {headless} {}", tr("running"), tr("Hidden Firefox"));
                 let bidi_state = format!("{bidi_connected}/{running} {}", tr("Connected"));
                 runtime_chip(ui, tr("Firefox"), &firefox_state, if running > 0 { WARN } else { GOOD });
                 runtime_chip(ui, tr("PokéIdle"), &format!("{native_online} online"), if native_online > 0 { GOOD } else { MUTED });
-                runtime_chip(ui, tr("Twitch"), &format!("{native_twitch_online} online"), if native_twitch_online > 0 { GOOD } else { MUTED });
                 runtime_chip(ui, tr("Firefox connection"), &bidi_state, if running == 0 { MUTED } else if bidi_connected == running { GOOD } else { WARN });
                 let enabled_profiles = app.accounts.iter().filter(|account| account.enabled).count();
                 runtime_chip(
@@ -70,7 +66,6 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 runtime_chip(ui, tr("Game heartbeat"), &format!("{} s", MONITOR_HEARTBEAT_INTERVAL.as_secs()), MUTED);
                 runtime_chip(ui, tr("Game data"), &format!("{} min", MONITOR_POLL_INTERVAL.as_secs() / 60), MUTED);
                 runtime_chip(ui, tr("Tab inventory"), &format!("{} min", MONITOR_TAB_INTERVAL.as_secs() / 60), MUTED);
-                runtime_chip(ui, tr("Twitch"), tr("Connected in app"), MUTED);
                 runtime_chip(ui, tr("UI repaint"), &format!("{} s", UI_REPAINT_INTERVAL.as_secs()), MUTED);
             });
         });
