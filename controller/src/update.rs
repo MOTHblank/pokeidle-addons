@@ -573,6 +573,7 @@ pub fn request_restart_and_install(status: &SharedUpdateStatus) -> Result<String
             let mut setup = Command::new(&staged);
             setup.creation_flags(0x08000000);
             setup.args([
+                "/SP-",
                 "/VERYSILENT",
                 "/SUPPRESSMSGBOXES",
                 "/NORESTART",
