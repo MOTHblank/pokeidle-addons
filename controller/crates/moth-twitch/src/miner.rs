@@ -180,6 +180,7 @@ struct ChannelCache {
     balance: Option<u64>,
     last_watch: Option<Instant>,
     last_watch_attempt: Option<Instant>,
+    watch_failures: u8,
     last_points_attempt: Option<Instant>,
     last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
@@ -190,6 +191,74 @@ struct ChannelCache {
     streak_confirmed: Option<bool>,
     streak_length: Option<u32>,
     watch_attempts: u32,
+}
+
+/// Two persistent watch slots. A slot keeps its broadcast identity so an
+/// offline/restarted stream never inherits the prior stream's streak window.
+struct WatchSlot {
+    login: String,
+    broadcast_id: String,
+    entered: Instant,
+}
+
+fn streak_pending(channel:&ChannelCache)->bool {
+    channel.streak_confirmed!=Some(true) && channel.watch_attempts<20
+}
+
+/// Hold two candidate broadcasts long enough for Twitch to issue a streak
+/// milestone (up to 20 minutes), then rotate. Do not fill temporary gaps
+/// between two telemetry POSTs with extra streams: two slots means two streams.
+fn refresh_watch_slots(
+    slots:&mut Vec<WatchSlot>, live:&[String],
+    cache:&mut HashMap<String,ChannelCache>,favorites:&[String],
+    now:Instant,
+) {
+    for slot in slots.iter() {
+        if now.saturating_duration_since(slot.entered)>=Duration::from_secs(20*60) {
+            if let Some(channel)=cache.get_mut(&slot.login) {
+                // A timed-out attempt does not imply the streak was awarded.
+                if channel.streak_confirmed!=Some(true) {
+                    channel.watch_attempts=20;
+                }
+            }
+        }
+    }
+    let waiting_streak=live.iter().any(|name|
+        !slots.iter().any(|slot|&slot.login==name)
+        && cache.get(name).is_some_and(streak_pending));
+    slots.retain(|slot| {
+        let Some(channel)=cache.get(&slot.login) else {return false};
+        if !live.binary_search(&slot.login).is_ok()
+            || channel.broadcast_id.as_deref()!=Some(slot.broadcast_id.as_str()) {
+            return false;
+        }
+        let backed_off=channel.watch_failures>=3
+            && channel.last_watch_attempt.is_some_and(|at|
+                now.saturating_duration_since(at)<Duration::from_secs(300));
+        if backed_off {return false;}
+        let elapsed=now.saturating_duration_since(slot.entered);
+        if streak_pending(channel) && elapsed<Duration::from_secs(20*60) {
+            return true;
+        }
+        !waiting_streak && elapsed<Duration::from_secs(600)
+    });
+    let mut candidates=live.iter().filter(|name|cache.get(*name)
+        .is_some_and(|channel| {
+            channel.broadcast_id.is_some() &&
+                !(channel.watch_failures>=3 &&
+                    channel.last_watch_attempt.is_some_and(|at|
+                        now.saturating_duration_since(at)<Duration::from_secs(300)))
+        })).collect::<Vec<_>>();
+    candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
+    for name in candidates {
+        if slots.len()>=WATCH_SLOTS {break;}
+        if slots.iter().any(|slot|slot.login==*name) {continue;}
+        let Some(broadcast_id)=cache.get(name).and_then(|c|c.broadcast_id.clone())
+            else {continue};
+        slots.push(WatchSlot {
+            login:name.clone(),broadcast_id,entered:now
+        });
+    }
 }
 
 fn notify(wake: &PhaseWake) {
@@ -246,6 +315,7 @@ fn run(
     };
     let mut identity: Option<ViewerIdentity> = None;
     let mut cache: HashMap<String, ChannelCache> = HashMap::new();
+    let mut watch_slots: Vec<WatchSlot> = Vec::new();
     let interval = config.poll_interval.max(Duration::from_secs(10));
 
     while !stop.load(Ordering::Acquire) {
@@ -310,6 +380,8 @@ fn run(
                     &live.lock().map(|items|items.clone()).unwrap_or_default(),
                     &favorites.lock().map(|items|items.clone()).unwrap_or_default(),
                     &mut cache,
+                    &mut watch_slots,
+                    &stop,
                     &snapshot,
                     &events,
                     &phase_wake,
@@ -341,6 +413,8 @@ fn poll_channels(
     live: &[String],
     favorites: &[String],
     cache: &mut HashMap<String, ChannelCache>,
+    watch_slots: &mut Vec<WatchSlot>,
+    stop: &AtomicBool,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
     phase_wake: &PhaseWake,
@@ -359,6 +433,7 @@ fn poll_channels(
     });
     let mut checked_this_tick=0usize;
     for login in ordered {
+        if stop.load(Ordering::Acquire) {return false;}
         let channel = cache.entry(login.clone()).or_default();
         let interval=if live.binary_search(login).is_ok() {
             Duration::from_secs(45)
@@ -459,6 +534,7 @@ fn poll_channels(
     let mut metadata_checks=0usize;
     let mut streak_checks=0usize;
     for login in live {
+        if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(login) else {continue};
         let Some(id)=channel.channel_id.as_deref() else {continue};
         if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
@@ -516,45 +592,41 @@ fn poll_channels(
         update_streamer(snapshot,login,channel,None);
     }
 
-    // Streaks have priority, then user favorites, then least-recently-watched
-    // channels. Rotate between all pending streams rather than pinning the
-    // first two alphabetical names indefinitely. Each broadcast gets a
-    // finite initial streak window (~20 watch acknowledgements).
-    let mut candidates=live.iter().filter(|login|cache.get(*login)
-        .is_some_and(|channel| channel.broadcast_id.is_some()))
-        .collect::<Vec<_>>();
-    candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
-    let mut watch_slots=WATCH_SLOTS;
-    for login in candidates {
-        if watch_slots==0 {break;}
-        let Some(channel)=cache.get_mut(login) else {continue};
+    // Watch selection persists across polling iterations. Do not create
+    // fresh temporary watch sessions while selected streams are between
+    // their minute-watched requests.
+    refresh_watch_slots(watch_slots,live,cache,favorites,Instant::now());
+    for slot in watch_slots.iter() {
+        if stop.load(Ordering::Acquire) {return false;}
+        let Some(channel)=cache.get_mut(&slot.login) else {continue};
         if channel.last_watch_attempt.is_some_and(|at|
             at.elapsed()<Duration::from_secs(55)) {continue;}
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
-        let Some(broadcast_id)=channel.broadcast_id.as_deref() else {continue};
-        watch_slots-=1;
         channel.last_watch_attempt=Some(Instant::now());
         match watch.send_minute_watched(
-            login,channel_id,broadcast_id,&viewer.user_id
+            &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id
         ) {
             Ok(())=>{
                 channel.last_watch=Some(Instant::now());
+                channel.watch_failures=0;
                 channel.watch_attempts=channel.watch_attempts.saturating_add(1);
                 if let Ok(mut current)=snapshot.lock(){
                     current.watch_signals=current.watch_signals.saturating_add(1);
                 }
             }
             Err(error)=>{
-                push_event(events,MinerEvent::Warning(format!("{login}: {error}")));
-                // A failed POST is not an acknowledged watch event.
+                channel.watch_failures=channel.watch_failures.saturating_add(1);
+                push_event(events,MinerEvent::Warning(format!("{}: {error}",slot.login)));
             }
         }
-        update_streamer(snapshot,login,channel,None);
+        update_streamer(snapshot,&slot.login,channel,None);
     }
     if let Ok(mut current) = snapshot.lock() {
         current.active = active;
         for streamer in &mut current.streamers {
             streamer.live = live.binary_search(&streamer.login).is_ok();
+            streamer.watching = watch_slots.iter()
+                .any(|slot|slot.login==streamer.login);
         }
         current.streamers.sort_by(|left, right| left.login.cmp(&right.login));
     }
