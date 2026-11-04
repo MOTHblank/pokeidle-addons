@@ -239,6 +239,12 @@ pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
     Credentials::parse(bootstrap).map(|_| ())
 }
 
+/// Browser authentication is necessary only when PokéIdle explicitly rejects
+/// the saved authorization. Transport and welcome failures do not prove expiry.
+pub fn authentication_rejected(error: &str) -> bool {
+    error.starts_with("AUTH_REQUIRED:")
+}
+
 type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
 // Connection-state transitions notify the controller without a polling loop
@@ -862,7 +868,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     forecast_rx:mpsc::Receiver<HistoryForecast>,
     background_forecast_reference:Arc<Mutex<Option<(Arc<AtlasReference>,bool)>>>,
     background_forecast_tx:mpsc::SyncSender<HistoryForecast>) {
-    let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
     let mut pvp = PvpAutomation::default();
@@ -1521,17 +1526,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 }
             }
             Err(error) => {
-                let expired = error.starts_with("AUTH_REQUIRED:");
-                if error.contains("before welcome") ||
-                   error.contains("did not receive welcome") {
-                    rejected_welcomes += 1;
-                } else {
-                    rejected_welcomes = 0;
-                }
-                // Consecutive pre-welcome rejections after a valid handshake
-                // may indicate that the user's Firefox login must be renewed.
-                // Ordinary network failures NEVER launch Firefox.
-                let needs_login = expired || rejected_welcomes >= 5;
+                // Only an explicit authentication rejection proves the saved
+                // login is invalid. Missing welcomes, disconnects and network
+                // failures can happen while the same credentials remain valid.
+                let needs_login = authentication_rejected(&error);
                 update(&snapshot, |s| {
                     s.phase = if needs_login { "NeedsLogin" } else { "Reconnecting" }.into();
                     s.error = Some(error);
@@ -1565,6 +1563,20 @@ mod tests {
         notify_phase_change(&wake);
         assert_eq!(calls.load(Ordering::Relaxed),1);
     }
+    #[test]
+    fn only_explicit_auth_rejection_requires_browser_refresh() {
+        assert!(authentication_rejected(
+            "AUTH_REQUIRED: PokéIdle refused native game authentication"));
+        for error in [
+            "Could not connect to PokéIdle. Check your internet connection.",
+            "Secure connection to PokéIdle failed: timed out",
+            "PokéIdle closed the connection during sign-in",
+            "PokéIdle did not confirm the connection",
+        ] {
+            assert!(!authentication_rejected(error), "{error}");
+        }
+    }
+
     #[test]
     fn rejects_non_game_and_unencrypted_endpoints() {
         assert!(websocket_authority("ws://pokeidle.io/ws").is_err());
