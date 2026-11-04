@@ -126,6 +126,8 @@ mod game_profile_isolation_tests {
 pub struct AccountConfig {
     pub name: String,
     pub enabled: bool,
+    /// None inherits the game's existing VIP preference, or defaults off for non-VIP.
+    pub auto_pvp: Option<bool>,
 }
 
 impl AccountConfig {
@@ -133,6 +135,7 @@ impl AccountConfig {
         Self {
             name: profile.label().to_string(),
             enabled: profile.default_enabled(),
+            auto_pvp: None,
         }
     }
 }
@@ -169,6 +172,7 @@ impl Config {
                 if let Some(enabled) = entry.get("enabled").and_then(Value::as_bool) {
                     accounts[index].enabled = enabled;
                 }
+                accounts[index].auto_pvp = entry.get("autoPvp").and_then(Value::as_bool);
             }
         }
         Ok(accounts)
@@ -264,7 +268,8 @@ impl Config {
             "accounts": accounts.iter().enumerate().map(|(index, account)| json!({
                 "slot": index,
                 "name": account.name,
-                "enabled": account.enabled
+                "enabled": account.enabled,
+                "autoPvp": account.auto_pvp
             })).collect::<Vec<_>>()
         });
         let raw = serde_json::to_string_pretty(&value)
