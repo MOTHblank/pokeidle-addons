@@ -1,8 +1,9 @@
 //! Optional, on-demand CPU inspection of controller threads.
 //!
 //! Invoked only from the focused Diagnostics page, when its detailed thread
-//! inspection checkbox is enabled and the 15-second interval is due. There is
-//! no background thread, persistent OS handle, or global sampling counter.
+//! inspection checkbox is enabled and the interval is due. Each expensive OS
+//! enumeration runs on a short-lived named worker; there is no persistent poller
+//! or retained OS handle when diagnostics is inactive.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
