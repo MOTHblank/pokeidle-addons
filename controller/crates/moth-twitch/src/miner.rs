@@ -515,20 +515,7 @@ fn poll_channels(
     let mut candidates=live.iter().filter(|login|cache.get(*login)
         .is_some_and(|channel| channel.broadcast_id.is_some()))
         .collect::<Vec<_>>();
-    candidates.sort_by(|a,b|{
-        let left=&cache[*a];
-        let right=&cache[*b];
-        let priority=|channel:&ChannelCache, login:&String| {
-            let pending=channel.streak_confirmed!=Some(true)
-                && channel.watch_attempts<20;
-            let favorite=favorites.iter().position(|name|name==login);
-            (if pending {0u8}else{1u8},favorite.is_none(),
-                favorite.unwrap_or(usize::MAX))
-        };
-        priority(left,a).cmp(&priority(right,b))
-            .then_with(||left.last_watch.cmp(&right.last_watch))
-            .then_with(||a.cmp(b))
-    });
+    candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
     let mut watch_slots=config.max_watched_channels.min(2);
     for login in candidates {
         if watch_slots==0 {break;}
@@ -586,6 +573,62 @@ fn poll_channels(
         None => set_phase(snapshot, phase_wake, MinerPhase::Online, None),
     }
     auth_failed
+}
+
+/// Fair streak coverage: channels that still need this broadcast's
+/// milestone are ordered by oldest watch attempt, before favorites. After
+/// their initial streak window, favorites determine ordinary farming order.
+fn watch_priority(
+    a:&String,b:&String,cache:&HashMap<String,ChannelCache>,favorites:&[String]
+)->std::cmp::Ordering {
+    let left=&cache[a];
+    let right=&cache[b];
+    let pending=|channel:&ChannelCache|
+        channel.streak_confirmed!=Some(true) && channel.watch_attempts<20;
+    let l_pending=pending(left);
+    let r_pending=pending(right);
+    let favorite=|login:&String|
+        favorites.iter().position(|item|item==login).unwrap_or(usize::MAX);
+    r_pending.cmp(&l_pending)
+        .then_with(|| if l_pending && r_pending {
+            left.last_watch_attempt.cmp(&right.last_watch_attempt)
+        } else {
+            favorite(a).cmp(&favorite(b))
+        })
+        .then_with(||left.last_watch_attempt.cmp(&right.last_watch_attempt))
+        .then_with(||favorite(a).cmp(&favorite(b)))
+        .then_with(||a.cmp(b))
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+    #[test]
+    fn pending_streaks_are_fair_before_favorites() {
+        let now=Instant::now();
+        let mut cache=HashMap::new();
+        cache.insert("favorite".into(),ChannelCache {
+            last_watch_attempt:Some(now), ..Default::default()
+        });
+        cache.insert("unwatched".into(),ChannelCache::default());
+        let favorites=vec!["favorite".to_owned()];
+        assert_eq!(watch_priority(&"unwatched".into(),&"favorite".into(),
+            &cache,&favorites),std::cmp::Ordering::Less);
+        cache.get_mut("unwatched").unwrap().streak_confirmed=Some(true);
+        assert_eq!(watch_priority(&"favorite".into(),&"unwatched".into(),
+            &cache,&favorites),std::cmp::Ordering::Less);
+    }
+    #[test]
+    fn completed_streaks_follow_favorite_order() {
+        let mut cache=HashMap::new();
+        for name in ["star","other"] {
+            cache.insert(name.to_owned(),ChannelCache {
+                streak_confirmed:Some(true), ..Default::default()
+            });
+        }
+        assert_eq!(watch_priority(&"star".into(),&"other".into(),&cache,
+            &["star".into()]),std::cmp::Ordering::Less);
+    }
 }
 
 fn update_streamer(
