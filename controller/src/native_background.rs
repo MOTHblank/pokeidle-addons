@@ -16,9 +16,10 @@ use crate::native_atlas::{self, Reference as AtlasReference};
 use crate::config::GameProfile;
 use crate::native_restock::{Restock, RestockStatus};
 use crate::native_automation::{AutomationWriter, AutomationStatus};
+use crate::native_pvp::{PvpAutomation, PvpAction, PvpStatus};
 use crate::native_market::{MarketBuyer, MarketRules, MarketStatus};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -109,6 +110,7 @@ pub struct NativeSnapshot {
     pub native_capture_status: GameplayStatus,
     pub native_restock: RestockStatus,
     pub native_automation: AutomationStatus,
+    pub native_pvp: PvpStatus,
     pub native_market: MarketStatus,
     pub pending_pokemon_sale: Option<u64>,
     pub confirmed_pokemon_sales: u64,
@@ -134,6 +136,7 @@ impl Default for NativeSnapshot {
             native_capture_status: GameplayStatus::default(),
             native_restock: RestockStatus::default(),
             native_automation: AutomationStatus::default(),
+            native_pvp: PvpStatus::default(),
             native_market: MarketStatus::default(),
             pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
             pokemon_sale_error: None,
@@ -270,6 +273,7 @@ pub struct NativeSession {
     command_tx: mpsc::SyncSender<GameCommand>,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
+    pvp_preference: Arc<AtomicU8>,
     capture_config: Arc<Mutex<CatchSettings>>,
     market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
@@ -326,6 +330,13 @@ impl NativeSession {
         let worker_restock_enabled = Arc::clone(&restock_enabled);
         let auto_catch = Arc::new(AtomicBool::new(gameplay.status.auto_catch));
         let worker_auto_catch = Arc::clone(&auto_catch);
+        // Inherit the VIP setting by default; explicit on/off persists per account.
+        let saved_pvp = crate::config::Config::load_accounts().ok()
+            .and_then(|accounts| accounts[profile.index()].auto_pvp);
+        let pvp_preference = Arc::new(AtomicU8::new(match saved_pvp {
+            None => 0, Some(false) => 1, Some(true) => 2,
+        }));
+        let worker_pvp_preference = Arc::clone(&pvp_preference);
         let (command_tx, command_rx) = mpsc::sync_channel(64);
         let (forecast_tx,forecast_rx)=mpsc::sync_channel(8);
         let background_forecast_reference=Arc::new(Mutex::new(None));
@@ -345,7 +356,7 @@ impl NativeSession {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
                         Arc::clone(&worker_stop), desired, initial,
                         gameplay, restock, command_rx, worker_auto_catch,
-                        worker_restock_enabled, worker_capture_config,
+                        worker_restock_enabled, worker_pvp_preference, worker_capture_config,
                         worker_market_rules, worker_rules_revision, worker_session_reset,
                         Arc::clone(&worker_phase_wake), worker_kick_roster_publisher,
                         hunt_intel, worker_hunts, boss_manager, worker_boss,
@@ -365,9 +376,15 @@ impl NativeSession {
         track_game_worker(worker);
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
-            capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
+            pvp_preference, capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
             background_forecast_reference, phase_wake, kick_roster_publisher
         })
+    }
+    /// Changes take effect on the socket worker even when egui is minimized.
+    pub fn set_auto_pvp(&self, preference: Option<bool>) {
+        self.pvp_preference.store(match preference {
+            None => 0, Some(false) => 1, Some(true) => 2,
+        }, Ordering::Release);
     }
     pub fn set_market_rules(&self, rules: MarketRules) -> Result<(), String> {
         rules.save(self.profile)?;
@@ -753,6 +770,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
     restock_enabled: Arc<AtomicBool>,
+    pvp_preference: Arc<AtomicU8>,
     capture_config: Arc<Mutex<CatchSettings>>,
     market_rules: Arc<Mutex<Arc<MarketRules>>>,
     market_rules_revision: Arc<AtomicU64>,
@@ -770,6 +788,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
+    let mut pvp = PvpAutomation::default();
     let mut market = MarketBuyer::new(profile);
     let mut pending_sale: Option<(u64, Instant)> = None;
     let mut next_background_forecast=Instant::now()+BACKGROUND_FORECAST_INTERVAL;
@@ -798,6 +817,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     restock.merge_item_metadata(catalog);
                 }
                 hunt_intel.ingest_value(&frame, received_at);
+                pvp.on_frame(&frame, received_at);
                 boss_manager.ingest(&frame);
                 let mut navigator = HuntNavigator::default();
                 navigator.observe(&frame, &hunt_intel.view, received_at);
@@ -806,6 +826,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 history_recorder.ingest_value(&frame,hunt_intel.view.hunt_slug.as_deref());
                 if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
                 let mut last_hunt_publish = Instant::now();
+                let mut last_pvp_tick = Instant::now() - Duration::from_secs(1);
                 let mut last_status_publish = Instant::now();
                 let mut last_snatch_status_publish = Instant::now() - Duration::from_secs(5);
                 let mut last_config = capture_config.lock().map(|v|v.clone())
@@ -1052,6 +1073,35 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             .then_some(last_config.revive_id),
                         hunt_intel.view.automation.as_ref(),
                     );
+                    // Only queue management; neither matchmaking path touches hunts.
+                    if last_pvp_tick.elapsed() >= Duration::from_secs(1) {
+                        let pref = match pvp_preference.load(Ordering::Acquire) {
+                            1 => Some(false), 2 => Some(true), _ => None,
+                        };
+                        let vip = hunt_intel.view.bonuses.vip_active;
+                        let vip_auto = hunt_intel.view.automation.as_ref()
+                            .and_then(|a| a.get("pvpAutoFila")).and_then(Value::as_bool);
+                        if let Some(action) = pvp.next(pref, vip, vip_auto,
+                            hunt_intel.view.trainer_level, Instant::now()) {
+                            match action {
+                                PvpAction::SetVipAuto(wanted) => {
+                                    if let Err(error) = automation_writer.queue(
+                                        "pvpAutoFila".into(), Value::Bool(wanted)) {
+                                        crate::logging::warn(&format!(
+                                            "Could not update VIP Auto PvP preference: {error}"));
+                                    }
+                                }
+                                other => if let Some(wire) = other.wire() {
+                                    if socket.send(Message::Text(wire.to_string().into())).is_err() {
+                                        pvp.send_failed(other);
+                                        send_failed = true;
+                                    }
+                                },
+                            }
+                        }
+                        last_pvp_tick = Instant::now();
+                    }
+                    if send_failed { break; }
                     if let Some(fields) = automation_writer.next(
                         hunt_intel.view.automation.as_ref(),Instant::now()) {
                         if socket.send(Message::Text(
@@ -1243,6 +1293,13 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         market.maybe_report_latency(&market_cfg);
                         update(&snapshot, |s| {
                             s.native_automation = automation_writer.status.clone();
+                            let pref = match pvp_preference.load(Ordering::Acquire) {
+                                1 => Some(false), 2 => Some(true), _ => None,
+                            };
+                            let vip_auto = hunt_intel.view.automation.as_ref()
+                                .and_then(|a| a.get("pvpAutoFila")).and_then(Value::as_bool);
+                            s.native_pvp = pvp.status(pref, hunt_intel.view.bonuses.vip_active,
+                                vip_auto, Instant::now());
                             s.native_auto_catch = gameplay.status.auto_catch;
                             s.native_capture_queue = gameplay.status.queue;
                             s.native_throws = gameplay.status.throws;
@@ -1280,6 +1337,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     }
                                 }
                                 hunt_intel.ingest_value(&frame, received_at);
+                                pvp.on_frame(&frame, received_at);
                                 boss_manager.ingest(&frame);
                                 if frame.get("t").and_then(Value::as_str) == Some("welcome") ||
                                     frame.get("estado").and_then(|s| s.get("boss")).is_some() ||
@@ -1361,6 +1419,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     gameplay.on_disconnect();
                     restock.publish_status();
                     automation_writer.on_disconnect();
+                    pvp.on_reconnect();
                     pending_sale=None;
                     hunt_intel.on_disconnect();
                     boss_manager.on_disconnect(&navigator, &hunt_intel.view);
@@ -1370,6 +1429,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         s.phase = "Reconnecting".into();
                         s.native_restock = restock.status.clone();
                         s.native_automation = automation_writer.status.clone();
+                        s.native_pvp = PvpStatus::default();
                         s.native_market = market.status.clone();
                         s.native_auto_catch = gameplay.status.auto_catch;
                         s.native_capture_queue = gameplay.status.queue;
