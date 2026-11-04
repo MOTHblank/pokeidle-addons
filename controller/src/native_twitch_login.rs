@@ -328,7 +328,7 @@ pub fn start_fresh(profile: GameProfile) -> Result<(), String> {
 }
 
 fn start_mode(profile: GameProfile, fresh: bool) -> Result<(), String> {
-    let cancelled = {
+    let (cancelled,revision) = {
         let mut jobs = jobs().lock()
             .map_err(|_| "Twitch login state unavailable".to_owned())?;
         let job = &mut jobs[profile.index()];
@@ -342,7 +342,6 @@ fn start_mode(profile: GameProfile, fresh: bool) -> Result<(), String> {
         job.completed_token = None;
         (cancelled,revision)
     };
-    let (cancelled,revision)=cancelled;
     let spawned = thread::Builder::new()
         .name(format!("moth-twitch-login-{}", profile.name()))
         .spawn(move || {
