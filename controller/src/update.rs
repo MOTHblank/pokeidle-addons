@@ -103,7 +103,7 @@ fn fetch_latest_release() -> Result<ReleaseInfo, String> {
     let response: Value = client
         .get(RELEASE_API_URL)
         .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
+        .and_then(|response| response.error_for_status())
         .map_err(|error| format!("GitHub release request failed: {error}"))?
         .json()
         .map_err(|error| format!("invalid GitHub release response: {error}"))?;
@@ -239,7 +239,7 @@ fn download_release(release: &ReleaseInfo) -> Result<(PathBuf, String), String> 
     let checksum_text = client
         .get(checksum_url)
         .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
+        .and_then(|response| response.error_for_status())
         .map_err(|error| format!("could not download update checksum: {error}"))?
         .text()
         .map_err(|error| format!("could not read update checksum: {error}"))?;
@@ -248,7 +248,7 @@ fn download_release(release: &ReleaseInfo) -> Result<(PathBuf, String), String> 
     let mut response = client
         .get(asset_url)
         .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
+        .and_then(|response| response.error_for_status())
         .map_err(|error| format!("could not download update: {error}"))?;
     let mut file = std::fs::File::create(&temporary_path)
         .map_err(|error| format!("could not stage update: {error}"))?;
