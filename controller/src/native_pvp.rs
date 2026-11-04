@@ -7,6 +7,8 @@ const INFO_INTERVAL: Duration = Duration::from_secs(150);
 const JOIN_ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const REFUSAL_BACKOFF: Duration = Duration::from_secs(60);
 const VIP_SYNC_RETRY: Duration = Duration::from_secs(20);
+// Avoid overflowing Instant if the server ever supplies a malformed timer.
+const MAX_SERVER_COOLDOWN_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Default)]
 pub struct PvpStatus {
@@ -101,7 +103,7 @@ impl PvpAutomation {
                 }
             }
             if let Some(ms) = fila.get("cooldownMs").and_then(Value::as_u64) {
-                self.cooldown_until = Some(now + Duration::from_millis(ms));
+                self.cooldown_until = Some(now + Duration::from_millis(ms.min(MAX_SERVER_COOLDOWN_MS)));
             }
         }
         if let Some(recusa) = frame.get("filaRecusa") {
@@ -112,7 +114,7 @@ impl PvpAutomation {
             self.leave_sent = None;
             self.next_join_at = Some(now + REFUSAL_BACKOFF);
             if let Some(ms) = recusa.get("restaMs").and_then(Value::as_u64) {
-                self.cooldown_until = Some(now + Duration::from_millis(ms));
+                self.cooldown_until = Some(now + Duration::from_millis(ms.min(MAX_SERVER_COOLDOWN_MS)));
             }
             self.warning = Some("PokéIdle refused the PvP queue request; checking eligibility before retrying".into());
             self.queue_known = false;
@@ -379,6 +381,17 @@ mod tests {
             t + Duration::from_secs(30)),None);
         assert_eq!(p.next(Some(true),false,None,Some(50),
             t + Duration::from_secs(61)),Some(PvpAction::Info));
+    }
+    #[test]
+    fn malformed_server_cooldowns_cannot_overflow_an_instant() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false,"cooldownMs":u64::MAX}}),t);
+        assert_eq!(p.status(Some(true),false,None,Some(50),t).cooldown_secs,
+            7 * 24 * 60 * 60);
+        p.on_frame(&json!({"t":"pvp","filaRecusa":{"restaMs":u64::MAX}}),t);
+        assert_eq!(p.status(Some(true),false,None,Some(50),t).cooldown_secs,
+            7 * 24 * 60 * 60);
     }
     #[test]
     fn disabling_only_cancels_a_queue_owned_by_this_controller() {
