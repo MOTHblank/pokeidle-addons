@@ -80,10 +80,18 @@ impl PvpAutomation {
         if let Some(fila) = frame.get("fila").and_then(Value::as_object) {
             if let Some(na) = fila.get("na").and_then(Value::as_bool) {
                 self.queued = na;
-                self.queue_known = true;
-                self.join_sent = None;
-                if !na { self.owned_queue = false; }
-                if na { self.warning = None; }
+                if na {
+                    self.queue_known = true;
+                    self.join_sent = None;
+                    if !self.vip_rejected { self.warning = None; }
+                } else if self.join_sent.is_some() {
+                    // A late info response may predate our pending Join.
+                    self.queue_known = false;
+                } else {
+                    self.queue_known = true;
+                    self.owned_queue = false;
+                    self.leave_sent = None;
+                }
             }
             if let Some(ms) = fila.get("cooldownMs").and_then(Value::as_u64) {
                 self.cooldown_until = Some(now + Duration::from_millis(ms));
@@ -94,6 +102,7 @@ impl PvpAutomation {
             self.queue_known = true;
             self.owned_queue = false;
             self.join_sent = None;
+            self.leave_sent = None;
             self.next_join_at = Some(now + REFUSAL_BACKOFF);
             if let Some(ms) = recusa.get("restaMs").and_then(Value::as_u64) {
                 self.cooldown_until = Some(now + Duration::from_millis(ms));
@@ -109,11 +118,13 @@ impl PvpAutomation {
             self.queue_known = false;
             self.owned_queue = false;
             self.join_sent = None;
+            self.leave_sent = None;
             self.next_info_at = None;
             self.next_join_at = None;
         }
         if frame.get("filaAutoDesligada").and_then(Value::as_bool) == Some(true) {
-            self.warning = Some("The game disabled VIP auto queue due to eligibility".into());
+            self.vip_rejected = true;
+            self.warning = Some("PokéIdle disabled VIP automatic matchmaking. Check your PvP team and trainer level, then turn Auto PvP off and on to retry.".into());
         }
     }
 
