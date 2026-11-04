@@ -1,7 +1,7 @@
 //! Server-native boss farming, safe hunt round trips and a bounded loot journal.
-//! Boss repetition/healing is entirely owned by PokéIdle. Boss entry itself
-//! is routed through the same destination navigator Hunt Atlas uses, so hunt,
-//! Center and boss switches share one server-timed travel path.
+//! Boss repetition/healing is entirely owned by PokéIdle. Starting from a hunt
+//! first routes through the Hunt Atlas Center destination, then enters the boss
+//! from Center; all travel therefore shares one retry/give-up policy.
 use crate::config::{data_root, GameProfile};
 use crate::native_gameplay::GameCommand;
 use crate::native_hunt_navigation::HuntNavigator;
@@ -409,11 +409,13 @@ impl BossManager {
         });
         self.view.original_hunt = original;
         self.view.warning = None;
-        self.view.phase = "Switching to boss when the Hunt Atlas travel gate opens".into();
-        // This is now a real HuntNavigator destination. It gets the same
-        // server gate, retry cadence, cancellation and blocked-travel signal
-        // as a Hunt Atlas hunt change.
-        navigator.boss(key.to_owned(), repeat, now);
+        if hunt.in_center {
+            self.view.phase = "At Pokémon Center; entering boss".into();
+            navigator.boss(key.to_owned(), repeat, now);
+        } else {
+            self.view.phase = "Returning to Pokémon Center before boss entry".into();
+            navigator.center(now);
+        }
         Ok(())
     }
     pub fn stop(&mut self, navigator: &mut HuntNavigator,
@@ -582,9 +584,8 @@ impl BossManager {
             }
         }
     }
-    /// Boss entry is a HuntNavigator destination. Until the server confirms
-    /// the requested arena/repetition, the same navigator keeps retrying at
-    /// the exact cadence used by Hunt Atlas hunt changes.
+    /// Boss entry is a two-step Hunt Atlas trip: reach Center first, then use
+    /// the same navigator to enter the requested arena/repetition.
     pub fn next_action(&mut self, hunt: &HuntView,
                        navigator: &mut HuntNavigator, now: Instant) -> Option<GameCommand> {
         if self.trip.as_ref()?.recovering { return None; }
@@ -601,6 +602,21 @@ impl BossManager {
             .filter(|trip| trip.confirmed)
             .map(|trip| trip.key.clone()) {
             navigator.confirm_boss(&key);
+        }
+
+        if self.trip.as_ref().is_some_and(|trip| trip.stage == Stage::Starting) {
+            if !hunt.in_center {
+                if !navigator.center_pending() {
+                    navigator.center(now);
+                }
+                self.view.phase = "Returning to Pokémon Center before boss entry".into();
+                return navigator.next_action(hunt, now);
+            }
+            if !navigator.boss_pending() {
+                let trip = self.trip.as_ref().expect("trip still present");
+                navigator.boss(trip.key.clone(), trip.repeat, now);
+                self.view.phase = "At Pokémon Center; entering boss".into();
+            }
         }
 
         let awaiting_entry = self.trip.as_ref().is_some_and(|trip|
@@ -891,16 +907,17 @@ mod tests {
             "trainer-level unlock requirement remains separate");
     }
     #[test]
-    fn farm_switches_directly_and_restores_exact_hunt() {
+    fn farm_routes_through_center_and_restores_exact_hunt() {
         let mut m = manager();
         let mut nav = HuntNavigator::default();
         let now = Instant::now();
         let mut h = hunt();
         m.start("bronze", true, &h, &mut nav, now).unwrap();
+        assert!(matches!(m.next_action(&h, &mut nav, now), Some(GameCommand::Center)));
+        h.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &h, now);
         assert!(matches!(m.next_action(&h, &mut nav, now),
             Some(GameCommand::BossAuto { active:true, .. })));
-        assert!(nav.next_action(&h, now).is_none(),
-            "boss entry must not detour through the Pokémon Center");
         m.ingest(&json!({"t":"estado","estado":{"boss":{"auto":true,
             "autoKey":"bronze","arena":{"key":"bronze"}}}}));
         m.ingest(&json!({"t":"batalha","ev":[{"k":"bossAuto","ativo":false}]}));
@@ -996,6 +1013,10 @@ mod tests {
         let mut view = hunt();
         view.in_center = true;
         manager.start("bronze", true, &view, &mut nav, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, now),
+            Some(GameCommand::Center)));
+        view.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &view, now);
         assert!(matches!(manager.next_action(&view, &mut nav, now),
             Some(GameCommand::BossAuto {active:true,..})));
         manager.on_disconnect(&nav, &view);
@@ -1108,12 +1129,16 @@ mod tests {
     }
 
     #[test]
-    fn token_balance_is_rechecked_before_direct_boss_switch() {
+    fn token_balance_is_rechecked_after_center_before_boss_entry() {
         let mut manager = manager();
         let mut navigator = HuntNavigator::default();
         let now = Instant::now();
         let mut view = hunt();
         manager.start("bronze", true, &view, &mut navigator, now).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut navigator, now),
+            Some(GameCommand::Center)));
+        view.in_center = true;
+        navigator.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &view, now);
         view.items = Arc::new([(500,0)].into());
         assert!(manager.next_action(&view, &mut navigator, now).is_none());
         assert_eq!(manager.view.phase, "Boss entry cancelled");
@@ -1170,8 +1195,7 @@ mod tests {
         assert!(manager.next_action(&view, &mut nav,
             at + Duration::from_millis(2999)).is_none());
         assert!(matches!(manager.next_action(&view, &mut nav,
-            at + Duration::from_millis(3000)),
-            Some(GameCommand::BossAuto {active:true,..})));
+            at + Duration::from_millis(3000)), Some(GameCommand::Center)));
     }
 
     #[test]
