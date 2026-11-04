@@ -39,7 +39,7 @@ fn history_chart(
             let (rect, _) = ui.allocate_exact_size(
                 egui::vec2(width, 76.0), egui::Sense::hover()
             );
-            ui.painter().rect_filled(rect, 6, PANEL_ALT);
+            ui.painter().rect_filled(rect, 6.0, PANEL_ALT);
             if values.len() < 2 {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
                     tr("Collecting samples"), egui::FontId::proportional(11.0), DIM);
