@@ -409,6 +409,7 @@ fn bonus(view:&HuntView, trainer:bool)->f64 {
         *(if trainer {b.shop_trainer_xp_multiplier.max(1.0)}
           else {b.shop_pokemon_xp_multiplier.max(1.0)})
         *b.delayed_xp_multiplier.max(1.0)
+        *(if b.sacrifice_xp_active {1.2} else {1.0})
         *(1.0+(if trainer{b.trainer_event_pct}else{b.pokemon_event_pct})/100.0)
 }
 /// The legacy entry point intentionally models a single-target Pokémon.
@@ -739,6 +740,12 @@ mod tests {
             assert!((bonus(&boosted,trainer)/base-1.65).abs()<1e-10);
         }
         boosted.bonuses.vip_active=false;
+        assert!((bonus(&boosted,true)-1.1).abs()<1e-10);
+        boosted.bonuses.sacrifice_xp_active=true;
+        for trainer in [true,false] {
+            assert!((bonus(&boosted,trainer)-1.32).abs()<1e-10);
+        }
+        boosted.bonuses.sacrifice_xp_active=false;
         assert!((bonus(&boosted,true)-1.1).abs()<1e-10);
     }
     #[test]
