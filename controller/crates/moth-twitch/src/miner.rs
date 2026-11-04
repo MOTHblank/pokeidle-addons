@@ -263,6 +263,7 @@ fn poll_channels(
     let mut active = 0usize;
     let mut first_error: Option<GqlError> = None;
     let mut auth_failed = false;
+    let mut watch_slots = config.max_watched_channels.min(channels.len());
 
     for login in channels {
         let channel = cache.entry(login.clone()).or_default();
@@ -324,9 +325,10 @@ fn poll_channels(
 
                 let watch_due = channel.last_watch
                     .is_none_or(|at| at.elapsed() >= Duration::from_secs(55));
-                if watch_due {
+                if watch_due && watch_slots > 0 {
                     match gql.stream_info(login) {
                         Ok(Some(stream)) => {
+                            watch_slots -= 1;
                             if let Some(channel_id) = channel.channel_id.as_deref() {
                                 match watch.send_minute_watched(
                                     login,
