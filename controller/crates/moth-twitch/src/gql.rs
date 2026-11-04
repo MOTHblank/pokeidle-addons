@@ -7,11 +7,13 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use std::fmt;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const TWITCH_URL: &str = "https://www.twitch.tv";
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
+const INTEGRITY_URL: &str = "https://gql.twitch.tv/integrity";
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
+const BROWSER_CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
 const USER_ID_HASH: &str = "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca";
 const POINTS_CONTEXT_HASH: &str = "374314de591e69925fce3ddc2bcf085796f56ebb8cad67a0daa3165c03adc345";
 const PLAYBACK_ACCESS_HASH: &str = "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9";
@@ -20,6 +22,7 @@ const REWARD_LIST_HASH: &str = "0b1471876d7647993731b9e3c6a13bf304c67fb31d07f06a
 const STREAM_INFO_HASH: &str = "e785b65ff71ad7b363b34878335f27dd9372869ad0c5740a130b9268bcdbe7e7";
 const STREAM_LIVE_HASH: &str = "04e46329a6786ff3a81c01c50bfa5d725902507a0deb83b0edbf7abe7a3716ea";
 const CLIENT_VERSION_TTL: Duration = Duration::from_secs(10 * 60 * 60);
+const INTEGRITY_REFRESH_MARGIN_MS: u64 = 5 * 60 * 1000;
 
 #[derive(Debug)]
 pub(crate) enum GqlError {
@@ -98,6 +101,33 @@ struct ClientVersionState {
     fetched: Option<Instant>,
 }
 
+struct IntegrityState {
+    token: String,
+    expiration_ms: u64,
+}
+
+fn epoch_ms() -> u64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
+}
+
+fn has_integrity_challenge(value: &Value) -> bool {
+    if value.pointer("/extensions/challenge/type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("integrity"))
+    {
+        return true;
+    }
+    value.get("errors").and_then(Value::as_array)
+        .is_some_and(|errors| errors.iter().any(|error| {
+            error.get("message").and_then(Value::as_str)
+                .is_some_and(|message| message.to_ascii_lowercase().contains("integrity"))
+        }))
+}
+
 pub(crate) struct TwitchGql {
     client: Client,
     credentials: Credentials,
@@ -106,6 +136,7 @@ pub(crate) struct TwitchGql {
     device_id: String,
     client_session: String,
     client_version: Mutex<ClientVersionState>,
+    integrity: Mutex<IntegrityState>,
 }
 
 impl TwitchGql {
@@ -126,6 +157,10 @@ impl TwitchGql {
             client_version: Mutex::new(ClientVersionState {
                 value: DEFAULT_CLIENT_VERSION.to_owned(),
                 fetched: None,
+            }),
+            integrity: Mutex::new(IntegrityState {
+                token: String::new(),
+                expiration_ms: 0,
             }),
         })
     }
@@ -205,8 +240,65 @@ impl TwitchGql {
         }
     }
 
-    fn post(&self, operation: &str, hash: &str, variables: Value) -> Result<Value, GqlError> {
-        let client_id = self.client_id.as_deref().ok_or(GqlError::Auth)?;
+    fn clear_integrity_token(&self) {
+        if let Ok(mut state) = self.integrity.lock() {
+            state.token.clear();
+            state.expiration_ms = 0;
+        }
+    }
+
+    fn integrity_token(&self) -> Result<String, GqlError> {
+        let now = epoch_ms();
+        let mut state = self.integrity.lock()
+            .map_err(|_| GqlError::Protocol("Twitch integrity state unavailable".into()))?;
+        if !state.token.is_empty()
+            && state.expiration_ms.saturating_sub(now) > INTEGRITY_REFRESH_MARGIN_MS
+        {
+            return Ok(state.token.clone());
+        }
+
+        let response = self.client.post(INTEGRITY_URL)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("OAuth {}", self.credentials.oauth_token))
+            .header("Client-Id", BROWSER_CLIENT_ID)
+            .header("Client-Session-Id", &self.client_session)
+            .header("X-Device-Id", &self.device_id)
+            .header("User-Agent", ANDROID_TV_USER_AGENT)
+            .body("{}")
+            .send()
+            .map_err(|_| GqlError::Transport(
+                "Could not refresh Twitch integrity token".into()
+            ))?;
+        if !response.status().is_success() {
+            return Err(GqlError::Protocol(format!(
+                "Twitch integrity token request failed with HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        let value: Value = response.json()
+            .map_err(|_| GqlError::Protocol(
+                "Twitch returned invalid integrity token data".into()
+            ))?;
+        let token = value.get("token").and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .ok_or_else(|| GqlError::Protocol(
+                "Twitch did not return an integrity token".into()
+            ))?;
+        let expiration_ms = value.get("expiration").and_then(Value::as_u64)
+            .unwrap_or_else(|| now.saturating_add(10 * 60 * 1000));
+        state.token = token.to_owned();
+        state.expiration_ms = expiration_ms;
+        Ok(state.token.clone())
+    }
+
+    fn post_raw(
+        &self,
+        operation: &str,
+        hash: &str,
+        variables: &Value,
+        client_id: &str,
+        integrity_token: Option<&str>,
+    ) -> Result<Value, GqlError> {
         let body = json!({
             "operationName": operation,
             "variables": variables,
@@ -214,15 +306,18 @@ impl TwitchGql {
                 "persistedQuery": { "version": 1, "sha256Hash": hash }
             }
         });
-        let response = self.client.post(GQL_URL)
+        let mut request = self.client.post(GQL_URL)
             .header("Authorization", format!("OAuth {}", self.credentials.oauth_token))
             .header("Client-Id", client_id)
             .header("Client-Session-Id", &self.client_session)
             .header("Client-Version", self.client_version())
             .header("User-Agent", ANDROID_TV_USER_AGENT)
             .header("X-Device-Id", &self.device_id)
-            .header("Cookie", self.session_cookie())
-            .json(&body)
+            .header("Cookie", self.session_cookie());
+        if let Some(token) = integrity_token {
+            request = request.header("Client-Integrity", token);
+        }
+        let response = request.json(&body)
             .send()
             .map_err(|_| GqlError::Transport("Could not reach Twitch".into()))?;
         if matches!(response.status().as_u16(), 401 | 403) {
@@ -233,8 +328,11 @@ impl TwitchGql {
                 "Twitch request failed with HTTP {}", response.status().as_u16()
             )));
         }
-        let value: Value = response.json()
-            .map_err(|_| GqlError::Protocol("Twitch returned invalid JSON".into()))?;
+        response.json()
+            .map_err(|_| GqlError::Protocol("Twitch returned invalid JSON".into()))
+    }
+
+    fn finish_graphql(&self, operation: &str, value: Value) -> Result<Value, GqlError> {
         if let Some(errors) = value.get("errors").and_then(Value::as_array) {
             if !errors.is_empty() {
                 let messages=errors.iter().filter_map(|error| error.get("message"))
@@ -259,6 +357,56 @@ impl TwitchGql {
             }
         }
         Ok(value)
+    }
+
+    fn post(&self, operation: &str, hash: &str, variables: Value) -> Result<Value, GqlError> {
+        let client_id = self.client_id.as_deref().ok_or(GqlError::Auth)?;
+        let initial = self.post_raw(operation, hash, &variables, client_id, None)?;
+        if !has_integrity_challenge(&initial) {
+            return self.finish_graphql(operation, initial);
+        }
+
+        // Protected Twitch mutations can challenge the TV/reference GQL
+        // identity even when the OAuth token itself is still valid. Mirror
+        // current channel-points clients: obtain a short-lived integrity token
+        // with Twitch's browser client identity and retry only the challenged
+        // request, leaving ordinary stream/live requests on the reference path.
+        self.clear_integrity_token();
+        let mut last = initial;
+        for _ in 0..2 {
+            let integrity = match self.integrity_token() {
+                Ok(token) => token,
+                Err(error) => {
+                    return Err(GqlError::Protocol(format!(
+                        "Twitch rejected GraphQL {operation}: failed integrity check; {}",
+                        error.user_message()
+                    )));
+                }
+            };
+            match self.post_raw(
+                operation,
+                hash,
+                &variables,
+                BROWSER_CLIENT_ID,
+                Some(&integrity),
+            ) {
+                Ok(value) => {
+                    if !has_integrity_challenge(&value) {
+                        return self.finish_graphql(operation, value);
+                    }
+                    last = value;
+                    self.clear_integrity_token();
+                }
+                Err(GqlError::Auth) => {
+                    // A browser-client retry can be rejected independently of
+                    // an otherwise-valid TV token. Preserve the real failure
+                    // instead of incorrectly forcing the user to sign in again.
+                    return self.finish_graphql(operation, last);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.finish_graphql(operation, last)
     }
 
     pub(crate) fn oauth_token(&self) -> &str {
@@ -455,5 +603,23 @@ mod tests {
     #[test]
     fn reference_client_id_matches_reference_miner() {
         assert_eq!(REFERENCE_CLIENT_ID,"ue6666qo983tsx6so1t0vnawi233wa");
+    }
+
+    #[test]
+    fn detects_integrity_challenges() {
+        assert!(has_integrity_challenge(&json!({
+            "errors":[{"message":"failed integrity check"}]
+        })));
+        assert!(has_integrity_challenge(&json!({
+            "extensions":{"challenge":{"type":"integrity"}}
+        })));
+        assert!(!has_integrity_challenge(&json!({
+            "errors":[{"message":"PersistedQueryNotFound"}]
+        })));
+    }
+
+    #[test]
+    fn browser_client_id_matches_twitch_web_client() {
+        assert_eq!(BROWSER_CLIENT_ID,"kimne78kx3ncx6brgo4mv6wki5h1ko");
     }
 }
