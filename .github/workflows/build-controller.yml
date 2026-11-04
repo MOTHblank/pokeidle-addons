@@ -299,7 +299,6 @@ jobs:
           test -s "dist/Moth-Controller-Setup-v$RELEASE_VERSION.exe"
           test -s "dist/moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
           (cd dist && for checksum in *.sha256; do sed -i 's/\r$//' "$checksum"; done && sha256sum -c ./*.sha256)
-          cp LICENSE dist/LICENSE.txt
 
       - name: Publicar sem sobrescrever versões existentes
         shell: bash
@@ -339,4 +338,4 @@ jobs:
           else
             gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --generate-notes
           fi
-          echo "Release $tag publicada com instalador Windows, portátil, Linux, licença e checksums."
+          echo "Release $tag publicada com instalador Windows, portátil, Linux e checksums."
