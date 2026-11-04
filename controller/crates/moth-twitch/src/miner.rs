@@ -374,7 +374,12 @@ fn poll_channels(
                                     &stream.broadcast_id,
                                     &viewer.user_id,
                                 ) {
-                                    Ok(()) => channel.last_watch = Some(Instant::now()),
+                                    Ok(()) => {
+                                        channel.last_watch = Some(Instant::now());
+                                        if let Ok(mut current) = snapshot.lock() {
+                                            current.watch_signals = current.watch_signals.saturating_add(1);
+                                        }
+                                    },
                                     Err(error) => {
                                         push_event(events, MinerEvent::Warning(format!(
                                             "{login}: {error}"
@@ -449,6 +454,7 @@ fn update_streamer(
         Some(state) => {
             state.channel_id.clone_from(&cache.channel_id);
             state.points = cache.balance;
+            state.last_watch_signal = cache.last_watch;
             state.last_update = Some(Instant::now());
             state.error = error;
         }
@@ -456,6 +462,7 @@ fn update_streamer(
             login: login.to_owned(),
             channel_id: cache.channel_id.clone(),
             points: cache.balance,
+            last_watch_signal: cache.last_watch,
             last_update: Some(Instant::now()),
             error,
         }),
