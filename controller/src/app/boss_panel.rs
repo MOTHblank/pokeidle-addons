@@ -1,13 +1,20 @@
 //! Boss management UI; the game worker owns navigation and all game commands.
 //! Reuse the controller's themed cards, badges, resource chips and detail rows.
 use super::{
-    automation_badge, detail_stat_line, draw_native_missing_panel, egui,
+    automation_badge, compact_text, detail_stat_line, draw_native_missing_panel, egui,
     request_item_catalog, resource_chip, tr, ControllerApp, GameCommand,
     RichText, Stroke, ACCENT, BORDER, DIM, MUTED, PANEL, PANEL_ALT, TEXT, WARN,
 };
 use std::collections::BTreeMap;
 
 const BOSS_HISTORY_PAGE_SIZE: usize = 15;
+
+// Favor hover-revealed full names over horizontal overflow on small windows.
+fn boss_name_limit(width: f32) -> usize {
+    if width < 240.0 { 16 }
+    else if width < 340.0 { 24 }
+    else { 42 }
+}
 
 fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
     let page_count = count.div_ceil(BOSS_HISTORY_PAGE_SIZE).max(1);
@@ -113,23 +120,24 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         if !view.catalog.iter().any(|entry| entry.key == *selected) {
                             *selected = view.catalog[0].key.clone();
                         }
+                        let selected_name = view.catalog.iter()
+                            .find(|entry| entry.key == *selected)
+                            .map(|entry| entry.name.as_str())
+                            .unwrap_or("—");
+                        let max_chars = boss_name_limit(ui.available_width());
                         egui::ComboBox::from_id_salt(("boss-choice", index))
-                            .selected_text(
-                                view.catalog
-                                    .iter()
-                                    .find(|entry| entry.key == *selected)
-                                    .map(|entry| entry.name.as_str())
-                                    .unwrap_or("—"),
-                            )
+                            .selected_text(compact_text(selected_name, max_chars))
                             .show_ui(ui, |ui| {
                                 for entry in &view.catalog {
                                     ui.selectable_value(
-                                        selected,
+                                        &mut *selected,
                                         entry.key.clone(),
-                                        &entry.name,
-                                    );
+                                        compact_text(&entry.name, max_chars),
+                                    ).on_hover_text(&entry.name);
                                 }
-                            });
+                            })
+                            .response
+                            .on_hover_text(selected_name);
 
                         if let Some(entry) = view.catalog.iter().find(|entry| entry.key == *selected) {
                             let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
@@ -165,18 +173,30 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 && has_level
                                 && has_tokens;
                             ui.add_space(9.0);
+                            let compact_actions = ui.available_width() < 340.0;
                             ui.horizontal_wrapped(|ui| {
+                                let farm_label = if compact_actions {
+                                    tr("Auto farm")
+                                } else {
+                                    tr("Farm until tokens run out")
+                                };
                                 if ui.add_enabled(
                                     ready,
                                     egui::Button::new(
-                                        RichText::new(tr("Farm until tokens run out"))
-                                            .strong()
-                                            .color(TEXT),
+                                        RichText::new(farm_label).strong(),
                                     )
-                                    .fill(ACCENT.linear_multiply(0.32))
-                                    .stroke(Stroke::new(1.0, ACCENT.linear_multiply(0.65)))
+                                    .fill(if ready {
+                                        ACCENT.linear_multiply(0.32)
+                                    } else {
+                                        PANEL_ALT
+                                    })
+                                    .stroke(Stroke::new(1.0, if ready {
+                                        ACCENT.linear_multiply(0.65)
+                                    } else {
+                                        BORDER
+                                    }))
                                     .corner_radius(8.0),
-                                ).clicked() {
+                                ).on_hover_text(tr("Farm until tokens run out")).clicked() {
                                     action = Some(GameCommand::BossStart {
                                         key: entry.key.clone(),
                                         repeat: true,
@@ -235,7 +255,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         } else {
                             tr(&view.phase)
                         };
-                        automation_badge(ui, "Boss status", phase, live && (view.auto || view.arena.is_some()));
+                        automation_badge(ui, "Phase", phase, live && (view.auto || view.arena.is_some()));
                     });
                     if let Some(arena) = view.arena.as_deref() {
                         let name = view.catalog.iter()
@@ -274,20 +294,38 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     }
 
                     ui.add_space(8.0);
+                    let compact_actions = ui.available_width() < 340.0;
+                    let can_leave = live && view.arena.is_some();
                     ui.horizontal_wrapped(|ui| {
+                        let stop_label = if compact_actions {
+                            tr("Stop & return")
+                        } else {
+                            tr("Stop repetition and return")
+                        };
                         if ui.add_enabled(
                             live && view.can_stop,
-                            egui::Button::new(tr("Stop repetition and return")),
-                        ).clicked() {
+                            egui::Button::new(stop_label),
+                        ).on_hover_text(tr("Stop repetition and return")).clicked() {
                             action = Some(GameCommand::BossStop);
+                            app.workspace.boss_leave_confirm[index] = false;
+                            app.workspace.boss_leave_target[index] = None;
                         }
+                        let leave_label = if compact_actions {
+                            tr("Leave arena")
+                        } else {
+                            tr("Leave boss encounter")
+                        };
                         if ui.add_enabled(
-                            live && view.arena.is_some(),
+                            can_leave,
                             egui::Button::new(
-                                RichText::new(tr("Leave boss encounter")).color(WARN),
+                                RichText::new(leave_label).color(if can_leave { WARN } else { DIM }),
                             )
-                            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.5))),
-                        ).clicked() {
+                            .stroke(Stroke::new(1.0, if can_leave {
+                                WARN.linear_multiply(0.5)
+                            } else {
+                                BORDER
+                            })),
+                        ).on_hover_text(tr("Leaving an active boss encounter may forfeit its entry. Confirm?")).clicked() {
                             app.workspace.boss_leave_confirm[index] = true;
                             app.workspace.boss_leave_target[index] = view.arena.clone();
                         }
@@ -377,19 +415,27 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         );
                     } else {
                         ui.add_space(7.0);
-                        ui.label(
-                            RichText::new(tr("Items acquired (retained history)"))
-                                .size(10.0)
-                                .strong()
-                                .color(MUTED),
-                        );
-                        ui.horizontal_wrapped(|ui| {
-                            for (id, quantity) in totals {
-                                let name = app.inventory_catalog.as_ref()
-                                    .map(|catalog| catalog.name(id))
-                                    .unwrap_or_else(|| format!("Item #{id}"));
-                                resource_chip(ui, &format!("×{quantity} {name}"));
-                            }
+                        // Keep the history controls reachable even after
+                        // hundreds of distinct recorded item drops.
+                        let totals_label = if ui.available_width() < 320.0 {
+                            tr("Loot totals")
+                        } else {
+                            tr("Items acquired (retained history)")
+                        };
+                        egui::CollapsingHeader::new(format!(
+                            "{} ({})", totals_label, totals.len(),
+                        ))
+                        .id_salt(("boss-loot-totals", index))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                for (id, quantity) in &totals {
+                                    let name = app.inventory_catalog.as_ref()
+                                        .map(|catalog| catalog.name(*id))
+                                        .unwrap_or_else(|| format!("Item #{id}"));
+                                    resource_chip(ui, &format!("×{quantity} {name}"));
+                                }
+                            });
                         });
                     }
 
@@ -418,11 +464,12 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     .size(10.0)
                                     .color(MUTED),
                             );
+                            let selected_name = boss_names
+                                .get(filter.as_str()).map(String::as_str)
+                                .unwrap_or(tr("All bosses"));
+                            let max_chars = boss_name_limit(ui.available_width());
                             egui::ComboBox::from_id_salt(("boss-history-filter", index))
-                                .selected_text(
-                                    boss_names.get(filter.as_str()).map(String::as_str)
-                                        .unwrap_or(tr("All bosses")),
-                                )
+                                .selected_text(compact_text(selected_name, max_chars))
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut *filter,
@@ -430,9 +477,15 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                         tr("All bosses"),
                                     );
                                     for (key, name) in &boss_names {
-                                        ui.selectable_value(&mut *filter, key.clone(), name);
+                                        ui.selectable_value(
+                                            &mut *filter,
+                                            key.clone(),
+                                            compact_text(name, max_chars),
+                                        ).on_hover_text(name);
                                     }
-                                });
+                                })
+                                .response
+                                .on_hover_text(selected_name);
                         });
                         if *filter != previous_filter {
                             app.workspace.boss_history_page[index] = 0;
@@ -442,35 +495,36 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .collect();
                         let count = filtered.len();
                         let page = &mut app.workspace.boss_history_page[index];
-                        let range = history_range(page, count);
                         let page_count = count.div_ceil(BOSS_HISTORY_PAGE_SIZE).max(1);
-                        ui.horizontal_wrapped(|ui| {
-                            let first = if count == 0 { 0 } else { range.start + 1 };
-                            ui.label(
-                                RichText::new(format!("{first}–{} / {count}", range.end))
-                                    .size(10.0)
-                                    .color(DIM),
-                            );
-                            if page_count > 1 {
+                        *page = (*page).min(page_count - 1);
+                        if page_count > 1 {
+                            ui.horizontal_wrapped(|ui| {
                                 if ui.add_enabled(
                                     *page > 0,
                                     egui::Button::new(tr("← Previous")),
                                 ).clicked() {
                                     *page -= 1;
                                 }
-                                ui.label(
-                                    RichText::new(format!("{} / {page_count}", *page + 1))
-                                        .size(10.0)
-                                        .color(MUTED),
-                                );
                                 if ui.add_enabled(
                                     *page + 1 < page_count,
                                     egui::Button::new(tr("Next →")),
                                 ).clicked() {
                                     *page += 1;
                                 }
-                            }
-                        });
+                            });
+                        }
+                        // Compute the range after clicks: the count and rows
+                        // now describe the same page in this exact frame.
+                        let range = history_range(page, count);
+                        let first = if count == 0 { 0 } else { range.start + 1 };
+                        ui.label(
+                            RichText::new(format!(
+                                "{first}–{} / {count} · {} / {page_count}",
+                                range.end, *page + 1,
+                            ))
+                                .size(10.0)
+                                .color(DIM),
+                        );
                         if filtered.is_empty() {
                             ui.label(
                                 RichText::new(tr("No victories match this boss."))
@@ -478,9 +532,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     .color(DIM),
                             );
                         }
-                        // Display the already-selected range. A page button
-                        // changes the next frame's range; no stale indices
-                        // are used in the current frame.
+                        // Both navigation and row selection use this
+                        // frame's final, clamped page index.
                         for result in &filtered[range] {
                             let drops = if result.drops.is_empty() {
                                 tr("No items").to_owned()
@@ -492,13 +545,14 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     format!("{} ×{}", name, drop.quantity)
                                 }).collect::<Vec<_>>().join(" · ")
                             };
+                            let name_limit = boss_name_limit(ui.available_width());
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(
-                                    RichText::new(&result.boss)
+                                    RichText::new(compact_text(&result.boss, name_limit))
                                         .size(11.0)
                                         .strong()
                                         .color(TEXT),
-                                );
+                                ).on_hover_text(&result.boss);
                                 ui.label(
                                     RichText::new(loot_age(now, result.at))
                                         .size(10.0)
@@ -543,7 +597,14 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+    use super::{boss_name_limit, history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+
+    #[test]
+    fn boss_names_use_compact_labels_in_narrow_workspaces() {
+        assert_eq!(boss_name_limit(180.0), 16);
+        assert_eq!(boss_name_limit(280.0), 24);
+        assert_eq!(boss_name_limit(480.0), 42);
+    }
 
     #[test]
     fn history_pages_are_bounded_and_clamped() {

@@ -5,18 +5,32 @@ use super::{compact_text, egui, tr, Align, FontId, Layout, Margin, RichText, Str
 // Detailed view uses close label/value pairs instead of pushing numbers to the
 // far edge of large columns. Preserve full values in the hover tooltip.
 pub(super) fn detail_stat_line(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        ui.add_sized(
-            [108.0, 18.0],
-            egui::Label::new(RichText::new(tr(label)).size(10.0).color(DIM)),
-        );
-        ui.add(
-            egui::Label::new(
-                RichText::new(compact_text(value, 32)).size(11.0).strong().color(TEXT),
-            ).truncate(),
-        ).on_hover_text(value);
-    });
+    // On a narrow workspace, a fixed 108px label column leaves little room
+    // for the value. Stack the same shared presentation instead of clipping
+    // the value or widening its containing card beyond the viewport.
+    if ui.available_width() < 310.0 {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(RichText::new(tr(label)).size(10.0).color(DIM));
+            ui.add(egui::Label::new(
+                RichText::new(value).size(11.0).strong().color(TEXT),
+            ).wrap()).on_hover_text(value);
+        });
+    } else {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.add_sized(
+                [108.0, 18.0],
+                egui::Label::new(RichText::new(tr(label)).size(10.0).color(DIM))
+                    .truncate(),
+            ).on_hover_text(tr(label));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(compact_text(value, 32)).size(11.0).strong().color(TEXT),
+                ).truncate(),
+            ).on_hover_text(value);
+        });
+    }
 }
 
 pub(super) fn resource_chip(ui: &mut egui::Ui, text: &str) {
@@ -32,6 +46,9 @@ pub(super) fn resource_chip(ui: &mut egui::Ui, text: &str) {
 }
 
 pub(super) fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) -> egui::Response {
+    let max_chars = if ui.available_width() < 240.0 { 16 }
+        else if ui.available_width() < 340.0 { 24 }
+        else { 54 };
     egui::Frame::new()
         .fill(if good { GOOD.linear_multiply(0.08) } else { PANEL_ALT })
         .stroke(Stroke::new(1.0, if good { GOOD.linear_multiply(0.28) } else { BORDER }))
@@ -46,7 +63,7 @@ pub(super) fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good
                         .color(if good { GOOD } else { MUTED }),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT))
+                ui.label(RichText::new(compact_text(tr(value), max_chars)).size(9.0).color(TEXT))
                     .on_hover_text(tr(value));
             });
         }).response
