@@ -22,7 +22,7 @@ pub fn random_hex(byte_length: usize) -> String {
     let mut rng = OsRng;
     let mut output = String::with_capacity(byte_length.saturating_mul(2));
     for _ in 0..byte_length {
-        let _ = write!(output, "{:02x}", rng.gen::<u8>());
+        let _ = write!(output, "{:02x}", rng.gen_range(0..=u8::MAX));
     }
     output
 }
