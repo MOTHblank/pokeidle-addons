@@ -80,6 +80,7 @@ fn draw_boss_selector(
     ui: &mut egui::Ui,
     entry: &BossEntry,
     selected: bool,
+    pending: bool,
     hunt: &HuntView,
 ) -> bool {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
@@ -87,8 +88,10 @@ fn draw_boss_selector(
     let fight_level = entry.fight_level(hunt)
         .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
     let card = egui::Frame::new()
-        .fill(if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
-        .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
+        .fill(if pending { WARN.linear_multiply(0.08) }
+            else if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
+        .stroke(Stroke::new(1.0, if pending { WARN.linear_multiply(0.7) }
+            else if selected { ACCENT } else { BORDER }))
         .corner_radius(8.0)
         .inner_margin(egui::Margin::symmetric(9, 7))
         .show(ui, |ui| {
@@ -796,7 +799,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .color(TEXT),
             );
             ui.label(
-                RichText::new(tr("Boss entry uses Hunt Atlas navigation to return to the Pokémon Center first, then starts the selected boss. If travel stays blocked for one minute, the pending request authorizes one Give Up. Moth restores your original hunt when the run ends."))
+                RichText::new(tr("Boss requests use Hunt Atlas travel rules: wait for a safe opening, go through the Pokémon Center, then enter. Moth restores the original hunt afterward."))
                     .size(10.0)
                     .color(MUTED),
             );
@@ -913,7 +916,11 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     );
                     ui.add_space(5.0);
                     for entry in &view.catalog {
-                        if draw_boss_selector(ui, entry, *selected == entry.key, &hunt) {
+                        if draw_boss_selector(
+                            ui, entry, *selected == entry.key,
+                            pending_start.as_ref().is_some_and(|(key, _)| key == &entry.key),
+                            &hunt,
+                        ) {
                             *selected = entry.key.clone();
                         }
                     }
