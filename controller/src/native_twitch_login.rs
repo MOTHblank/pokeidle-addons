@@ -1,9 +1,12 @@
-//! Twitch login normally uses an ordinary, uninstrumented Firefox window and
-//! reads this profile's own Twitch auth-token from cookies.sqlite. A separate
-//! user-selected fallback opens Firefox with BiDi and asks Firefox itself for
-//! the same first-party cookie when direct SQLite access is troublesome.
+//! Twitch login prefers the Android TV device-code flow used by the reference
+//! channel-points miner so the OAuth token and Twitch Client-ID are paired the
+//! same way. Firefox cookie import and a BiDi cookie reader remain available
+//! as compatibility fallbacks for existing browser sessions.
 use crate::config::{Config, GameProfile};
 use crate::{firefox, native_auth};
+use reqwest::blocking::Client;
+use serde_json::Value;
+use std::process::{Command, Stdio};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr;
@@ -290,12 +293,14 @@ struct LoginJob {
     status: LoginStatus,
     cancelled: Arc<AtomicBool>,
     completed_token: Option<String>,
+    activation_code: Option<String>,
 }
 fn jobs() -> &'static Mutex<[LoginJob; 4]> {
     static JOBS: OnceLock<Mutex<[LoginJob; 4]>> = OnceLock::new();
     JOBS.get_or_init(|| Mutex::new(std::array::from_fn(|_| LoginJob {
         status: LoginStatus::Idle, cancelled: Arc::new(AtomicBool::new(false)),
         completed_token: None,
+        activation_code: None,
     })))
 }
 pub fn status(profile: GameProfile) -> LoginStatus {
@@ -305,6 +310,15 @@ pub fn status(profile: GameProfile) -> LoginStatus {
 pub fn take_completed_token(profile: GameProfile) -> Option<String> {
     jobs().lock().ok()
         .and_then(|mut jobs| jobs[profile.index()].completed_token.take())
+}
+pub fn activation_code(profile:GameProfile)->Option<String> {
+    jobs().lock().ok()
+        .and_then(|jobs|jobs[profile.index()].activation_code.clone())
+}
+fn set_activation_code(profile:GameProfile,code:Option<String>) {
+    if let Ok(mut jobs)=jobs().lock() {
+        jobs[profile.index()].activation_code=code;
+    }
 }
 pub fn cancel(profile: GameProfile) {
     if let Ok(jobs) = jobs().lock() {
@@ -316,21 +330,27 @@ pub fn reset(profile: GameProfile) {
         if !matches!(jobs[profile.index()].status, LoginStatus::Running) {
             jobs[profile.index()].status = LoginStatus::Idle;
             jobs[profile.index()].completed_token = None;
+            jobs[profile.index()].activation_code = None;
         }
     }
 }
 #[derive(Clone,Copy)]
 enum LoginMethod {
-    Primary { fresh:bool },
+    ReferenceDevice,
+    Firefox { fresh:bool },
     AlternativeBidi,
 }
 
+pub fn start_reference(profile:GameProfile)->Result<(),String> {
+    start_mode(profile,LoginMethod::ReferenceDevice)
+}
+
 pub fn start(profile: GameProfile) -> Result<(), String> {
-    start_mode(profile,LoginMethod::Primary {fresh:false})
+    start_mode(profile,LoginMethod::Firefox {fresh:false})
 }
 
 pub fn start_fresh(profile: GameProfile) -> Result<(), String> {
-    start_mode(profile,LoginMethod::Primary {fresh:true})
+    start_mode(profile,LoginMethod::Firefox {fresh:true})
 }
 
 pub fn start_alternative(profile:GameProfile)->Result<(),String> {
@@ -350,13 +370,16 @@ fn start_mode(profile: GameProfile, method: LoginMethod) -> Result<(), String> {
         job.status = LoginStatus::Running;
         job.cancelled = Arc::clone(&cancelled);
         job.completed_token = None;
+        job.activation_code = None;
         (cancelled,revision)
     };
     let spawned = thread::Builder::new()
         .name(format!("moth-twitch-login-{}", profile.name()))
         .spawn(move || {
             let result = match method {
-                LoginMethod::Primary {fresh} =>
+                LoginMethod::ReferenceDevice =>
+                    login_reference_device(profile,&cancelled,revision),
+                LoginMethod::Firefox {fresh} =>
                     login(profile,&cancelled,fresh,revision),
                 LoginMethod::AlternativeBidi =>
                     login_alternative_bidi(profile,&cancelled,revision),
@@ -365,10 +388,12 @@ fn start_mode(profile: GameProfile, method: LoginMethod) -> Result<(), String> {
                 match result {
                     Ok(token) => {
                         jobs[profile.index()].completed_token = Some(token);
+                        jobs[profile.index()].activation_code = None;
                         jobs[profile.index()].status = LoginStatus::Done;
                     }
                     Err(error) => {
                         jobs[profile.index()].completed_token = None;
+                        jobs[profile.index()].activation_code = None;
                         jobs[profile.index()].status = LoginStatus::Error(error);
                     }
                 }
@@ -384,7 +409,121 @@ fn reset_after_spawn_failure(profile: GameProfile) {
     if let Ok(mut jobs) = jobs().lock() {
         jobs[profile.index()].status = LoginStatus::Idle;
         jobs[profile.index()].completed_token = None;
+        jobs[profile.index()].activation_code = None;
     }
+}
+
+fn add_reference_device_headers(
+    request:reqwest::blocking::RequestBuilder,
+    device_id:&str,
+)->reqwest::blocking::RequestBuilder {
+    request
+        .header("Accept","application/json")
+        .header("Accept-Language","en-US")
+        .header("Cache-Control","no-cache")
+        .header("Client-Id",moth_twitch::REFERENCE_CLIENT_ID)
+        .header("Origin","https://android.tv.twitch.tv")
+        .header("Pragma","no-cache")
+        .header("Referer","https://android.tv.twitch.tv/")
+        .header("User-Agent",moth_twitch::ANDROID_TV_USER_AGENT)
+        .header("X-Device-Id",device_id)
+}
+
+fn open_reference_activation_page() {
+    let mut command=if cfg!(windows) {
+        Command::new("explorer.exe")
+    } else if cfg!(target_os="macos") {
+        Command::new("open")
+    } else {
+        Command::new("xdg-open")
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let _=command.arg("https://www.twitch.tv/activate")
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+}
+
+fn sleep_cancelable(cancelled:&AtomicBool,duration:Duration)->bool {
+    let deadline=std::time::Instant::now()+duration;
+    while std::time::Instant::now()<deadline {
+        if cancelled.load(Ordering::Relaxed) {return false;}
+        let remaining=deadline.saturating_duration_since(std::time::Instant::now());
+        thread::sleep(remaining.min(Duration::from_millis(200)));
+    }
+    !cancelled.load(Ordering::Relaxed)
+}
+
+fn login_reference_device(
+    profile:GameProfile,
+    cancelled:&AtomicBool,
+    revision:u64,
+)->Result<String,String> {
+    let current=||credential_revision_is_current(profile,revision);
+    if !current(){return Err("Twitch login cancelled".into());}
+    let client=Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(moth_twitch::ANDROID_TV_USER_AGENT)
+        .build()
+        .map_err(|_|"Could not create Twitch sign-in client".to_owned())?;
+    let device_id=moth_twitch::random_string(32);
+    let start=add_reference_device_headers(
+        client.post("https://id.twitch.tv/oauth2/device").form(&[
+            ("client_id",moth_twitch::REFERENCE_CLIENT_ID),
+            ("scopes",moth_twitch::DEVICE_FLOW_SCOPES),
+        ]),
+        &device_id,
+    ).send().map_err(|_|"Could not start Twitch device sign-in".to_owned())?;
+    if !start.status().is_success() {
+        return Err(format!(
+            "Twitch device sign-in failed with HTTP {}",start.status().as_u16()
+        ));
+    }
+    let payload:Value=start.json()
+        .map_err(|_|"Twitch returned invalid device sign-in data".to_owned())?;
+    let device_code=payload.get("device_code").and_then(Value::as_str)
+        .filter(|value|!value.is_empty())
+        .ok_or_else(||"Twitch did not return a device code".to_owned())?.to_owned();
+    let user_code=payload.get("user_code").and_then(Value::as_str)
+        .filter(|value|!value.is_empty())
+        .ok_or_else(||"Twitch did not return an activation code".to_owned())?.to_owned();
+    let interval=payload.get("interval").and_then(Value::as_u64).unwrap_or(5).max(1);
+    let expires=payload.get("expires_in").and_then(Value::as_u64).unwrap_or(600).max(interval);
+    if cancelled.load(Ordering::Relaxed)||!current() {
+        return Err("Twitch login cancelled".into());
+    }
+    set_activation_code(profile,Some(user_code));
+    open_reference_activation_page();
+
+    let started=std::time::Instant::now();
+    while started.elapsed()<Duration::from_secs(expires) {
+        if !sleep_cancelable(cancelled,Duration::from_secs(interval))||!current() {
+            return Err("Twitch login cancelled".into());
+        }
+        let response=add_reference_device_headers(
+            client.post("https://id.twitch.tv/oauth2/token").form(&[
+                ("client_id",moth_twitch::REFERENCE_CLIENT_ID),
+                ("device_code",device_code.as_str()),
+                ("grant_type","urn:ietf:params:oauth:grant-type:device_code"),
+            ]),
+            &device_id,
+        ).send().map_err(|_|"Could not poll Twitch device sign-in".to_owned())?;
+        if response.status().is_success() {
+            let token:Value=response.json()
+                .map_err(|_|"Twitch returned invalid sign-in token data".to_owned())?;
+            let access=token.get("access_token").and_then(Value::as_str)
+                .filter(|value|!value.is_empty())
+                .ok_or_else(||"Twitch did not return an access token".to_owned())?
+                .to_owned();
+            let credential=moth_twitch::encode_reference_credential(&access,&device_id)?;
+            if !current(){return Err("Twitch login cancelled".into());}
+            save_current_token(profile,&credential,revision)?;
+            return Ok(credential);
+        }
+    }
+    Err("Twitch device code expired before authorization".into())
 }
 
 /// Reuse the *same* Game1..Game4 Firefox profile that authenticated

@@ -1,3 +1,4 @@
+use crate::client::decode_reference_credential;
 use std::time::{Duration, Instant};
 
 pub const MAX_CHANNELS: usize = 32;
@@ -6,29 +7,30 @@ pub const MAX_CHANNELS: usize = 32;
 pub struct Credentials {
     pub username: Option<String>,
     pub oauth_token: String,
+    pub(crate) device_id: Option<String>,
 }
 
 impl Credentials {
-    pub fn new(username: impl Into<String>, oauth_token: impl Into<String>) -> Result<Self, String> {
-        let username = normalize_login(&username.into())
-            .ok_or_else(|| "Invalid Twitch username".to_owned())?;
-        let oauth_token = oauth_token.into().trim().to_owned();
-        if oauth_token.is_empty() || oauth_token.len() > 2048
-            || oauth_token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    fn parse_credential(value:String)->Result<(String,Option<String>),String> {
+        let (token,device_id)=decode_reference_credential(&value)?;
+        if token.is_empty() || token.len() > 2048
+            || token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
         {
             return Err("Invalid Twitch OAuth token".into());
         }
-        Ok(Self { username: Some(username), oauth_token })
+        Ok((token.to_owned(),device_id.map(str::to_owned)))
     }
 
-    pub fn token_only(oauth_token: impl Into<String>) -> Result<Self, String> {
-        let oauth_token = oauth_token.into().trim().to_owned();
-        if oauth_token.is_empty() || oauth_token.len() > 2048
-            || oauth_token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-        {
-            return Err("Invalid Twitch OAuth token".into());
-        }
-        Ok(Self { username: None, oauth_token })
+    pub fn new(username: impl Into<String>, credential: impl Into<String>) -> Result<Self, String> {
+        let username = normalize_login(&username.into())
+            .ok_or_else(|| "Invalid Twitch username".to_owned())?;
+        let (oauth_token,device_id)=Self::parse_credential(credential.into())?;
+        Ok(Self { username: Some(username), oauth_token, device_id })
+    }
+
+    pub fn token_only(credential: impl Into<String>) -> Result<Self, String> {
+        let (oauth_token,device_id)=Self::parse_credential(credential.into())?;
+        Ok(Self { username: None, oauth_token, device_id })
     }
 }
 
@@ -104,6 +106,7 @@ pub struct MinerSnapshot {
     pub watch_signals: u64,
     pub points_gained: u64,
     pub bonuses_claimed: u64,
+    pub reference_client: bool,
     pub pubsub_connected: bool,
     pub pubsub_error: Option<String>,
     pub last_received: Option<Instant>,
@@ -120,6 +123,7 @@ impl Default for MinerSnapshot {
             watch_signals: 0,
             points_gained: 0,
             bonuses_claimed: 0,
+            reference_client: false,
             pubsub_connected: false,
             pubsub_error: None,
             last_received: None,

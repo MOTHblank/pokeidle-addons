@@ -1,8 +1,9 @@
+use crate::client::{ANDROID_TV_USER_AGENT, LINUX_FIREFOX_USER_AGENT};
 use crate::gql::PlaybackAccess;
 use base64::Engine as _;
 use reqwest::blocking::Client;
 use reqwest::Url;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -15,20 +16,40 @@ pub(crate) struct WatchClient {
     client: Client,
     spade_url: Option<Url>,
     playlist_urls: HashMap<String, Url>,
+    session_cookie: Option<String>,
 }
 
 impl WatchClient {
     pub(crate) fn new() -> Result<Self, String> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:145.0) Gecko/20100101 Firefox/145.0")
+            .timeout(Duration::from_secs(30))
+            .user_agent(ANDROID_TV_USER_AGENT)
             .build()
             .map_err(|_| "Could not create Twitch watch client".to_owned())?;
         Ok(Self {
             client,
             spade_url: None,
             playlist_urls: HashMap::new(),
+            session_cookie: None,
         })
+    }
+
+    pub(crate) fn set_session(&mut self,oauth_token:&str,user_id:&str) {
+        self.session_cookie=if oauth_token.is_empty() {
+            None
+        } else if user_id.is_empty() {
+            Some(format!("auth-token={oauth_token}"))
+        } else {
+            Some(format!("auth-token={oauth_token}; persistent={user_id}"))
+        };
+    }
+
+    fn with_cookie(&self,request:reqwest::blocking::RequestBuilder)
+        ->reqwest::blocking::RequestBuilder {
+        match self.session_cookie.as_deref() {
+            Some(cookie)=>request.header("Cookie",cookie),
+            None=>request,
+        }
     }
 
     /// Match the reference miner's lightweight viewing behavior: touch the
@@ -40,6 +61,8 @@ impl WatchClient {
         channel_id: &str,
         broadcast_id: &str,
         user_id: &str,
+        game_id: Option<&str>,
+        game_name: Option<&str>,
         playback: F,
     ) -> Result<WatchAck, String>
     where
@@ -50,27 +73,31 @@ impl WatchClient {
         let spade_url = match self.spade_url.clone() {
             Some(url) => url,
             None => {
-                let url = self.resolve_spade_url(login).or_else(|_| {
-                    Url::parse("https://spade.twitch.tv/track")
-                        .map_err(|_| "Could not resolve Twitch watch endpoint".to_owned())
-                })?;
+                let url = self.resolve_spade_url(login)?;
                 self.spade_url = Some(url.clone());
                 url
             }
         };
+        let mut properties=json!({
+            "channel_id": channel_id,
+            "broadcast_id": broadcast_id,
+            "user_id": user_id,
+            "player": "site",
+            "live": true,
+            "channel": login
+        });
+        if let Some(game_name)=game_name.filter(|value|!value.is_empty()) {
+            properties["game"]=Value::String(game_name.to_owned());
+        }
+        if let Some(game_id)=game_id.filter(|value|!value.is_empty()) {
+            properties["game_id"]=Value::String(game_id.to_owned());
+        }
         let body = serde_json::to_vec(&[json!({
             "event": "minute-watched",
-            "properties": {
-                "channel_id": channel_id,
-                "broadcast_id": broadcast_id,
-                "user_id": user_id,
-                "player": "site",
-                "live": true,
-                "channel": login
-            }
+            "properties": properties
         })]).map_err(|_| "Could not encode Twitch watch event".to_owned())?;
         let data = base64::engine::general_purpose::STANDARD.encode(body);
-        let response = self.client.post(spade_url)
+        let response = self.with_cookie(self.client.post(spade_url))
             .form(&[("data", data)])
             .send()
             .map_err(|_| "Could not send Twitch watch event".to_owned())?;
@@ -116,14 +143,14 @@ impl WatchClient {
                 return Err(error);
             }
         };
-        for segment in segments.into_iter().take(32) {
+        for segment in segments {
             if !allowed_media_url(&segment) {
                 self.playlist_urls.remove(login);
                 return Err("Twitch returned an invalid media segment URL".into());
             }
-            let response=self.client.head(segment).send()
+            let response=self.client.head(segment).timeout(Duration::from_secs(10)).send()
                 .map_err(|_|"Could not touch Twitch media segment".to_owned())?;
-            if !response.status().is_success() {
+            if response.status().as_u16()!=200 {
                 self.playlist_urls.remove(login);
                 return Err(format!(
                     "Twitch media segment returned HTTP {}",
@@ -135,9 +162,12 @@ impl WatchClient {
     }
 
     fn read_playlist(&self,address:&Url)->Result<Vec<Url>,String> {
-        let response=self.client.get(address.clone()).send()
+        let response=self.client.get(address.clone())
+            .timeout(Duration::from_secs(10))
+            .header("Connection","close")
+            .send()
             .map_err(|_|"Could not load Twitch stream playlist".to_owned())?;
-        if !response.status().is_success() {
+        if response.status().as_u16()!=200 {
             return Err(format!(
                 "Twitch stream playlist returned HTTP {}",
                 response.status().as_u16()
@@ -149,7 +179,8 @@ impl WatchClient {
     }
 
     fn resolve_spade_url(&self, login: &str) -> Result<Url, String> {
-        let page = self.client.get(format!("https://www.twitch.tv/{login}"))
+        let page = self.with_cookie(self.client.get(format!("https://www.twitch.tv/{login}")))
+            .header("User-Agent",LINUX_FIREFOX_USER_AGENT)
             .send()
             .map_err(|_| "Could not load Twitch channel page".to_owned())?
             .text()
@@ -166,6 +197,7 @@ impl WatchClient {
             return Err("Twitch settings script URL was rejected".into());
         }
         let script = self.client.get(settings_url)
+            .header("User-Agent",LINUX_FIREFOX_USER_AGENT)
             .send()
             .map_err(|_| "Could not load Twitch settings".to_owned())?
             .text()

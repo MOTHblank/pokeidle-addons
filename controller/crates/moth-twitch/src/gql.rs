@@ -1,9 +1,15 @@
+use crate::client::{
+    extract_twilight_build_id, random_hex, random_string, ANDROID_TV_USER_AGENT,
+    DEFAULT_CLIENT_VERSION, REFERENCE_CLIENT_ID,
+};
 use crate::Credentials;
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use std::fmt;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+const TWITCH_URL: &str = "https://www.twitch.tv";
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const USER_ID_HASH: &str = "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca";
@@ -13,6 +19,7 @@ const CLAIM_POINTS_HASH: &str = "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af22939
 const REWARD_LIST_HASH: &str = "0b1471876d7647993731b9e3c6a13bf304c67fb31d07f06a945d42286ee377c4";
 const STREAM_INFO_HASH: &str = "e785b65ff71ad7b363b34878335f27dd9372869ad0c5740a130b9268bcdbe7e7";
 const STREAM_LIVE_HASH: &str = "04e46329a6786ff3a81c01c50bfa5d725902507a0deb83b0edbf7abe7a3716ea";
+const CLIENT_VERSION_TTL: Duration = Duration::from_secs(10 * 60 * 60);
 
 #[derive(Debug)]
 pub(crate) enum GqlError {
@@ -59,6 +66,8 @@ pub(crate) struct PlaybackAccess {
 pub(crate) struct StreamInfo {
     pub(crate) broadcast_id: String,
     pub(crate) started_at: String,
+    pub(crate) game_id: Option<String>,
+    pub(crate) game_name: Option<String>,
 }
 
 pub(crate) struct LiveStream {
@@ -69,6 +78,7 @@ pub(crate) struct StreakMilestone {
     pub(crate) length: Option<u32>,
     pub(crate) achieved_at: Option<String>,
 }
+
 impl StreakMilestone {
     fn from_response(response:&Value)->Self {
         let milestone=response.pointer("/data/channel/self/watchStreakMilestone/watchStreakMilestone");
@@ -83,28 +93,50 @@ impl StreakMilestone {
     }
 }
 
+struct ClientVersionState {
+    value: String,
+    fetched: Option<Instant>,
+}
+
 pub(crate) struct TwitchGql {
     client: Client,
     credentials: Credentials,
     client_id: Option<String>,
+    user_id: Option<String>,
+    device_id: String,
+    client_session: String,
+    client_version: Mutex<ClientVersionState>,
 }
 
 impl TwitchGql {
     pub(crate) fn new(credentials: Credentials) -> Result<Self, String> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(15))
-            .user_agent("Moth-Controller/0.1 Twitch")
+            .timeout(Duration::from_secs(30))
+            .user_agent(ANDROID_TV_USER_AGENT)
             .build()
             .map_err(|_| "Could not create Twitch HTTP client".to_owned())?;
-        Ok(Self { client, credentials, client_id: None })
+        Ok(Self {
+            client,
+            device_id: credentials.device_id.clone()
+                .unwrap_or_else(||random_string(32)),
+            credentials,
+            client_id: None,
+            user_id: None,
+            client_session: random_hex(8),
+            client_version: Mutex::new(ClientVersionState {
+                value: DEFAULT_CLIENT_VERSION.to_owned(),
+                fetched: None,
+            }),
+        })
     }
 
-    /// Twitch's token validation endpoint tells us which public client issued
-    /// the browser token. Reusing that client id avoids coupling Moth to a
-    /// hard-coded website/TV application identity.
+    /// Validate the token for viewer identity. Reference-device tokens report
+    /// REFERENCE_CLIENT_ID here; imported browser tokens keep their issuing
+    /// client id so old saved sessions remain usable.
     pub(crate) fn authenticate(&mut self) -> Result<ViewerIdentity, GqlError> {
         let response = self.client.get(VALIDATE_URL)
             .header("Authorization", format!("OAuth {}", self.credentials.oauth_token))
+            .header("User-Agent", ANDROID_TV_USER_AGENT)
             .send()
             .map_err(|_| GqlError::Transport("Could not validate Twitch sign-in".into()))?;
         if response.status().as_u16() == 401 {
@@ -126,11 +158,51 @@ impl TwitchGql {
         let user_id = value.get("user_id").and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| GqlError::Protocol("Twitch sign-in did not include a user id".into()))?;
-        self.client_id = Some(client_id.to_owned());
+        self.client_id = Some(if self.credentials.device_id.is_some() {
+            REFERENCE_CLIENT_ID.to_owned()
+        } else {
+            client_id.to_owned()
+        });
+        self.user_id = Some(user_id.to_owned());
         Ok(ViewerIdentity {
             login: login.to_ascii_lowercase(),
             user_id: user_id.to_owned(),
         })
+    }
+
+    fn client_version(&self) -> String {
+        let now=Instant::now();
+        let fallback = match self.client_version.lock() {
+            Ok(mut state) => {
+                if state.fetched.is_some_and(|at|
+                    now.saturating_duration_since(at)<CLIENT_VERSION_TTL) {
+                    return state.value.clone();
+                }
+                state.fetched=Some(now);
+                state.value.clone()
+            }
+            Err(_) => DEFAULT_CLIENT_VERSION.to_owned(),
+        };
+        let updated=self.client.get(TWITCH_URL)
+            .header("Cookie",self.session_cookie())
+            .send().ok()
+            .filter(|response|response.status().is_success())
+            .and_then(|response|response.text().ok())
+            .and_then(|page|extract_twilight_build_id(&page));
+        let Some(updated)=updated else {return fallback};
+        if let Ok(mut state)=self.client_version.lock() {
+            state.value=updated.clone();
+        }
+        updated
+    }
+
+    fn session_cookie(&self)->String {
+        match self.user_id.as_deref() {
+            Some(user_id)=>format!(
+                "auth-token={}; persistent={user_id}",self.credentials.oauth_token
+            ),
+            None=>format!("auth-token={}",self.credentials.oauth_token),
+        }
     }
 
     fn post(&self, operation: &str, hash: &str, variables: Value) -> Result<Value, GqlError> {
@@ -145,6 +217,11 @@ impl TwitchGql {
         let response = self.client.post(GQL_URL)
             .header("Authorization", format!("OAuth {}", self.credentials.oauth_token))
             .header("Client-Id", client_id)
+            .header("Client-Session-Id", &self.client_session)
+            .header("Client-Version", self.client_version())
+            .header("User-Agent", ANDROID_TV_USER_AGENT)
+            .header("X-Device-Id", &self.device_id)
+            .header("Cookie", self.session_cookie())
             .json(&body)
             .send()
             .map_err(|_| GqlError::Transport("Could not reach Twitch".into()))?;
@@ -188,6 +265,10 @@ impl TwitchGql {
         &self.credentials.oauth_token
     }
 
+    pub(crate) fn reference_client(&self)->bool {
+        self.client_id.as_deref()==Some(REFERENCE_CLIENT_ID)
+    }
+
     pub(crate) fn playback_access(&self, login:&str) -> Result<PlaybackAccess,GqlError> {
         let value=self.post(
             "PlaybackAccessToken",
@@ -220,7 +301,7 @@ impl TwitchGql {
         let value = self.post(
             "GetIDFromLogin",
             USER_ID_HASH,
-            json!({ "login": login }),
+            json!({ "login": login.to_ascii_lowercase() }),
         )?;
         value.pointer("/data/user/id").and_then(Value::as_str)
             .filter(|id| !id.is_empty())
@@ -274,10 +355,18 @@ impl TwitchGql {
             STREAM_INFO_HASH,
             json!({ "channel": login }),
         )?;
-        let Some(stream) = value.pointer("/data/user/stream") else {
-            return Ok(None);
+        let Some(user)=value.pointer("/data/user") else {
+            return Err(GqlError::Protocol(format!(
+                "Twitch stream user data is unavailable for {login}"
+            )));
         };
-        if stream.is_null() {
+        if user.is_null() {
+            return Err(GqlError::Protocol(format!(
+                "Twitch channel {login} was not found"
+            )));
+        }
+        let Some(stream)=user.get("stream") else {return Ok(None)};
+        if stream.is_null() || user.get("broadcastSettings").is_none_or(Value::is_null) {
             return Ok(None);
         }
         let broadcast_id = stream.get("id").and_then(Value::as_str)
@@ -290,9 +379,14 @@ impl TwitchGql {
             .ok_or_else(|| GqlError::Protocol(format!(
                 "Twitch stream start time unavailable for {login}"
             )))?;
+        let game=user.pointer("/broadcastSettings/game");
         Ok(Some(StreamInfo {
             broadcast_id: broadcast_id.to_owned(),
             started_at: started_at.to_owned(),
+            game_id: game.and_then(|game|game.get("id")).and_then(Value::as_str)
+                .filter(|value|!value.is_empty()).map(str::to_owned),
+            game_name: game.and_then(|game|game.get("name")).and_then(Value::as_str)
+                .filter(|value|!value.is_empty()).map(str::to_owned),
         }))
     }
 
@@ -334,6 +428,7 @@ impl TwitchGql {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn graphql_rejection_message_identifies_operation() {
         let message=format!("Twitch rejected GraphQL {}: {}",
@@ -355,5 +450,10 @@ mod tests {
         let absent=StreakMilestone::from_response(&json!({"data":{"channel":{"self":{}}}}));
         assert_eq!(absent.length,None);
         assert_eq!(absent.achieved_at,None);
+    }
+
+    #[test]
+    fn reference_client_id_matches_reference_miner() {
+        assert_eq!(REFERENCE_CLIENT_ID,"ue6666qo983tsx6so1t0vnawi233wa");
     }
 }

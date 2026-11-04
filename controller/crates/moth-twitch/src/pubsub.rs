@@ -1,3 +1,4 @@
+use crate::client::{random_string,random_u64_inclusive};
 use serde_json::{json, Value};
 use std::io::ErrorKind;
 use std::net::TcpStream;
@@ -10,7 +11,6 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Error as WsError, Message, WebSocket};
 
 const PUBSUB_URL: &str = "wss://pubsub-edge.twitch.tv/v1";
-const PING_INTERVAL: Duration = Duration::from_secs(240);
 const PONG_DEADLINE: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug)]
@@ -40,18 +40,26 @@ pub(crate) fn spawn(
         .name(format!("moth-twitch-pubsub-{user_id}"))
         .spawn(move || {
             while !stop.load(Ordering::Acquire) {
+                let mut delay=10u64;
                 if let Err(error) = run_connection(
                     &oauth_token, &user_id, &stop, &event_tx, &wake
                 ) {
+                    if error=="Twitch PubSub requested reconnect" {
+                        delay=60;
+                    }
                     let _ = event_tx.send(PubSubEvent::Warning(error));
                     let _ = wake.try_send(());
                 }
-                for _ in 0..10 {
+                for _ in 0..delay {
                     if stop.load(Ordering::Acquire) { return; }
                     thread::sleep(Duration::from_secs(1));
                 }
             }
         });
+}
+
+fn random_ping_interval()->Duration {
+    Duration::from_secs(random_u64_inclusive(25,30))
 }
 
 fn configure_timeout(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
@@ -82,7 +90,7 @@ fn run_connection(
     let topic = format!("community-points-user-v1.{user_id}");
     let listen = json!({
         "type": "LISTEN",
-        "nonce": format!("moth-{user_id}"),
+        "nonce": random_string(16),
         "data": {
             "topics": [topic],
             "auth_token": oauth_token,
@@ -94,12 +102,14 @@ fn run_connection(
     let mut subscribed=false;
     let mut last_pong = Instant::now();
     let mut last_ping = Instant::now();
+    let mut ping_interval=random_ping_interval();
 
     while !stop.load(Ordering::Acquire) {
-        if last_ping.elapsed() >= PING_INTERVAL {
+        if last_ping.elapsed() >= ping_interval {
             socket.send(Message::text(r#"{"type":"PING"}"#))
                 .map_err(|error| format!("Twitch PubSub ping failed: {error}"))?;
             last_ping = Instant::now();
+            ping_interval=random_ping_interval();
         }
         if last_pong.elapsed() >= PONG_DEADLINE {
             return Err("Twitch PubSub heartbeat expired".into());

@@ -194,6 +194,8 @@ struct ChannelCache {
     last_claim_id: Option<String>,
     broadcast_id: Option<String>,
     stream_started: Option<String>,
+    game_id: Option<String>,
+    game_name: Option<String>,
     live: Option<bool>,
     last_live_checked: Option<Instant>,
     stream_checked: Option<Instant>,
@@ -238,6 +240,8 @@ fn effective_live_channels(
 fn clear_stream_state(channel:&mut ChannelCache) {
     channel.broadcast_id=None;
     channel.stream_started=None;
+    channel.game_id=None;
+    channel.game_name=None;
     channel.stream_checked=None;
     channel.streak_confirmed=None;
     channel.streak_checked=None;
@@ -502,6 +506,10 @@ fn run(
         if identity.is_none() {
             match gql.authenticate() {
                 Ok(viewer) => {
+                    watch.set_session(gql.oauth_token(),&viewer.user_id);
+                    if let Ok(mut current)=snapshot.lock() {
+                        current.reference_client=gql.reference_client();
+                    }
                     identity = Some(viewer);
                     set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
                     push_event(&events, MinerEvent::Connected);
@@ -800,7 +808,11 @@ fn poll_channels(
             channel.stream_checked=Some(Instant::now());
             match gql.stream_info(login) {
                 Ok(Some(stream)) => {
-                    if channel.broadcast_id.as_deref()!=Some(stream.broadcast_id.as_str()) {
+                    let fresh_broadcast=
+                        channel.broadcast_id.as_deref()!=Some(stream.broadcast_id.as_str());
+                    channel.game_id=stream.game_id;
+                    channel.game_name=stream.game_name;
+                    if fresh_broadcast {
                         channel.broadcast_id=Some(stream.broadcast_id);
                         channel.stream_started=Some(stream.started_at);
                         channel.streak_confirmed=None;
@@ -872,6 +884,7 @@ fn poll_channels(
         channel.last_watch_attempt=Some(Instant::now());
         match watch.send_minute_watched(
             &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id,
+            channel.game_id.as_deref(),channel.game_name.as_deref(),
             || gql.playback_access(&slot.login).map_err(|error|error.user_message())
         ) {
             Ok(ack)=>{
