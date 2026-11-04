@@ -20,9 +20,15 @@ pub(crate) struct PerformanceSample {
     /// Monotonic timestamp, preserving real gaps and pause intervals.
     pub(crate) at: Option<Instant>,
     /// CPU usage relative to one logical CPU: multi-threaded work can exceed 100%.
+    /// Kept for thread correlation and backwards-compatible exports.
     pub(crate) cpu_percent: Option<f64>,
+    /// Process CPU normalized across the machine's logical processors.
+    /// This is the closest inexpensive analogue to Task Manager's process scale.
+    pub(crate) cpu_system_percent: Option<f64>,
     pub(crate) resident_bytes: Option<u64>,
     pub(crate) peak_bytes: Option<u64>,
+    /// Windows private commit charge. This is not private working set.
+    pub(crate) private_bytes: Option<u64>,
     pub(crate) threads: Option<u32>,
 }
 
@@ -82,6 +88,7 @@ struct ProcessCounters {
     cpu_ns: u128,
     resident_bytes: Option<u64>,
     peak_bytes: Option<u64>,
+    private_bytes: Option<u64>,
     threads: Option<u32>,
 }
 
@@ -125,6 +132,30 @@ fn cpu_usage_percent(previous_ns: u128, current_ns: u128, elapsed: Duration) -> 
     let elapsed_ns = elapsed.as_nanos();
     if elapsed_ns == 0 || current_ns < previous_ns { return None; }
     Some((current_ns - previous_ns) as f64 * 100.0 / elapsed_ns as f64)
+}
+
+#[cfg(windows)]
+fn logical_processor_count() -> u32 {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetActiveProcessorCount(group_number: u16) -> u32;
+    }
+    const ALL_PROCESSOR_GROUPS: u16 = 0xffff;
+    let count = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+    if count > 0 { count } else {
+        std::thread::available_parallelism()
+            .map(|value| value.get() as u32).unwrap_or(1).max(1)
+    }
+}
+
+#[cfg(not(windows))]
+fn logical_processor_count() -> u32 {
+    std::thread::available_parallelism()
+        .map(|value| value.get() as u32).unwrap_or(1).max(1)
+}
+
+fn system_cpu_percent(one_core_percent: Option<f64>) -> Option<f64> {
+    one_core_percent.map(|percent| percent / f64::from(logical_processor_count().max(1)))
 }
 
 fn thread_sample_due(last: Option<Instant>, now: Instant) -> bool {
@@ -286,8 +317,10 @@ impl DiagnosticsSampler {
         let point = PerformanceSample {
             at: Some(now),
             cpu_percent,
+            cpu_system_percent: system_cpu_percent(cpu_percent),
             resident_bytes: counters.resident_bytes,
             peak_bytes: counters.peak_bytes,
+            private_bytes: counters.private_bytes,
             threads: self.last_thread_count,
         };
         if let Some(rss) = counters.resident_bytes {
@@ -326,24 +359,30 @@ impl DiagnosticsSampler {
             "recording": self.recording,
             "thread_sampling_interval_ms": self.thread_interval().as_millis(),
             "cpu_units": "percent_of_one_logical_cpu",
+            "cpu_system_units": "percent_of_total_logical_processor_capacity",
+            "logical_processors": logical_processor_count(),
             "memory_baseline_bytes": self.resident_baseline,
             "detailed_thread_inspection": self.inspect_threads,
             "thread_cpu_hotspots": self.hot_threads.iter().map(|thread| serde_json::json!({
                 "thread_id": thread.id,
+                "thread_name": thread.name.as_str(),
                 "cpu_percent": thread.cpu_percent,
             })).collect::<Vec<_>>(),
             "thread_cpu_timeline": self.thread_history.iter().map(|point| serde_json::json!({
                 "age_ms": now.saturating_duration_since(point.at).as_millis(),
                 "top": point.hottest.iter().map(|thread| serde_json::json!({
                     "thread_id": thread.id,
+                    "thread_name": thread.name.as_str(),
                     "cpu_percent": thread.cpu_percent,
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "process_samples": self.history.iter().map(|point| serde_json::json!({
                 "age_ms": point.at.map(|at| now.saturating_duration_since(at).as_millis()),
                 "cpu_percent": point.cpu_percent,
+                "cpu_system_percent": point.cpu_system_percent,
                 "resident_bytes": point.resident_bytes,
                 "peak_bytes": point.peak_bytes,
+                "private_bytes": point.private_bytes,
                 "threads": point.threads,
             })).collect::<Vec<_>>(),
             "ui": {
@@ -445,6 +484,7 @@ fn read_process_counters(include_threads: bool) -> Option<ProcessCounters> {
         cpu_ns,
         resident_bytes: value("VmRSS:").and_then(|kib| kib.checked_mul(1024)),
         peak_bytes: value("VmHWM:").and_then(|kib| kib.checked_mul(1024)),
+        private_bytes: None,
         threads: include_threads.then(|| value("Threads:")
             .and_then(|n| u32::try_from(n).ok())).flatten(),
     })
@@ -475,6 +515,7 @@ fn read_process_counters(include_threads: bool) -> Option<ProcessCounters> {
         quota_non_paged_pool_usage: usize,
         pagefile_usage: usize,
         peak_pagefile_usage: usize,
+        private_usage: usize,
     }
     #[repr(C)]
     #[derive(Default)]
@@ -539,6 +580,7 @@ fn read_process_counters(include_threads: bool) -> Option<ProcessCounters> {
         cpu_ns: kernel.nanos().saturating_add(user.nanos()),
         resident_bytes: memory_ok.then_some(memory.working_set_size as u64),
         peak_bytes: memory_ok.then_some(memory.peak_working_set_size as u64),
+        private_bytes: memory_ok.then_some(memory.private_usage as u64),
         threads: thread_count,
     })
 }
@@ -572,6 +614,13 @@ mod tests {
     }
 
     #[test]
+    fn system_cpu_rate_is_normalized_by_logical_processors() {
+        let count = f64::from(logical_processor_count().max(1));
+        assert_eq!(system_cpu_percent(Some(100.0)), Some(100.0 / count));
+        assert_eq!(system_cpu_percent(None), None);
+    }
+
+    #[test]
     fn pause_does_not_sample_or_record_frames() {
         let mut sampler = DiagnosticsSampler { paused: true, ..DiagnosticsSampler::default() };
         assert!(!sampler.sample_if_due());
@@ -589,7 +638,8 @@ mod tests {
             network: Some(HlsNetworkSample::default()),
             last_read: Some(Instant::now()),
             previous: Some((Instant::now(), ProcessCounters {
-                cpu_ns: 100, resident_bytes: None, peak_bytes: None, threads: None,
+                cpu_ns: 100, resident_bytes: None, peak_bytes: None,
+                private_bytes: None, threads: None,
             })),
             ..DiagnosticsSampler::default()
         };

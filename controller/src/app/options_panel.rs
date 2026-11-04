@@ -160,7 +160,7 @@ fn performance(app: &mut ControllerApp, ui: &mut egui::Ui) {
             app.workspace.panel_tab = PanelTab::Diagnostics;
         }
     });
-    description(ui, "Live measurements stop off-page; explicit recordings continue until stopped.");
+    description(ui, "Opening Diagnostics does not start sampling. Enable live sampling there; leaving the page turns it off. Explicit recordings continue until stopped.");
 }
 
 fn notifications(app: &mut ControllerApp, ui: &mut egui::Ui) {
@@ -323,7 +323,8 @@ fn export_support_report(app: &ControllerApp) -> Result<std::path::PathBuf, Stri
         "activeGameSessions": running_sessions,
         "firefoxProcesses": firefox_processes,
         "kickAccountMonitors": kick_accounts,
-        "diagnosticsCurrentlyCollecting": app.diagnostics.is_some(),
+        "diagnosticsCurrentlyCollecting": app.diagnostics_enabled &&
+            app.diagnostics.as_ref().is_some_and(|sampler| !sampler.paused),
         "developerRecordingActive": app.recording.as_ref()
             .is_some_and(RecordingSession::is_running),
         "backgroundRefreshUnfocused": app.ui_options.reduce_updates_unfocused,

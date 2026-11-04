@@ -19,6 +19,20 @@ pub(super) fn draw_header_actions(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ).on_hover_text(tr("Stop all running accounts")).clicked() {
         app.stop_all();
     }
+    if app.recording.as_ref().is_some_and(RecordingSession::is_running)
+        && ui.add(
+            egui::Button::new(RichText::new(tr("Stop diagnostics")).strong().size(11.0))
+                .fill(WARN.linear_multiply(0.14))
+                .stroke(Stroke::new(1.0, WARN.linear_multiply(0.55)))
+                .corner_radius(8.0),
+        ).on_hover_text(tr("Stop the active developer diagnostics recording and keep its capture"))
+        .clicked()
+    {
+        if let Some(recording) = app.recording.as_mut() { recording.stop(); }
+        app.diagnostics_enabled = false;
+        app.diagnostics = None;
+        app.set_status(tr("Diagnostics recording stopped").to_owned(), false);
+    }
     #[cfg(windows)]
     if ui.add(
         egui::Button::new(RichText::new(tr("To tray")).size(11.0))
