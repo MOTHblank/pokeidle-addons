@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(reference.species[&3718].base[0],216.0);
     }
     #[test]
-    fn upstream_v1357_3_forms_map_to_base_dex_and_exclude_special_captures() {
+    fn upstream_v1398_1_forms_map_to_base_dex_and_exclude_special_captures() {
         let mut form_dex=BTreeMap::<u64,u64>::new();
         for line in include_str!("../assets/visual/upstream-form-base.tsv").lines() {
             let Some((id,dex))=line.split_once('\t') else{continue};
@@ -656,15 +656,17 @@ mod tests {
                 assert!(form_dex.insert(id,dex).is_none(),"Duplicate form {id}");
             }
         }
-        assert_eq!(form_dex.len(),97);
+        assert_eq!(form_dex.len(),104);
         for (id,dex) in [
             (4053,53),(8413,413),(9413,413),(8483,483),(8484,484),
             (8492,492),(8555,555),(9555,555),(9646,646),
+            (8487,487),(8648,648),(8898,898),(9898,898),
+            (9017,1017),(8017,1017),(12017,1017),
         ] {
             assert_eq!(form_dex.get(&id),Some(&dex),"Form {id} must use its national dex");
         }
         let mut reference=Reference::default();
-        for id in [8483,8484,8492,9646] {
+        for id in [8483,8484,8492,9646,8487,8648,8898,9898,9017,8017,12017] {
             assert!(special_capture_species(id),"Legendary/mythical form {id}");
             reference.capture_stages.insert(id,100);
             assert_eq!(capture_inputs(&reference,id),(None,None));
