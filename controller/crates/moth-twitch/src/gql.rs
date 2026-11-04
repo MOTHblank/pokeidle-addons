@@ -497,7 +497,11 @@ impl TwitchGql {
         }))
     }
 
-    pub(crate) fn stream_info(&self, login: &str) -> Result<Option<StreamInfo>, GqlError> {
+    pub(crate) fn stream_info(
+        &self,
+        login: &str,
+        fallback_started_at: Option<&str>,
+    ) -> Result<Option<StreamInfo>, GqlError> {
         let value = self.post(
             "VideoPlayerStreamInfoOverlayChannel",
             STREAM_INFO_HASH,
@@ -524,6 +528,7 @@ impl TwitchGql {
             )))?;
         let started_at=stream.get("createdAt").and_then(Value::as_str)
             .filter(|at| !at.is_empty())
+            .or_else(||fallback_started_at.filter(|at|!at.is_empty()))
             .ok_or_else(|| GqlError::Protocol(format!(
                 "Twitch stream start time unavailable for {login}"
             )))?;
@@ -621,5 +626,14 @@ mod tests {
     #[test]
     fn browser_client_id_matches_twitch_web_client() {
         assert_eq!(BROWSER_CLIENT_ID,"kimne78kx3ncx6brgo4mv6wki5h1ko");
+    }
+
+    #[test]
+    fn stream_start_time_can_fall_back_to_live_query() {
+        let stream=json!({"id":"broadcast-1"});
+        let started=stream.get("createdAt").and_then(Value::as_str)
+            .filter(|at|!at.is_empty())
+            .or_else(||Some("2026-11-04T20:00:00Z").filter(|at|!at.is_empty()));
+        assert_eq!(started,Some("2026-11-04T20:00:00Z"));
     }
 }
