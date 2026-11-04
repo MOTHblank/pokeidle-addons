@@ -198,13 +198,9 @@ impl ControllerApp {
                     self.runtimes[index].game.native.as_ref(),token.as_deref()
                 ) {
                     match game.refresh_twitch_token(token) {
-                        Ok(())=>{
-                            game.set_twitch_favorites(
-                                self.workspace.twitch_favorites[index].clone());
-                            self.set_status(format!(
-                                "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
-                            ),false)
-                        },
+                        Ok(())=>self.set_status(format!(
+                            "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
+                        ),false),
                         Err(error)=>self.set_status(format!(
                             "{account_name}: Twitch login saved but miner refresh failed: {error}"
                         ),true),
