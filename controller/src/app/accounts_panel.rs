@@ -75,7 +75,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
 
     ui.set_width(width);
     egui::Frame::new().fill(PANEL_ALT)
-        .stroke(Stroke::new(1.0, if game_online && twitch_online { GOOD } else { BORDER }))
+        .stroke(Stroke::new(1.0, if game_online { GOOD } else { BORDER }))
         .corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
         let mut changed = false;
         ui.horizontal(|ui| {
@@ -129,22 +129,27 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             else if connecting { tr("Connecting") }
             else if running { tr("Waiting for login") }
             else { tr("Not signed in") };
-        let twitch_label = if twitch_online { tr("Connected") }
+        let twitch_label = if twitch_online { tr("Miner active") }
             else if let Some(state) = twitch_phase.as_ref() {
-                if state.phase == "NeedsLogin" { tr("Sign-in required") }
-                else if state.phase == "Reconnecting" { tr("Reconnecting") }
-                else if connecting { tr("Connecting") }
+                if state.phase == "NeedsLogin" { tr("Optional sign-in") }
+                else if state.phase == "Reconnecting" { tr("Miner reconnecting") }
+                else if state.phase == "Connecting" { tr("Connecting") }
                 else { tr(&state.phase) }
-            } else if running { tr("Waiting for Twitch sign-in") }
-            else { tr("Not verified") };
+            } else { tr("Inactive") };
         ui.horizontal_wrapped(|ui| {
             status_chip(ui, "Twitch", twitch_label, twitch_online);
             status_chip(ui, "PokéIdle", game_label, game_online);
         });
         if let Some(state) = twitch_phase.as_ref() {
             if twitch_online {
-                ui.label(RichText::new(tr_dynamic(format!("{} / {} Twitch channels",
-                    state.joined, state.desired))).size(10.0).color(DIM));
+                let summary = if pt_br() {
+                    format!("{} / {} canais · +{} pontos · {} bônus",
+                        state.joined, state.desired, state.points_gained, state.bonuses_claimed)
+                } else {
+                    format!("{} / {} channels · +{} points · {} bonuses",
+                        state.joined, state.desired, state.points_gained, state.bonuses_claimed)
+                };
+                ui.label(RichText::new(summary).size(10.0).color(DIM));
             }
             if let Some(error) = &state.error {
                 ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
@@ -176,7 +181,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        // Keep game/Twitch profile cards compact; Kick has its own workspace.
+        // Keep the game profile card compact; Kick has its own workspace.
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let kick_running = app.runtimes[index].kick.kick_monitor.is_some();
@@ -206,21 +211,21 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             status_chip(ui, "Firefox profile",
                 if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
                 setup.profile_ready);
-            status_chip(ui, "Twitch login", twitch_label, twitch_online);
+            status_chip(ui, tr("Twitch miner"), twitch_label, twitch_online);
             status_chip(ui, "PokéIdle login", game_label, game_online);
             ui.add_space(7.0);
-            if game_online && twitch_online {
+            if game_online {
                 ui.label(RichText::new(tr(
-                    "Both logins are connected. Future starts can reuse your saved login."
+                    "PokéIdle is connected. Twitch mining is optional and never blocks this account."
                 )).size(10.0).color(GOOD));
             } else {
                 ui.label(RichText::new(tr(
-                    "Use the buttons below to open Firefox without monitoring. After signing in, close Firefox and start the account to verify both logins."
+                    "Use the PokéIdle sign-in button below, then close Firefox and start the account."
                 )).size(10.0).color(MUTED));
             }
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                if ui.button(tr("Twitch sign-in (unmonitored)")).clicked() {
+                if ui.button(tr("Twitch sign-in (optional)")).clicked() {
                     app.profile_action(profile, ProfileAction::Twitch);
                 }
                 if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
