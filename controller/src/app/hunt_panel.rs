@@ -101,7 +101,7 @@ pub(super) fn draw_hunt_atlas_panel(app: &mut ControllerApp, ui: &mut egui::Ui) 
 
 fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     // Only load the independent public reference when this tab is actually
-    // opened; game socket, Twitch and normal dashboard stay extremely light.
+    // opened; game socket and normal dashboard stay extremely light.
     if app.hunt_reference.is_none() && app.hunt_reference_error.is_none() &&
         !app.hunt_reference_busy {
         app.hunt_reference_busy = true;
