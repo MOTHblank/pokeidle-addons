@@ -116,7 +116,7 @@ fn twitch_login_command(config: &Config) -> Command {
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-window")
-        .arg("https://www.twitch.tv/")
+        .arg("about:blank")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -124,8 +124,9 @@ fn twitch_login_command(config: &Config) -> Command {
 }
 
 /// One-time migration probe for profiles created before the native Twitch miner.
-/// Firefox opens headlessly with the exact account profile, exposes only the
-/// Twitch auth-token through BiDi, and is closed before native PokéIdle starts.
+/// Firefox opens headlessly on about:blank with the exact account profile,
+/// exposes only the Twitch auth-token through BiDi, and is closed before
+/// native PokéIdle starts. No Twitch page or stream is loaded.
 pub fn detect_existing_twitch_login(config: &Config) -> Result<Option<String>, String> {
     migrate_legacy_profile(config)?;
     if !config.profile_dir.is_dir() {
@@ -779,7 +780,8 @@ mod unmonitored_login_tests {
         assert!(args.contains(&format!("--remote-debugging-port={}", config.remote_debug_port)));
         assert!(args.contains(&"--profile".to_owned()));
         assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
-        assert!(args.contains(&"https://www.twitch.tv/".to_owned()));
+        assert!(args.contains(&"about:blank".to_owned()));
+        assert!(!args.iter().any(|arg| arg.contains("twitch.tv")));
         assert!(!args.iter().any(|arg| arg.contains("marionette")));
     }
 }
