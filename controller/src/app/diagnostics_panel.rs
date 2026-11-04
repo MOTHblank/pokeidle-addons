@@ -27,7 +27,7 @@ fn history_chart(
     unit: &str,
 ) {
     egui::Frame::new().fill(PANEL).stroke(egui::Stroke::new(1.0, BORDER))
-        .corner_radius(8.0).inner_margin(12).show(ui, |ui| {
+        .corner_radius(8.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.label(RichText::new(title).size(11.0).strong().color(TEXT));
             let values: Vec<f64> = samples.iter().filter_map(metric).collect();
             let peak = values.iter().copied().fold(0.0_f64, f64::max);
@@ -133,7 +133,7 @@ pub(super) fn draw_diagnostics_panel(
 
             egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
-                .inner_margin(14).show(ui, |ui| {
+                .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
                     ui.label(RichText::new(tr("Controller process"))
                         .size(13.0).strong().color(TEXT));
                     ui.add_space(7.0);
@@ -165,7 +165,7 @@ pub(super) fn draw_diagnostics_panel(
             ui.add_space(12.0);
             egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
-                .inner_margin(14).show(ui, |ui| {
+                .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
                     ui.label(RichText::new(tr("UI work")).size(13.0).strong().color(TEXT));
                     ui.horizontal_wrapped(|ui| {
                         runtime_chip(ui, tr("Last UI pass"),
@@ -186,7 +186,7 @@ pub(super) fn draw_diagnostics_panel(
             ui.add_space(12.0);
             egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
-                .inner_margin(14).show(ui, |ui| {
+                .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
                     ui.label(RichText::new(tr("Kick HLS network"))
                         .size(13.0).strong().color(TEXT));
                     ui.add_space(8.0);
