@@ -32,6 +32,7 @@ mod native_restock;
 mod native_twitch;
 mod native_tls;
 mod logging;
+mod diagnostics;
 mod update;
 
 fn main() {

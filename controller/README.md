@@ -11,6 +11,16 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
 - **Painel:** visão geral da atividade das contas e detalhes das sessões.
 - **Hunt Atlas:** análise e comparação de caçadas.
 - **Automações:** captura automática, reposição de itens e regras do mercado.
+- **Diagnósticos:** painel sob demanda com CPU (percentual de um núcleo lógico),
+  RAM residente/pico, contagem de threads, duração do trabalho da interface,
+  histórico de até dois minutos e tráfego HLS da Kick por conta.
+  A coleta acontece a cada dois segundos **somente** com a página de
+  Diagnósticos selecionada e a janela em foco. Ao trocar de página ou perder
+  o foco, o estado e o histórico são descartados; não há worker de coleta,
+  gravação em disco nem timer próprio fora da página. **Pausar medições** congela
+  a coleta; **Reiniciar medições** recomeça do zero. O uso de memória/CPU é do
+  processo Moth, sem incluir o Firefox. O tráfego exibido inclui apenas bytes
+  HLS da Kick já contabilizados, não todo o tráfego de rede do aplicativo.
 - **Abrir no Firefox:** abre o jogo no navegador para interação manual.
 
 ## Kick — tela dedicada em Contas
