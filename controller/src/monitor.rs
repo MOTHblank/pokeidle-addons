@@ -492,7 +492,6 @@ struct BrowserSession {
     tab_signature: Vec<(String, String)>,
     native_capture_installed: bool,
     native_reloaded: BTreeSet<String>,
-    native_twitch_auth_opened: bool,
     bridge_retry_after: Option<Instant>,
 }
 
@@ -1030,82 +1029,38 @@ struct Heartbeat {
     logged_in: bool,
 }
 
-/// Capture the authenticated Twitch popout IRC socket from the same Firefox
-/// BiDi session before closing Firefox. Twitch authentication is independent
-/// of the game's cookies; the page's browser automation observes PASS/NICK directly.
-/// Failure to capture is not interpreted as a valid unauthenticated session.
-fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
-    let tree_id = session.next_id;
+/// Read Twitch's existing auth-token cookie without opening a chat or stream.
+/// Missing Twitch authentication is normal: PokéIdle handoff must continue.
+fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Option<Value>, String> {
+    let id = session.next_id;
     session.next_id += 1;
-    let tree = send_and_wait(&mut session.socket, tree_id, json!({
-        "id": tree_id,
-        "method": "browsingContext.getTree",
-        "params": { "maxDepth": 1 }
+    let cookies = send_and_wait(&mut session.socket, id, json!({
+        "id": id,
+        "method": "storage.getCookies",
+        "params": {}
     }))?;
-    let mut contexts = Vec::new();
-    if let Some(nodes) = tree.get("result").and_then(|v| v.get("contexts")).and_then(Value::as_array) {
-        for node in nodes { collect_contexts(node, &mut contexts, 0); }
-    }
-    let mut saw_popout = false;
-    let mut reload_candidate = None;
-    for context in contexts.iter().filter(|candidate| {
-        candidate.url.starts_with("https://www.twitch.tv/popout/")
-            && candidate.url.contains("/chat")
-    }) {
-        saw_popout = true;
-        let id = session.next_id;
-        session.next_id += 1;
-        let result = send_and_wait(&mut session.socket, id, json!({
-            "id": id,
-            "method": "script.evaluate",
-            "params": {
-                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.twitch?.() || window.__mothTwitchNativeBootstrapV1?.snapshot?.() || null)",
-                "target": { "context": context.id },
-                "awaitPromise": false
-            }
-        }))?;
-        let Some(raw) = result.get("result").and_then(|v| v.get("result"))
-            .and_then(|v| v.get("value")).and_then(Value::as_str) else { continue; };
-        let Ok(bootstrap) = serde_json::from_str::<Value>(raw) else { continue; };
-        if !bootstrap.is_null() { return Ok(bootstrap); }
-        if !session.native_reloaded.contains(&context.id) {
-            reload_candidate = Some(context.id.clone());
+    let entries = cookies.get("result")
+        .and_then(|result| result.get("cookies"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Firefox could not inspect Twitch session cookies".to_owned())?;
+    for cookie in entries {
+        let name = cookie.get("name").and_then(Value::as_str).unwrap_or("");
+        let domain = cookie.get("domain").and_then(Value::as_str).unwrap_or("")
+            .trim_start_matches('.').to_ascii_lowercase();
+        if name != "auth-token" || (domain != "twitch.tv" && !domain.ends_with(".twitch.tv")) {
+            continue;
         }
-    }
-    if let Some(context_id) = reload_candidate {
-        return reload_native_context_once(session, &context_id);
-    }
-    if saw_popout {
-        Err("Twitch IRC authentication pending after one capture reload; reconnecting if needed".to_owned())
-    } else {
-        // All profiles can authenticate Twitch without a browser automation update.
-        // A single temporary Twitch chat is opened only if none exists.
-        // The BiDi preload observes its authenticated PASS/NICK handshake.
-        if session.native_twitch_auth_opened {
-            return Err("Twitch login has not produced an authenticated IRC connection yet".into());
+        let token = cookie.get("value").and_then(|value| {
+            value.as_str().or_else(|| value.get("value").and_then(Value::as_str))
+        }).unwrap_or("").trim();
+        if token.is_empty() || token.len() > 2048
+            || token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            continue;
         }
-        session.native_twitch_auth_opened = true;
-        let id = session.next_id;
-        session.next_id += 1;
-        let created = send_and_wait(&mut session.socket, id, json!({
-            "id": id, "method": "browsingContext.create",
-            "params": { "type": "tab" }
-        }))?;
-        let context = created.get("result").and_then(|v| v.get("context"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Firefox did not create a temporary Twitch login tab".to_owned())?;
-        let id = session.next_id;
-        session.next_id += 1;
-        send_and_wait(&mut session.socket, id, json!({
-            "id": id, "method": "browsingContext.navigate",
-            "params": {
-                "context": context,
-                "url": "https://www.twitch.tv/popout/twitch/chat?moth-generation=native-auth",
-                "wait": "none"
-            }
-        }))?;
-        Err("Opening one temporary Twitch authentication chat; Rust will take over after login".into())
+        return Ok(Some(json!({ "token": token })));
     }
+    Ok(None)
 }
 
 /// Capture only the bridge-confirmed socket's initial hello. The storage
@@ -1148,7 +1103,9 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         .and_then(|result| result.get("cookies"))
         .and_then(Value::as_array)
         .ok_or_else(|| "Firefox could not provide session cookies through BiDi".to_owned())?;
-    let twitch = read_twitch_bootstrap(session)?;
+    // Twitch is optional. A Twitch cookie lookup failure must never block a
+    // valid PokéIdle handoff or force a temporary chat tab to open.
+    let twitch = read_twitch_bootstrap(session).ok().flatten();
     // Migrate existing Auto Catch preferences without changing them. The
     // native engine must not silently enable ball spending when the browser
     // previous preferences can still be imported. Only settings, never login data.
@@ -1352,7 +1309,6 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         tab_signature: Vec::new(),
         native_capture_installed,
         native_reloaded: BTreeSet::new(),
-        native_twitch_auth_opened: false,
         bridge_retry_after: None,
     })
 }
