@@ -161,8 +161,8 @@ impl HuntNavigator {
         if arrived { self.cancel(); }
     }
     /// The same server-confirmed opening used by Hunt Atlas destination
-    /// changes. Boss entry borrows this gate instead of detouring through
-    /// the Pokémon Center.
+    /// changes. Boss travel uses it for the Center leg, then boss entry is
+    /// immediate from the confirmed Center state.
     pub fn switch_open(&self, view: &HuntView, now: Instant) -> bool {
         if view.in_center || view.hunt_slug.is_none() { return true; }
         let (entry, combat) = self.gate.remaining(now);
