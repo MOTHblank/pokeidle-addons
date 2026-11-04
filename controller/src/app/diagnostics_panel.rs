@@ -191,6 +191,8 @@ pub(super) fn draw_diagnostics_panel(
                                 market_pending: snapshot.market_pending,
                                 restock_pending: snapshot.restock_pending,
                             });
+                        } else {
+                            operational.game_busy += 1;
                         }
                     }
                     if let Some(kick) = runtime.kick.kick_monitor.as_ref() {
@@ -204,6 +206,8 @@ pub(super) fn draw_diagnostics_panel(
                                 last_minute: current.bandwidth.last_minute,
                                 channels: current.channels,
                             });
+                        } else {
+                            operational.kick_busy += 1;
                         }
                     }
                 }
@@ -385,7 +389,11 @@ pub(super) fn draw_diagnostics_panel(
                             )).size(10.0).color(MUTED));
                         });
                     }
-                    if network.rows.is_empty() {
+                    if operational.kick_busy > 0 {
+                        ui.label(RichText::new(format!(
+                            "{}: {}", tr("Kick readings skipped (busy)"), operational.kick_busy
+                        )).size(10.0).color(WARN));
+                    } else if network.rows.is_empty() {
                         ui.label(RichText::new(tr("No active Kick sessions"))
                             .size(10.0).color(DIM));
                     }
@@ -420,7 +428,11 @@ pub(super) fn draw_diagnostics_panel(
                             )).size(10.0).color(MUTED));
                         });
                     }
-                    if operational.game.is_empty() {
+                    if operational.game_busy > 0 {
+                        ui.label(RichText::new(format!(
+                            "{}: {}", tr("Game readings skipped (busy)"), operational.game_busy
+                        )).size(10.0).color(WARN));
+                    } else if operational.game.is_empty() {
                         ui.label(RichText::new(tr("No native game sessions")).size(10.0).color(DIM));
                     }
                     ui.add_space(8.0);
