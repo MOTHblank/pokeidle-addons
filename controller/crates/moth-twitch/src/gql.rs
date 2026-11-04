@@ -38,6 +38,7 @@ impl fmt::Display for GqlError {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ViewerIdentity {
+    pub(crate) login: String,
     pub(crate) user_id: String,
 }
 
@@ -87,11 +88,17 @@ impl TwitchGql {
         let client_id = value.get("client_id").and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| GqlError::Protocol("Twitch sign-in did not include a client id".into()))?;
+        let login = value.get("login").and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| GqlError::Protocol("Twitch sign-in did not include a username".into()))?;
         let user_id = value.get("user_id").and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| GqlError::Protocol("Twitch sign-in did not include a user id".into()))?;
         self.client_id = Some(client_id.to_owned());
-        Ok(ViewerIdentity { user_id: user_id.to_owned() })
+        Ok(ViewerIdentity {
+            login: login.to_ascii_lowercase(),
+            user_id: user_id.to_owned(),
+        })
     }
 
     fn post(&self, operation: &str, hash: &str, variables: Value) -> Result<Value, GqlError> {
