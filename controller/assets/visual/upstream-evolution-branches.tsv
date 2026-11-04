@@ -1,4 +1,4 @@
-# Canonical extra evolution edges from upstream v1.314.2.
+# Canonical extra evolution edges from upstream v1.398.1.
 # fromPokeId\ttoPokeId
 25	26
 25	4026
@@ -70,3 +70,13 @@
 13361	478
 13366	367
 13366	368
+487	8487
+648	8648
+898	8898
+898	9898
+901	8901
+935	936
+935	937
+1017	9017
+1017	8017
+1017	12017

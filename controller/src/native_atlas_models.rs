@@ -133,15 +133,19 @@ pub fn capture_scenario_with_stage(
 // Upstream shared/outland-tiers.mjs (v1.314.2).
 pub const TIER_LEVELS:[u32;8]=[150,1000,2000,4000,8000,16000,24000,36000];
 pub const TIER_MULTIPLIERS:[f64;8]=[1.0,1.25,1.5,2.0,3.0,4.0,6.0,8.0];
-pub const SHINY_EGG_LEVELS:[u32;30]=[
-    5000,5400,5900,6400,6950,8000,8600,10000,11250,12750,
-    14350,16000,20000,21200,25000,27050,29450,32000,34650,43100,
-    50000,58900,64000,69300,86150,100000,114800,123350,132200,160300
+// Upstream v1.398.1, shared/ovo-shiny.mjs: 32 level bands through Paldea.
+// A fragment is only possible at level 5,000+, outside Outland.
+pub const SHINY_EGG_LEVELS:[u32;32]=[
+    5000,5400,5900,6400,6950,8000,8600,
+    10000,11250,12750,14350,16000,20000,21200,
+    25000,26150,27500,28950,30450,35150,
+    40000,42800,46150,49650,53350,64950,
+    75000,84650,95950,108000,120550,160300
 ];
 pub fn shiny_egg_chance(level:u32,outland:bool)->f64{
     if outland {return 0.0}
-    let steps=SHINY_EGG_LEVELS.iter().filter(|threshold|level>=**threshold).count();
-    if steps==0 {0.0}else{(375.0+(steps-1) as f64*15.0)/10_000_000.0}
+    let steps=SHINY_EGG_LEVELS.partition_point(|threshold|level>=*threshold);
+    if steps==0 {0.0}else{1.0/80_000.0+(steps-1) as f64*0.000_000_5}
 }
 #[derive(Clone,Copy,Debug)]
 pub struct RareKind {pub id:u64,pub name:&'static str,pub base:f64,pub craft:u32}
@@ -262,8 +266,14 @@ mod tests {
     #[test] fn outland_tiers_egg_and_event_modifiers(){
         let m=Modifiers::default();
         assert_eq!(shiny_egg_chance(4999,false),0.0);
-        assert_eq!(shiny_egg_chance(5000,false),375.0/10_000_000.0);
+        assert!((shiny_egg_chance(5000,false)-1.0/80_000.0).abs()<1e-15);
         assert_eq!(shiny_egg_chance(5000,true),0.0);
+        assert_eq!(shiny_egg_chance(24999,false),shiny_egg_chance(21200,false));
+        assert!((shiny_egg_chance(25000,false)-(1.0/80_000.0+14.0*0.000_000_5)).abs()<1e-15);
+        assert!((shiny_egg_chance(40000,false)-(1.0/80_000.0+20.0*0.000_000_5)).abs()<1e-15);
+        assert!((shiny_egg_chance(75000,false)-(1.0/80_000.0+26.0*0.000_000_5)).abs()<1e-15);
+        assert!((shiny_egg_chance(160300,false)-0.000028).abs()<1e-15);
+        assert_eq!(shiny_egg_chance(160300,true),0.0);
         let base=rare_scenarios_with_gate(true,200,Some((150,1.0)),Some(200),500.0,&m);
         assert_eq!(base.len(),4);
         let mut boosted=m.clone();boosted.loot=2.0;

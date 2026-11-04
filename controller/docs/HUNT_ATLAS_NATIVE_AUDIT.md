@@ -177,3 +177,32 @@ Windows/Linux at narrow and wide widths and 100%/150%/200% scaling.
 Check switching during reconnect, error dismissal, sort/filter persistence,
 forecast model load failure, page navigation, account changes and session reset.
 No visual runtime acceptance is asserted by this document.
+
+## Upstream v1.398.1 compatibility (2026-11-04)
+
+- The v1.377+ grouped spawn layout replaces the former Sinnoh-specific
+  throughput cap. High-level per-slot respawns are **not** interpreted as
+  complete waves: only sufficiently complete `campo.init` snapshots are used
+  to learn their geometry. Older low-level full waves still work. Other hunts
+  without a visited map remain experimental, using the documented fallback.
+- Shiny Egg Fragment probabilities and all **32** level thresholds follow
+  `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
+  subsequent level band, through Paldea level 160,300). Outland is excluded.
+- All 989 upstream spreadsheet move overrides (11,250 attacks) are bundled from
+  `shared/golpes-planilhas.mjs`. The reference applies them after the public
+  creature catalogs, using the official power-to-cooldown curve. Megas no
+  longer receive a fabricated 600-power/30-second signature move: the 94
+  upstream Mega species have their actual movesets, including Mega Glimmora,
+  while Mega Zygarde now uses Complete Zygarde as its base. Newly introduced
+  legendary/Ogerpon form identities and branched evolution edges are retained.
+- The 20% Sacrifice XP boost is included for both XP streams only when the
+  authoritative `automation.sacrificio.ate` expiry is active, and causes the
+  forecast cache to invalidate when its state changes.
+- Gym podium (+25% / +10% / +5%) and the seasonal type combat modifier are
+  **not guessed** from rank or date; they require authoritative account and
+  daily-type state not currently decoded by Hunt Atlas. Measured same-hunt
+  rates contain the actual effects; hypothetical combat forecasts are labeled
+  accordingly. A further protocol audit can add these when the data is known.
+- These are source-derived, deterministic model changes, **not** live-verified
+  forecasts. The CI tests need to run in a Rust toolchain, which this editing
+  environment does not provide.

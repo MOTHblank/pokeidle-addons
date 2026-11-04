@@ -425,6 +425,7 @@ pub(super) fn draw_atlas_recommendations(
                         ));
                         ui.label(tr("Measured XP/h already includes server-awarded bonuses. Simulated forecasts apply known bonuses once; same-speed comparisons do not add bonuses."));
                     });
-                    ui.label(RichText::new(tr("Combat gold/h from confirmed receipts is separate from net wallet changes. Other-hunt gold/h uses comparable full-wave combat simulations; unknown loot boosts are excluded."))
+                    ui.label(RichText::new(tr("Combat gold/h from confirmed receipts is separate from net wallet changes. Other-hunt gold/h uses comparable full-wave combat simulations; unknown loot boosts are excluded.")));
+                    ui.label(RichText::new(tr("Experimental combat forecasts cannot apply unreported gym-podium or daily seasonal-type damage bonuses. Current-hunt measured rates already include their real effects."))
                         .size(10.0).color(MUTED));
 }

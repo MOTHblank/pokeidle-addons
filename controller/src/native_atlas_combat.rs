@@ -155,9 +155,11 @@ fn spawn_distances(hunt: &HuntEntry, measurements: Option<&Vec<f64>>) -> Vec<f64
 }
 fn replenishment_cap(hunt: &HuntEntry, n: usize) -> f64 {
     if hunt.level<=150 {return f64::INFINITY}
-    let sinnoh=hunt.region.eq_ignore_ascii_case("sinnoh")
-        ||hunt.slug.ends_with("_sinnoh");
-    n as f64*3600.0/if sinnoh {30.0} else {65.0}
+    // Upstream v1.377+ applies the Unova-style grouped-spawn cadence to
+    // every map region. Sinnoh no longer warrants its legacy 30-second
+    // special case. Keep this as a conservative per-slot upper bound,
+    // not an assertion about the actual arrival time at every location.
+    n as f64*3600.0/65.0
 }
 fn single_target_kills(d: &[f64], cycle_s: f64, hunt: &HuntEntry) -> f64 {
     let n=d.len();
@@ -305,6 +307,26 @@ mod tests {
         let d=vec![20.6;16];
         assert!(aoe_kills(&d,0.01,&hunt)<=16.0*3600.0/30.0);
         assert!(aoe_kills(&d,10000.0,&hunt)<20.0);
+    }
+    #[test]
+    fn grouped_spawn_throughput_has_no_obsolete_sinnoh_exception() {
+        let sinnoh=HuntEntry{
+            level:1000,region:"Sinnoh".into(),slug:"test_sinnoh".into(),
+            ..Default::default()
+        };
+        let unova=HuntEntry{level:1000,region:"Unova".into(),..Default::default()};
+        let cap=16.0*3600.0/65.0;
+        assert_eq!(replenishment_cap(&sinnoh,16),cap);
+        assert_eq!(replenishment_cap(&unova,16),cap);
+        assert_eq!(replenishment_cap(
+            &HuntEntry{level:150,..Default::default()},16),f64::INFINITY);
+    }
+    #[test]
+    fn measured_group_geometry_overrides_fallback_distances() {
+        let hunt=HuntEntry{total_spawns:8,..Default::default()};
+        let learned=vec![3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0];
+        assert_eq!(spawn_distances(&hunt,Some(&learned)),learned);
+        assert_eq!(spawn_distances(&hunt,None),vec![DEFAULT_DISTANCE;8]);
     }
     #[test]
     fn player_speed_iv_reduces_global_gap_to_a_floor() {

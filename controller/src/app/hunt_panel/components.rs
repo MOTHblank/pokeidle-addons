@@ -44,10 +44,13 @@ pub(super) fn guild_ranking_bonus(b:&native_hunts::HuntBonuses)->Option<String> 
 }
 /// Report recognized status just like Twitch; measured XP is already boosted.
 pub(super) fn xp_bonus_summary(b:&native_hunts::HuntBonuses)->String {
-    format!("Twitch {} · {} {} · VIP {}",
+    let altar=if b.sacrifice_xp_active {
+        format!(" · {} ×1.2",tr("Sacrifice boost"))
+    } else {String::new()};
+    format!("Twitch {} · {} {} · VIP {}{}",
         known_percent(b.twitch_pct,b.twitch_known),
         tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,1.1),
-        known_boost(b.vip_active,b.vip_known,1.5))
+        known_boost(b.vip_active,b.vip_known,1.5),altar)
 }
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub(super) enum AtlasAoeCue { NoLead, SingleTarget, Enabled }

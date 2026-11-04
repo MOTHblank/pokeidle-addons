@@ -449,6 +449,14 @@ use super::*;
         view.bonuses.vip_active=false;
         cache.refresh(0,&view,None,true,false);
         assert!(cache.refreshed.is_none(),"VIP expiry must invalidate forecasts");
+        cache.refreshed=Some(Instant::now());
+        view.bonuses.sacrifice_xp_active=true;
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none(),"Sacrifice boost activation must invalidate forecasts");
+        cache.refreshed=Some(Instant::now());
+        view.bonuses.sacrifice_xp_active=false;
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none(),"Sacrifice boost expiry must invalidate forecasts");
     }
     #[test]
     fn timed_guild_and_vip_are_displayed_independently_of_guild_rank(){
