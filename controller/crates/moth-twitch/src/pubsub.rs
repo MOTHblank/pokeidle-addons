@@ -10,7 +10,6 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Error as WsError, Message, WebSocket};
 
 const PUBSUB_URL: &str = "wss://pubsub-edge.twitch.tv/v1";
-const RECONNECT_DELAY: Duration = Duration::from_secs(10);
 const PING_INTERVAL: Duration = Duration::from_secs(240);
 const PONG_DEADLINE: Duration = Duration::from_secs(300);
 
