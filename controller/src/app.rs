@@ -945,7 +945,6 @@ struct CachedNativeEvent {
     index: usize,
     generation: u64,
     existing_firefox: bool,
-    twitch_auto_detected: bool,
     result: Result<Option<NativeSession>, String>,
 }
 
