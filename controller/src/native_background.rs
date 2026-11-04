@@ -1050,8 +1050,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             match boss_manager.start(key, *repeat,
                                 &hunt_intel.view, &mut navigator, Instant::now()) {
                                 Ok(()) => {
-                                    if hunt_intel.view.in_center { hunt_intel.cancel_hunt_intent(); }
-                                    else { hunt_intel.queue_center(); }
+                                    // Boss entry now uses the same safe switch gate
+                                    // as Hunt Atlas; it never detours through Center.
+                                    hunt_intel.cancel_hunt_intent();
                                 }
                                 Err(error) => {
                                     boss_manager.view.warning = Some(error.clone());
