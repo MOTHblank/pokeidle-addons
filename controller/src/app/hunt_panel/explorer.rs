@@ -661,11 +661,16 @@ pub(super) fn atlas_first_unlocked(row:&AtlasSpeciesRow)->Option<&AtlasDestinati
 /// once per destination, and the Hunt action never targets a guide-only entry.
 pub(super) fn draw_atlas_destination(
     ui:&mut egui::Ui,dest:&AtlasDestination,view:&HuntView,
-    native:&NativeSession,live:bool,error:&mut Option<String>,aoe_enabled:bool,
+    native:&NativeSession,live:bool,error:&mut Option<String>,
+    pending_ui:&mut Option<String>,aoe_enabled:bool,
 ){
     let current=view.hunt_slug.as_deref()==Some(dest.hunt.slug.as_str());
-    let pending=view.pending_hunt_slug.as_deref()==Some(dest.hunt.slug.as_str());
-    egui::Frame::new().fill(PANEL_ALT).corner_radius(7.0)
+    let pending=view.pending_hunt_slug.as_deref()==Some(dest.hunt.slug.as_str())
+        || pending_ui.as_deref()==Some(dest.hunt.slug.as_str());
+    egui::Frame::new()
+        .fill(if pending{WARN.linear_multiply(0.07)}else{PANEL_ALT})
+        .stroke(Stroke::new(1.0,if pending{WARN.linear_multiply(0.65)}else{BORDER}))
+        .corner_radius(7.0)
         .inner_margin(egui::Margin::symmetric(10,8)).show(ui,|ui|{
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui|{
@@ -673,19 +678,12 @@ pub(super) fn draw_atlas_destination(
                     "{} · Lv {}",
                     dest.hunt.name,dest.hunt.level
                 )).strong().size(11.0).color(TEXT));
-                if current{
-                    ui.colored_label(GOOD,tr("● Current"));
-                }else if pending{
-                    ui.colored_label(WARN,tr("Switching…"));
-                }else if !dest.unlocked{
+                if !dest.unlocked && !current && !pending {
                     ui.colored_label(WARN,tr("Unavailable"));
-                }else if ui.add_enabled(live,
-                    egui::Button::new(tr("Hunt →"))).clicked(){
-                    match native.send_command(GameCommand::Hunt(
-                        dest.hunt.slug.clone())){
-                        Ok(())=>*error=None,
-                        Err(e)=>*error=Some(e),
-                    }
+                } else if dest.unlocked &&
+                    draw_hunt_switch_action(ui,current,pending,live) {
+                    request_hunt_with_feedback(
+                        native,&dest.hunt.slug,error,pending_ui);
                 }
             });
             if let Some(f)=dest.forecast.as_ref(){
@@ -724,7 +722,8 @@ pub(super) fn draw_atlas_species(
     ui:&mut egui::Ui,row:&AtlasSpeciesRow,sort:AtlasSort,
     view:&HuntView,reference:Option<&AtlasReference>,
     filters:&AtlasFilters,native:&NativeSession,live:bool,
-    error:&mut Option<String>,aoe_enabled:bool,
+    error:&mut Option<String>,pending_ui:&mut Option<String>,
+    aoe_enabled:bool,
 ){
     ui.push_id(("atlas-species",row.id),|ui|{
         egui::Frame::new().fill(PANEL).corner_radius(9.0)
@@ -798,21 +797,11 @@ pub(super) fn draw_atlas_species(
                             let current=view.hunt_slug.as_deref()
                                 ==Some(target.hunt.slug.as_str());
                             let pending=view.pending_hunt_slug.as_deref()
-                                ==Some(target.hunt.slug.as_str());
-                            if current{
-                                ui.colored_label(GOOD,tr("● Current hunt"));
-                            }else if pending{
-                                ui.colored_label(WARN,tr("Switching…"));
-                            }else if ui.add_enabled(live,egui::Button::new(
-                                tr("Hunt")
-                            )).on_hover_text(format!(
-                                "Switch to {} (server-unlocked)",target.hunt.name
-                            )).clicked(){
-                                match native.send_command(GameCommand::Hunt(
-                                    target.hunt.slug.clone())){
-                                    Ok(())=>*error=None,
-                                    Err(e)=>*error=Some(e),
-                                }
+                                ==Some(target.hunt.slug.as_str())
+                                || pending_ui.as_deref()==Some(target.hunt.slug.as_str());
+                            if draw_hunt_switch_action(ui,current,pending,live) {
+                                request_hunt_with_feedback(
+                                    native,&target.hunt.slug,error,pending_ui);
                             }
                         }else{
                             ui.colored_label(WARN,tr("No unlocked destination"));
@@ -836,7 +825,7 @@ pub(super) fn draw_atlas_species(
                         for dest in row.destinations.iter().take(4){
                             ui.push_id(&dest.hunt.slug,|ui|{
                                 draw_atlas_destination(
-                                    ui,dest,view,native,live,error,aoe_enabled);
+                                    ui,dest,view,native,live,error,pending_ui,aoe_enabled);
                             });
                             ui.add_space(4.0);
                         }
@@ -848,7 +837,7 @@ pub(super) fn draw_atlas_species(
                                 for dest in row.destinations.iter().skip(4).take(31){
                                     ui.push_id(&dest.hunt.slug,|ui|{
                                         draw_atlas_destination(
-                                            ui,dest,view,native,live,error,aoe_enabled);
+                                            ui,dest,view,native,live,error,pending_ui,aoe_enabled);
                                     });
                                     ui.add_space(4.0);
                                 }
@@ -938,6 +927,7 @@ pub(super) fn draw_atlas_explorer(
     page:&mut usize,cache:&EstimateCache,scenario:&AtlasScenario,
     results:&mut ExplorerCache,
     command_error:&mut Option<String>,
+    command_pending:&mut Option<String>,
 ){
     atlas_filters_panel(ui,filters,page,view,reference,index);
     ui.add_space(9.0);
@@ -1060,7 +1050,7 @@ pub(super) fn draw_atlas_explorer(
                 if let Some(row)=slice.iter().find(|row|
                     filters.selected_species==Some(row.id)){
                     draw_atlas_species(ui,row,filters.sort,view,reference,
-                        filters,native,live,&mut error,aoe_enabled);
+                        filters,native,live,&mut error,command_pending,aoe_enabled);
                 }
             });
         });
@@ -1069,7 +1059,7 @@ pub(super) fn draw_atlas_explorer(
         for row in rows.iter().skip(visible.start)
             .take(visible.end-visible.start){
             draw_atlas_species(ui,row,filters.sort,view,reference,
-                filters,native,live,&mut error,aoe_enabled);
+                filters,native,live,&mut error,command_pending,aoe_enabled);
         }
     }
     if let Some(error)=error {*command_error=Some(error);}
