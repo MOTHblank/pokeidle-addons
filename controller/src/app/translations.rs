@@ -441,6 +441,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Reference probabilities are not confirmed drops or live prices." => "As probabilidades do guia não representam drops confirmados nem preços atuais.",
         "● Current" => "● Atual",
         "Switching…" => "Mudando…",
+        "Waiting for a safe opening…" => "Aguardando uma janela segura…",
         "Hunt →" => "Caçar →",
         "Combat pace" => "Ritmo de combate",
         "Pokémon encounters · estimate assumptions" => "Encontros Pokémon · premissas da estimativa",
