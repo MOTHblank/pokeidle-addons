@@ -1,4 +1,4 @@
-# Alternative species ID -> national Dex ID, upstream v1.357.3 (shared/formas.mjs).
+# Alternative species ID -> national Dex ID, upstream v1.398.1 (shared/formas.mjs).
 # pokeId\tdex
 1479	479
 4019	19
@@ -97,3 +97,10 @@
 11479	479
 11741	741
 12479	479
+8487	487
+8648	648
+8898	898
+9898	898
+9017	1017
+8017	1017
+12017	1017
