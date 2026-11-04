@@ -683,9 +683,9 @@ impl BossManager {
                     trip.stage = Stage::Running;
                     trip.dispatched_at = Some(now);
                     self.view.phase = if trip.repeat {
-                        "Switching from the current hunt to boss farm".into()
+                        "Starting boss farm from Pokémon Center".into()
                     } else {
-                        "Switching from the current hunt to the boss".into()
+                        "Starting boss fight from Pokémon Center".into()
                     };
                 }
             }
