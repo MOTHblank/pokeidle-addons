@@ -213,6 +213,10 @@ struct ChannelCache {
     last_points_attempt: Option<Instant>,
     last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
+    last_channel_id_error: Option<String>,
+    last_points_error: Option<String>,
+    last_stream_error: Option<String>,
+    last_streak_error: Option<String>,
     broadcast_id: Option<String>,
     stream_started: Option<String>,
     game_id: Option<String>,
@@ -570,6 +574,7 @@ fn run(
     let mut pubsub_started=false;
     let mut pending_pubsub=VecDeque::new();
     let mut last_auth_warning:Option<String>=None;
+    let mut last_channels=Vec::<String>::new();
     let interval = config.poll_interval.max(MIN_POLL_INTERVAL);
 
     while !stop.load(Ordering::Acquire) {
@@ -626,6 +631,10 @@ fn run(
         );
 
         let channels = desired.lock().map(|channels| channels.clone()).unwrap_or_default();
+        if channels!=last_channels {
+            push_event(&events,MinerEvent::RosterUpdated {channels:channels.len()});
+            last_channels=channels.clone();
+        }
         cache.retain(|channel, _| channels.binary_search(channel).is_ok());
         if let Ok(mut current) = snapshot.lock() {
             current.desired = channels.len();
@@ -703,6 +712,7 @@ fn run(
     }
 
     set_phase(&snapshot, &phase_wake, MinerPhase::Stopped, None);
+    push_event(&events,MinerEvent::Stopped);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -748,11 +758,21 @@ fn poll_channels(
         };
         if channel.channel_id.is_none() {
             match gql.lookup_channel_id(login) {
-                Ok(id) => channel.channel_id = Some(id),
+                Ok(id) => {
+                    channel.channel_id=Some(id);
+                    channel.last_channel_id_error=None;
+                }
                 Err(error) => {
                     auth_failed |= error.is_auth();
-                    channel.last_error=Some(error.user_message());
-                    update_streamer(snapshot, login, channel, Some(error.user_message()));
+                    let message=error.user_message();
+                    if channel.last_channel_id_error.as_deref()!=Some(message.as_str()) {
+                        push_event(events,MinerEvent::Warning(format!(
+                            "{login} channel lookup: {message}"
+                        )));
+                    }
+                    channel.last_channel_id_error=Some(message.clone());
+                    channel.last_error=Some(message.clone());
+                    update_streamer(snapshot, login, channel, Some(message));
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
@@ -770,6 +790,7 @@ fn poll_channels(
 
         match gql.points_context(login) {
             Ok(context) => {
+                channel.last_points_error=None;
                 channel.last_error=None;
                 channel.last_points_checked=Some(Instant::now());
                 channel.balance=Some(context.balance);
@@ -818,8 +839,15 @@ fn poll_channels(
             }
             Err(error) => {
                 auth_failed |= error.is_auth();
-                channel.last_error=Some(error.user_message());
-                update_streamer(snapshot, login, channel, Some(error.user_message()));
+                let message=error.user_message();
+                if channel.last_points_error.as_deref()!=Some(message.as_str()) {
+                    push_event(events,MinerEvent::Warning(format!(
+                        "{login} points context: {message}"
+                    )));
+                }
+                channel.last_points_error=Some(message.clone());
+                channel.last_error=Some(message.clone());
+                update_streamer(snapshot, login, channel, Some(message));
                 if first_error.is_none() {
                     first_error = Some(error);
                 }
@@ -906,6 +934,7 @@ fn poll_channels(
             channel.stream_checked=Some(Instant::now());
             match gql.stream_info(login,channel.stream_started.as_deref()) {
                 Ok(Some(stream)) => {
+                    channel.last_stream_error=None;
                     let fresh_broadcast=
                         channel.broadcast_id.as_deref()!=Some(stream.broadcast_id.as_str());
                     channel.game_id=stream.game_id;
@@ -931,13 +960,13 @@ fn poll_channels(
                 Err(error) => {
                     auth_failed |= error.is_auth();
                     let message=error.user_message();
-                    let changed=channel.last_error.as_deref()!=Some(message.as_str());
-                    channel.last_error=Some(message.clone());
-                    if changed {
+                    if channel.last_stream_error.as_deref()!=Some(message.as_str()) {
                         push_event(events,MinerEvent::Warning(format!(
                             "{login} stream metadata: {message}"
                         )));
                     }
+                    channel.last_stream_error=Some(message.clone());
+                    channel.last_error=Some(message);
                     if first_error.is_none() {first_error=Some(error);}
                 }
             }
@@ -949,6 +978,7 @@ fn poll_channels(
             channel.streak_checked=Some(Instant::now());
             match gql.streak(&id) {
                 Ok(milestone) => {
+                    channel.last_streak_error=None;
                     channel.streak_length=milestone.length;
                     let detected=match (
                         channel.stream_started.as_deref(),
@@ -967,7 +997,14 @@ fn poll_channels(
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
-                    channel.last_error=Some(error.user_message());
+                    let message=error.user_message();
+                    if channel.last_streak_error.as_deref()!=Some(message.as_str()) {
+                        push_event(events,MinerEvent::Warning(format!(
+                            "{login} streak check: {message}"
+                        )));
+                    }
+                    channel.last_streak_error=Some(message.clone());
+                    channel.last_error=Some(message);
                     if first_error.is_none(){first_error=Some(error);}
                 }
             }
