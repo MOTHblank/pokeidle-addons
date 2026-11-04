@@ -118,6 +118,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_options_save_survives_account_switch_for_exact_retry() {
+        let mut workspace = WorkspaceState::default();
+        assert!(workspace.options_failed_save.is_none());
+        let mut requested = UiOptions::default();
+        requested.reduce_updates_unfocused = false;
+        requested.atlas_aoe_enabled[2] = true;
+        workspace.options_failed_save = Some((requested, "disk unavailable".into()));
+        workspace.select_account(3);
+        let (retry, error) = workspace.options_failed_save.as_ref().unwrap();
+        assert_eq!(*retry, requested);
+        assert_eq!(error, "disk unavailable");
+    }
+
+    #[test]
     fn switching_accounts_discards_leave_confirmations_but_keeps_history_views() {
         let mut workspace = WorkspaceState::default();
         workspace.boss_leave_confirm = [true;4];
