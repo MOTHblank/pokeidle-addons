@@ -14,6 +14,27 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_LOOT: usize = 500;
+/// shared/pokemon-nivel-treinador.mjs: non-starters can fight up to trainer + 5.
+const POKEMON_LEVEL_GRACE: u32 = 5;
+
+/// v1.400.1 shared/bosses-lendarios.mjs: boss combat level follows the
+/// strongest Pokémon that is actually on the team and allowed to fight.
+/// A full roster is required because partial pkMud patches cannot prove who
+/// is absent from the team. Zero is authoritative when the confirmed team has
+/// no eligible Pokémon; the boss's own floor still determines combat level.
+pub fn strongest_eligible_team_level(hunt: &HuntView) -> Option<u32> {
+    if !hunt.roster_ready {
+        return None;
+    }
+    let trainer_level = hunt.trainer_level?;
+    let ceiling = trainer_level.saturating_add(POKEMON_LEVEL_GRACE);
+    Some(hunt.pokemon_roster.iter()
+        .filter(|pokemon| pokemon.slot.is_some())
+        .filter(|pokemon| pokemon.starter || pokemon.level <= ceiling)
+        .map(|pokemon| pokemon.level)
+        .max()
+        .unwrap_or(0))
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BossEntry {
@@ -28,12 +49,12 @@ pub struct BossEntry {
     pub types: Vec<String>,
 }
 impl BossEntry {
-    /// shared/bosses-lendarios.mjs v1.398.1: the catalog's minimum
-    /// trainer level is the floor for eligibility and the boss's combat
-    /// level, not the fixed opponent level for higher-level trainers.
-    /// Only display this when the account's level is known.
-    pub fn fight_level(&self, trainer_level: Option<u32>) -> Option<u32> {
-        trainer_level.map(|level| level.max(self.min_level.max(1)))
+    /// shared/bosses-lendarios.mjs v1.400.1: trainer level still unlocks
+    /// the arena, but combat level follows the strongest eligible team
+    /// Pokémon and never drops below this boss's own minimum.
+    pub fn fight_level(&self, hunt: &HuntView) -> Option<u32> {
+        strongest_eligible_team_level(hunt)
+            .map(|level| level.max(self.min_level.max(1)))
     }
 
     fn parse(raw: &Value) -> Option<Self> {
@@ -822,21 +843,45 @@ mod tests {
     }
 
     #[test]
-    fn effective_boss_level_scales_with_trainer_without_changing_unlock_gate() {
+    fn effective_boss_level_uses_strongest_eligible_team_pokemon() {
         let catalog=serde_json::json!({"key":"regice","nome":"Regice",
             "minNivelTreinador":300,
             "entrada":{"itemId":500,"qtd":1}});
         let boss=BossEntry::parse(&catalog).expect("playable boss");
-        assert_eq!(boss.min_level,300);
-        assert_eq!(boss.fight_level(None),None,
-            "unknown trainer level must not be invented");
-        assert_eq!(boss.fight_level(Some(300)),Some(300));
-        assert_eq!(boss.fight_level(Some(650)),Some(650));
-        assert_eq!(boss.fight_level(Some(30_000)),Some(30_000));
-        assert_eq!(boss.fight_level(Some(100)),Some(300),
-            "even before unlock the minimum remains the boss's floor");
+        let mut h=HuntView::default();
+        h.trainer_level=Some(5_000);
+        assert_eq!(boss.fight_level(&h),None,
+            "combat level must wait for a complete roster");
+
+        h.roster_ready=true;
+        h.pokemon_roster=Arc::new(vec![
+            crate::native_hunts::PokemonInfo {
+                level:2_000, slot:Some(0), ..Default::default()
+            },
+            crate::native_hunts::PokemonInfo {
+                level:30_000, slot:None, ..Default::default()
+            },
+            crate::native_hunts::PokemonInfo {
+                level:5_006, slot:Some(1), ..Default::default()
+            },
+        ]);
+        assert_eq!(strongest_eligible_team_level(&h),Some(2_000),
+            "depot Pokémon and non-starters above trainer + 5 must not count");
+        assert_eq!(boss.fight_level(&h),Some(2_000));
+
+        let rayquaza=BossEntry {
+            min_level:3_100, ..boss.clone()
+        };
+        assert_eq!(rayquaza.fight_level(&h),Some(3_100),
+            "the boss minimum remains the combat-level floor");
+
+        h.pokemon_roster=Arc::new(vec![crate::native_hunts::PokemonInfo {
+            level:8_000, slot:Some(0), starter:true, ..Default::default()
+        }]);
+        assert_eq!(boss.fight_level(&h),Some(8_000),
+            "starter Pokémon ignore the trainer-level usability ceiling");
         assert_eq!(boss.min_level,300,
-            "the separate unlock requirement cannot change as the trainer levels");
+            "trainer-level unlock requirement remains separate");
     }
     #[test]
     fn farm_waits_for_center_and_restores_exact_hunt() {
