@@ -324,6 +324,8 @@ pub struct HuntIntel {
     boost_multipliers: BTreeMap<String,f64>,
     store_boost_until:BTreeMap<String,u64>,
     server_clock_seen_at:Option<Instant>,
+    twitch_xp_until:u64,
+    twitch_reported_pct:f64,
     kick_xp_until:u64,
     kick_reported_pct:f64,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
@@ -347,6 +349,7 @@ impl HuntIntel {
             boost_multipliers:BTreeMap::new(),
             store_boost_until:BTreeMap::new(),
             server_clock_seen_at:None,
+            twitch_xp_until:0,twitch_reported_pct:0.0,
             kick_xp_until:0,kick_reported_pct:0.0,
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
@@ -791,6 +794,9 @@ impl HuntIntel {
                 self.boost_multipliers.get(key).copied().unwrap_or(1.0)
             }else{1.0};
         }
+        self.view.bonuses.twitch_pct=if self.twitch_xp_until>clock {
+            self.twitch_reported_pct
+        }else{0.0};
         self.view.bonuses.kick_xp_pct=if self.kick_xp_until>clock {
             self.kick_reported_pct
         }else{0.0};
@@ -927,12 +933,16 @@ impl HuntIntel {
             self.view.bonuses.guild_known = true;
         }
         if let Some(twitch) = state.get("twitch") {
-            if let Some(n) = twitch.get("pctAtual").or_else(|| twitch.get("pct"))
-                .and_then(Value::as_f64) {
-                self.view.bonuses.twitch_pct =
-                    if twitch.get("assistindo").and_then(Value::as_bool)==Some(false)
-                        {0.0}else{n};
-                self.view.bonuses.twitch_known = true;
+            // Since PokéIdle v1.400, Twitch matches Kick: pct is only the
+            // configured reward amount. XP is active exclusively while the
+            // independently redeemed bonus.xp expiry is in the future.
+            if let Some(raw)=twitch.get("bonus").and_then(|v|v.get("xp")) {
+                self.twitch_xp_until=raw.as_u64().unwrap_or(0);
+                self.view.bonuses.twitch_known=true;
+            }
+            if let Some(pct)=twitch.get("pct").and_then(Value::as_f64) {
+                self.twitch_reported_pct=if pct.is_finite(){pct.max(0.0)}else{0.0};
+                self.view.bonuses.twitch_known=true;
             }
         }
         // Preserve bonuses from a full welcome across partial estado deltas;
@@ -2049,12 +2059,34 @@ mod tests {
         intel.ingest(r#"{"t":"welcome","estado":{"level":10}}"#,now);
         assert!(!intel.view.bonuses.twitch_known);
         assert!(!intel.view.bonuses.vip_known);
-        intel.ingest(r#"{"t":"estado","estado":{"twitch":{"pct":0},
+        intel.ingest(r#"{"t":"estado","estado":{"twitch":{"pct":15,"bonus":{"xp":90}},
             "servidorAgora":100,"vipAte":null}}"#,now);
         assert!(intel.view.bonuses.twitch_known);
         assert_eq!(intel.view.bonuses.twitch_pct,0.0);
         assert!(intel.view.bonuses.vip_known);
         assert!(!intel.view.bonuses.vip_active);
+    }
+
+    #[test]
+    fn twitch_pct_is_configuration_not_an_active_bonus(){
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest(r#"{"t":"welcome","estado":{
+            "servidorAgora":100,"twitch":{"vinculado":true,"pct":15,"bonus":{"xp":0,"captura":0,"shiny":0}}
+        }}"#,now);
+        assert!(intel.view.bonuses.twitch_known);
+        assert_eq!(intel.view.bonuses.twitch_pct,0.0);
+    }
+    #[test]
+    fn twitch_xp_uses_redeemed_expiry_and_expires_on_server_clock(){
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest(r#"{"t":"welcome","estado":{
+            "servidorAgora":100,"twitch":{"vinculado":true,"pct":15,"bonus":{"xp":200}}
+        }}"#,now);
+        assert_eq!(intel.view.bonuses.twitch_pct,15.0);
+        intel.ingest(r#"{"t":"estado","estado":{"servidorAgora":201}}"#,now);
+        assert_eq!(intel.view.bonuses.twitch_pct,0.0);
     }
 
     #[test]
