@@ -7,6 +7,8 @@ Moth Controller's **Automation → Market rule buying · Moth Watch** panel supp
 1. Select the intended account. Market settings are saved separately for Game1–Game4, including when that account is offline.
 2. Add one or more specific-item, any-item or Pokémon rules, set currency (Gold or Gems) and a **maximum unit price**, and enable the individual rules. For Pokémon, select **Any**, **P5** or **Shiny**. Shiny requires Gems.
 3. Optionally specify account Gold/Gem reserves and global/per-rule spending, purchase-count or quantity limits. A zero limit means *unlimited*, not zero spend.
+
+Rules also support **non-shiny Pokémon**, a **P1–P5 potency range** (0 = no bound), and for item listings a **minimum offered lot size** and **maximum units in one purchase** (0 = unrestricted). These are rechecked against the actual authenticated listing before sending `market.comprar`, including Snatch rules. Filtering never bypasses the existing maximum unit price, balance reserves, or spending caps. An enabled **Any item** rule can still buy an item for which a separate specific-item rule is off; disable all overlapping authorizations to exclude it.
 4. Enable **native market buying** and click **Save market rules**. The engine is disabled by default. Pausing or disabling only affects this market buyer; other native automation stays active.
 
 The per-account order journal is saved as `market-orders-GameN.json` under Moth's app-data directory. The configuration is `market-rules-GameN.json`. Only rules and transaction exposure are stored; authentication credentials are not copied into these files.
