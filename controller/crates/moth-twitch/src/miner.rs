@@ -1180,6 +1180,13 @@ fn watch_priority(
 mod priority_tests {
     use super::*;
 
+    fn test_event_bus()->EventBus {
+        EventBus {
+            queue:Arc::new(Mutex::new(VecDeque::new())),
+            sink:None,
+        }
+    }
+
     #[test]
     fn event_bus_preserves_queue_and_forwards_to_sink() {
         let queue=Arc::new(Mutex::new(VecDeque::new()));
@@ -1292,7 +1299,7 @@ mod priority_tests {
         let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
         let config=MinerConfig::default();
         let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
-        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let events=test_event_bus();
         let mut cache=HashMap::new();
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
@@ -1333,7 +1340,7 @@ mod priority_tests {
         let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
         let config=MinerConfig::default();
         let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
-        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let events=test_event_bus();
         let mut cache=HashMap::new();
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
@@ -1357,7 +1364,7 @@ mod priority_tests {
         let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
         let config=MinerConfig::default();
         let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
-        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let events=test_event_bus();
         let mut cache=HashMap::new();
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
