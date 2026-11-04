@@ -365,14 +365,68 @@ pub(super) fn draw_overview_card(
                     tr(auto_catch_setting_label(catch_enabled)),
                     catch_enabled,
                 );
-                let bonus_confirmed = fresh && health.bridge_snapshot_ok
-                    && health.stream_bonus_pct > 0.0 && !health.stream_watching.is_empty();
-                let bonus_text = if bonus_confirmed {
-                    format!("+{}% XP", format_pct(health.stream_bonus_pct))
+                // This is a real control, not another status chip. XP boosts
+                // already appear in the header above, so they are not duplicated.
+                let vip = native_view.is_some_and(|view| view.bonuses.vip_active);
+                let game_auto = native_view.and_then(|view| view.automation.as_ref())
+                    .and_then(|automation| automation.get("pvpAutoFila"))
+                    .and_then(|enabled| enabled.as_bool());
+                let previous = app.accounts[index].auto_pvp;
+                let pvp_on = crate::native_pvp::PvpAutomation::enabled(
+                    previous, vip, game_auto);
+                let (text, fill, border) = if pvp_on {
+                    (if pt_br() { "Auto PvP ligado" } else { "Auto PvP on" },
+                        Color32::from_rgb(24, 108, 65), GOOD)
                 } else {
-                    tr("Not confirmed").to_string()
+                    (if pt_br() { "Auto PvP desligado" } else { "Auto PvP off" },
+                        Color32::from_rgb(144, 43, 52), BAD)
                 };
-                automation_badge(ui, "XP bonus", &bonus_text, bonus_confirmed);
+                let hint = if pt_br() {
+                    "Ativa ou desativa a busca automática de PvP. Não interrompe hunts. VIP utiliza a fila do jogo."
+                } else {
+                    "Toggle automatic PvP matchmaking. Does not interrupt hunts. VIP uses the game's own queue."
+                };
+                if ui.add_sized([147.0, 29.0],
+                    egui::Button::new(RichText::new(text)
+                        .size(11.0).strong().color(Color32::WHITE))
+                        .fill(fill).stroke(Stroke::new(1.5, border))
+                        .corner_radius(7.0))
+                    .on_hover_text(hint).clicked() {
+                    let updated = Some(!pvp_on);
+                    app.accounts[index].auto_pvp = updated;
+                    if app.save_account_config() {
+                        if let Some(native) = app.runtimes[index].game.native.as_ref() {
+                            native.set_auto_pvp(updated);
+                        }
+                    } else {
+                        app.accounts[index].auto_pvp = previous;
+                    }
+                }
+                if pvp_on && fresh {
+                    if let Some(status) = sample.native.as_ref().map(|s| &s.native_pvp) {
+                        let info = if status.queued {
+                            if pt_br() { "Na fila" } else { "Queued" }.to_owned()
+                        } else if status.awaiting_reply {
+                            if pt_br() { "Entrando na fila" } else { "Joining queue" }.to_owned()
+                        } else if status.cooldown_secs > 0 {
+                            if pt_br() {
+                                format!("Espera {}s", status.cooldown_secs)
+                            } else {
+                                format!("Cooldown {}s", status.cooldown_secs)
+                            }
+                        } else if status.waiting_for_team {
+                            if pt_br() { "Equipe PvP necessária" } else { "PvP team needed" }.to_owned()
+                        } else if status.vip {
+                            "VIP".to_owned()
+                        } else {
+                            if pt_br() { "Buscando" } else { "Matchmaking" }.to_owned()
+                        };
+                        let response = ui.label(RichText::new(info).size(10.0).color(MUTED));
+                        if let Some(warning) = status.warning.as_ref() {
+                            response.on_hover_text(warning);
+                        }
+                    }
+                }
             });
 
             if needs_setup {
