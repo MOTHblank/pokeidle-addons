@@ -324,6 +324,10 @@ pub struct HuntIntel {
     boost_multipliers: BTreeMap<String,f64>,
     store_boost_until:BTreeMap<String,u64>,
     server_clock_seen_at:Option<Instant>,
+    // Upstream gates VIP-only features from estado.loja.vip. Keep that
+    // capability bit independently from vipAte because some state payloads
+    // omit the expiry entirely.
+    vip_flag:Option<bool>,
     twitch_xp_until:u64,
     twitch_reported_pct:f64,
     kick_xp_until:u64,
@@ -349,6 +353,7 @@ impl HuntIntel {
             boost_multipliers:BTreeMap::new(),
             store_boost_until:BTreeMap::new(),
             server_clock_seen_at:None,
+            vip_flag:None,
             twitch_xp_until:0,twitch_reported_pct:0.0,
             kick_xp_until:0,kick_reported_pct:0.0,
             geo_samples:BTreeMap::new(),
@@ -482,6 +487,12 @@ impl HuntIntel {
         // Automation writes must use a fresh authoritative snapshot after
         // reconnect; never reuse cached settings from a previous socket.
         self.view.automation=None;
+        // A reconnect must not classify the new game session from stale VIP
+        // state. Auto PvP waits for one of the authoritative VIP signals.
+        self.vip_flag=None;
+        self.view.vip_until=None;
+        self.view.bonuses.vip_known=false;
+        self.view.bonuses.vip_active=false;
         self.view.pending_outland_tier=None;
         self.pending_outland_at=None;
         self.view.outland_tier=None;
@@ -772,8 +783,11 @@ impl HuntIntel {
     }
     fn refresh_timed_xp_bonuses(&mut self,now:Instant) {
         let clock=self.xp_clock(now);
-        self.view.bonuses.vip_active=self.view.vip_until
-            .is_some_and(|until|until>clock);
+        self.view.bonuses.vip_active=match self.vip_flag {
+            Some(false)=>false,
+            Some(true)=>self.view.vip_until.is_none_or(|until|until>clock),
+            None=>self.view.vip_until.is_some_and(|until|until>clock),
+        };
         self.view.bonuses.guild_boost_active=self.view.guild_boost_until
             .is_some_and(|until|until>clock);
         // The server stores the redeemed Sacrifice boost as an epoch-ms
@@ -948,6 +962,13 @@ impl HuntIntel {
         // Preserve bonuses from a full welcome across partial estado deltas;
         // absent loja/kick fields are not evidence that a boost ended.
         if let Some(shop)=state.get("loja"){
+            // The official client uses loja.vip to gate VIP Auto PvP and other
+            // VIP-only controls. vipAte is useful for expiry display/timing,
+            // but it is not guaranteed to be present in every state shape.
+            if let Some(vip)=shop.get("vip").and_then(Value::as_bool) {
+                self.vip_flag=Some(vip);
+                self.view.bonuses.vip_known=true;
+            }
             if let Some(boosts)=shop.get("boosts").and_then(Value::as_object){
                 for (key,raw) in boosts{
                     if let Some(until)=raw.as_u64(){
@@ -1962,6 +1983,38 @@ mod tests {
         assert_eq!(intel.view.measurements.kills,6);
         assert_eq!(intel.view.measurements.pokemon_xp_h,120.0*3600.0/29.0);
     }
+    #[test]
+    fn shop_vip_flag_is_authoritative_even_without_vip_expiry(){
+        let now=Instant::now();
+
+        // This is the important non-VIP case for Auto PvP: upstream can
+        // report loja.vip=false without vipAte. It must still count as a
+        // known VIP state so the matchmaking worker is allowed to proceed.
+        let mut regular=HuntIntel::new();
+        regular.ingest_value(&json!({"t":"welcome","estado":{
+            "loja":{"vip":false},"level":50
+        }}),now);
+        assert!(regular.view.bonuses.vip_known);
+        assert!(!regular.view.bonuses.vip_active);
+
+        // VIP is the same capability bit the official client checks. When an
+        // expiry is absent, keep the explicit true value rather than
+        // misclassifying the account as non-VIP.
+        let mut vip=HuntIntel::new();
+        vip.ingest_value(&json!({"t":"welcome","estado":{
+            "loja":{"vip":true},"level":50
+        }}),now);
+        assert!(vip.view.bonuses.vip_known);
+        assert!(vip.view.bonuses.vip_active);
+        vip.ingest_value(&json!({"t":"estado","estado":{"xp":123}}),now);
+        assert!(vip.snapshot().bonuses.vip_active);
+
+        // Reconnects require fresh account capability state.
+        vip.on_disconnect();
+        assert!(!vip.view.bonuses.vip_known);
+        assert!(!vip.view.bonuses.vip_active);
+    }
+
     #[test]
     fn vip_and_guild_boost_are_detected_without_servidor_agora(){
         let now=Instant::now();
