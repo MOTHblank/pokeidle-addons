@@ -111,9 +111,6 @@ pub(super) fn draw_atlas_current(
                                         h.area,h.region,h.level,h.total_spawns,tr("spawn slots")
                                     )).size(10.0).color(MUTED));
                                 }
-                                if let Some(slug)=hunts.pending_hunt_slug.as_deref(){
-                                    ui.colored_label(WARN,tr_dynamic(format!("Switch pending: {slug}")));
-                                }
                                 if hunts.pending_center {
                                     ui.colored_label(WARN,tr("Pokémon Center pending"));
                                 }

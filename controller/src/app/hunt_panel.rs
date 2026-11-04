@@ -181,6 +181,20 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let live=status.phase=="Online" && status.last_received
         .is_some_and(|received|received.elapsed()<=Duration::from_secs(90));
     let view=native.hunt_snapshot();
+    // Preserve instant click feedback until the worker publishes the
+    // authoritative pending/current state. Never leave optimistic UI stuck.
+    if let Some(server_pending)=view.pending_hunt_slug.as_deref() {
+        let replace=runtime.hunt.hunt_action_pending.as_ref()
+            .is_none_or(|(slug,_)| slug != server_pending);
+        if replace {
+            runtime.hunt.hunt_action_pending =
+                Some((server_pending.to_owned(), Instant::now()));
+        }
+    } else if runtime.hunt.hunt_action_pending.as_ref().is_some_and(|(slug,at)|
+        !live || view.hunt_slug.as_deref()==Some(slug.as_str()) ||
+        at.elapsed() > Duration::from_secs(3)) {
+        runtime.hunt.hunt_action_pending=None;
+    }
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(if live {tr("● Game connected")}else{tr("● Game stale")})
             .size(11.0).strong().color(if live {GOOD}else{WARN}));
@@ -253,7 +267,8 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
             app.hunt_reference.as_deref(),&mut runtime.hunt.atlas_filters,
             &mut app.workspace.hunt_filters.atlas_page[index],&runtime.hunt.hunt_estimate_cache,
             &runtime.hunt.atlas_scenarios,&mut runtime.hunt.atlas_results,
-            &mut runtime.hunt.hunt_action_error);
+            &mut runtime.hunt.hunt_action_error,
+            &mut runtime.hunt.hunt_action_pending);
         return;
     }
     egui::ScrollArea::vertical().id_salt(("hunt-atlas-workspace",index,app.workspace.hunt_subtab as u8))
@@ -280,6 +295,7 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         &mut app.workspace,app.hunt_reference.as_ref(),
                         &mut runtime.hunt.hunt_rankings,&runtime.hunt.hunt_estimate_cache,
                         &mut runtime.hunt.hunt_action_error,
+                        &mut runtime.hunt.hunt_action_pending,
                         app.ui_options.atlas_aoe_enabled[index]);
                 }
             }
