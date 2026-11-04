@@ -191,6 +191,7 @@ struct ChannelCache {
     streak_confirmed: Option<bool>,
     streak_length: Option<u32>,
     watch_attempts: u32,
+    last_error: Option<String>,
 }
 
 /// Two persistent watch slots. A slot keeps its broadcast identity so an
@@ -452,6 +453,7 @@ fn poll_channels(
                 Ok(id) => channel.channel_id = Some(id),
                 Err(error) => {
                     auth_failed |= error.is_auth();
+                    channel.last_error=Some(error.user_message());
                     update_streamer(snapshot, login, channel, Some(error.user_message()));
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -463,6 +465,7 @@ fn poll_channels(
 
         match gql.points_context(login) {
             Ok(context) => {
+                channel.last_error=None;
                 channel.last_points_checked=Some(Instant::now());
                 let prior = channel.balance.replace(context.balance);
                 if let Some(gained) = prior.and_then(|old| context.balance.checked_sub(old))
@@ -497,6 +500,7 @@ fn poll_channels(
                                 }
                                 Err(error) => {
                                     auth_failed |= error.is_auth();
+                                    channel.last_error=Some(error.user_message());
                                     if first_error.is_none() {
                                         first_error = Some(error);
                                     }
@@ -516,6 +520,7 @@ fn poll_channels(
             }
             Err(error) => {
                 auth_failed |= error.is_auth();
+                channel.last_error=Some(error.user_message());
                 update_streamer(snapshot, login, channel, Some(error.user_message()));
                 if first_error.is_none() {
                     first_error = Some(error);
@@ -561,6 +566,7 @@ fn poll_channels(
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
+                    channel.last_error=Some(error.user_message());
                     if first_error.is_none() {first_error=Some(error);}
                 }
             }
@@ -585,6 +591,7 @@ fn poll_channels(
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
+                    channel.last_error=Some(error.user_message());
                     if first_error.is_none(){first_error=Some(error);}
                 }
             }
@@ -616,6 +623,7 @@ fn poll_channels(
             }
             Err(error)=>{
                 channel.watch_failures=channel.watch_failures.saturating_add(1);
+                channel.last_error=Some(error.clone());
                 push_event(events,MinerEvent::Warning(format!("{}: {error}",slot.login)));
             }
         }
@@ -778,7 +786,7 @@ fn update_streamer(
             state.streak_checked=cache.streak_checked;
             state.streak_watch_attempts=cache.watch_attempts;
             state.last_update = cache.last_points_checked;
-            state.error = error;
+            state.error = error.or_else(||cache.last_error.clone());
         }
         None => current.streamers.push(StreamerState {
             login: login.to_owned(),
@@ -792,7 +800,7 @@ fn update_streamer(
             live:false,
             watching:false,
             last_update: cache.last_points_checked,
-            error,
+            error:error.or_else(||cache.last_error.clone()),
         }),
     }
 }
