@@ -244,27 +244,17 @@ pub fn clear_browser_session(profile: GameProfile) -> Result<(), String> {
     clear_twitch_cookie(&config.profile_dir)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExistingLogin {
-    Imported(String),
-    NotFound,
-    ProfileBusy,
-}
-
 /// Import an already-existing Twitch login from this account's Firefox
-/// profile without opening a browser. The caller must distinguish a genuinely
-/// logged-out profile from a currently-open profile, where direct SQLite
-/// inspection is deliberately skipped.
-pub fn import_existing(profile: GameProfile) -> Result<ExistingLogin, String> {
+/// profile without opening another browser. Firefox SQLite supports concurrent
+/// read access while the profile is open; this is the same behavior used by
+/// the interactive login watcher below.
+pub fn import_existing(profile: GameProfile) -> Result<Option<String>, String> {
     let config = twitch_config(profile)?;
-    if firefox::find_profile_process(&config)?.is_some() {
-        return Ok(ExistingLogin::ProfileBusy);
-    }
     let Some(token)=read_twitch_cookie(&config.profile_dir)? else {
-        return Ok(ExistingLogin::NotFound);
+        return Ok(None);
     };
     native_auth::save_twitch_token(profile, &token)?;
-    Ok(ExistingLogin::Imported(token))
+    Ok(Some(token))
 }
 
 #[derive(Clone, Debug)]
