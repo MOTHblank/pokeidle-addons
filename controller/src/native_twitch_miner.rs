@@ -19,6 +19,12 @@ impl TwitchMinerControl {
         }
     }
 
+    pub fn set_live_channels(&self, channels: Vec<String>) {
+        if let Some(inner)=self.inner.as_ref() {
+            inner.set_live_channels(channels);
+        }
+    }
+
     pub fn set_favorites(&self, channels: Vec<String>) {
         if let Some(inner) = self.inner.as_ref() {
             inner.set_favorites(channels);
