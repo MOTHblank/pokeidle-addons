@@ -1315,14 +1315,16 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             at.elapsed() >= Duration::from_secs(300)) {
                             last_metadata_attempt = Some(Instant::now());
                             let sender = metadata_tx.clone();
-                            thread::spawn(move || {
-                                let result = std::panic::catch_unwind(
-                                    crate::native_items::load
-                                ).unwrap_or_else(|_|Err(
-                                    "Public item metadata loader panicked".into()
-                                ));
-                                let _ = sender.send(result);
-                            });
+                            let _ = thread::Builder::new()
+                                .name("moth-item-metadata".into())
+                                .spawn(move || {
+                                    let result = std::panic::catch_unwind(
+                                        crate::native_items::load
+                                    ).unwrap_or_else(|_|Err(
+                                        "Public item metadata loader panicked".into()
+                                    ));
+                                    let _ = sender.send(result);
+                                });
                         }
                     }
                     // Read market rules only when the editor publishes a new revision.
