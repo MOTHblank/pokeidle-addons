@@ -1,17 +1,8 @@
 name: Validate native Moth Controller (Windows e Linux)
 
-# Run checks on relevant changes; produce downloadable preview binaries manually.
+# Validation is intentionally manual. Release builds run the required
+# Windows and Linux tests in build-controller.yml before publishing.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'controller/**'
-      - '.github/workflows/**'
-  pull_request:
-    branches: [master]
-    paths:
-      - 'controller/**'
-      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
