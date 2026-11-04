@@ -285,6 +285,8 @@ fn clear_stream_state(channel:&mut ChannelCache) {
     channel.last_watch=None;
     channel.last_media_activity=None;
     channel.last_media_error=None;
+    channel.last_stream_error=None;
+    channel.last_streak_error=None;
 }
 
 /// Hold two candidate broadcasts through the reference miner's streak
@@ -1173,6 +1175,50 @@ fn watch_priority(
 #[cfg(test)]
 mod priority_tests {
     use super::*;
+
+    #[test]
+    fn event_bus_preserves_queue_and_forwards_to_sink() {
+        let queue=Arc::new(Mutex::new(VecDeque::new()));
+        let seen=Arc::new(Mutex::new(Vec::<MinerEvent>::new()));
+        let sink_seen=Arc::clone(&seen);
+        let bus=EventBus {
+            queue:Arc::clone(&queue),
+            sink:Some(Arc::new(move |event| {
+                sink_seen.lock().unwrap().push(event);
+            })),
+        };
+        push_event(&bus,MinerEvent::RosterUpdated {channels:12});
+        assert!(matches!(
+            queue.lock().unwrap().front(),
+            Some(MinerEvent::RosterUpdated {channels:12})
+        ));
+        assert!(matches!(
+            seen.lock().unwrap().front(),
+            Some(MinerEvent::RosterUpdated {channels:12})
+        ));
+    }
+
+    #[test]
+    fn watch_release_reason_reports_material_state_change() {
+        let now=Instant::now();
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            broadcast_id:Some("broadcast-1".into()),
+            streak_confirmed:Some(true),
+            ..Default::default()
+        });
+        assert_eq!(
+            watch_release_reason(
+                "alpha","broadcast-1",&["alpha".into()],&cache,now
+            ),
+            "streak confirmed"
+        );
+        assert_eq!(
+            watch_release_reason("alpha","broadcast-1",&[],&cache,now),
+            "stream offline"
+        );
+    }
+
     #[test]
     fn pending_streaks_are_fair_before_favorites() {
         let now=Instant::now();
