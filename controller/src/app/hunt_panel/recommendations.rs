@@ -191,14 +191,18 @@ impl RankingsCache {
 pub(super) fn draw_hunt_row(
     ui:&mut egui::Ui,result:&RankedHunt<'_>,rank:usize,
     ranking:HuntRanking,view:&HuntView,reference:Option<&AtlasReference>,
-    live:bool,native:&NativeSession,error:&mut Option<String>,aoe_enabled:bool,
+    live:bool,native:&NativeSession,error:&mut Option<String>,
+    pending_ui:&mut Option<String>,aoe_enabled:bool,
 ){
     let hunt=result.hunt;
     let current=view.hunt_slug.as_deref()==Some(hunt.slug.as_str());
-    let pending=view.pending_hunt_slug.as_deref()==Some(hunt.slug.as_str());
+    let pending=view.pending_hunt_slug.as_deref()==Some(hunt.slug.as_str())
+        || pending_ui.as_deref()==Some(hunt.slug.as_str());
     egui::Frame::new()
-        .fill(if current{ACCENT.linear_multiply(0.12)}else{PANEL})
-        .stroke(Stroke::new(1.0,if current{ACCENT}else{BORDER}))
+        .fill(if current{ACCENT.linear_multiply(0.12)}
+            else if pending{WARN.linear_multiply(0.07)}else{PANEL})
+        .stroke(Stroke::new(1.0,if current{ACCENT}
+            else if pending{WARN.linear_multiply(0.65)}else{BORDER}))
         .corner_radius(8.0).inner_margin(egui::Margin::symmetric(12,9))
         .show(ui,|ui|{
             ui.set_min_width(ui.available_width());
@@ -214,16 +218,9 @@ pub(super) fn draw_hunt_row(
                     )).size(10.0).color(MUTED));
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
-                    if current{
-                        ui.colored_label(GOOD,tr("● Current"));
-                    }else if pending{
-                        ui.colored_label(WARN,tr("Switching…"));
-                    }else if ui.add_enabled(live,
-                        egui::Button::new(tr("Hunt →"))).clicked(){
-                        match native.send_command(GameCommand::Hunt(hunt.slug.clone())){
-                            Ok(())=>*error=None,
-                            Err(e)=>*error=Some(e),
-                        }
+                    if draw_hunt_switch_action(ui,current,pending,live) {
+                        request_hunt_with_feedback(
+                            native,&hunt.slug,error,pending_ui);
                     }
                 });
             });
@@ -300,7 +297,8 @@ pub(super) fn draw_atlas_recommendations(
     ui: &mut egui::Ui, view: &HuntView, native: &NativeSession, live: bool,
     workspace: &mut WorkspaceState, reference_handle: Option<&Arc<AtlasReference>>,
     rankings: &mut RankingsCache, estimates: &EstimateCache,
-    action_error: &mut Option<String>, aoe_enabled: bool,
+    action_error: &mut Option<String>, action_pending: &mut Option<String>,
+    aoe_enabled: bool,
 ) {
                     let hunts=&view;
                     // The always-visible Hunt Atlas context already presents
@@ -391,7 +389,7 @@ pub(super) fn draw_atlas_recommendations(
                         };
                         draw_hunt_row(ui,&row,visible.start+offset+1,workspace.hunt_filters.ranking,
                             hunts,reference,live,native,action_error,
-                            aoe_enabled);
+                            action_pending,aoe_enabled);
                         ui.add_space(5.0);
                     }
                     if ranked.is_empty(){
