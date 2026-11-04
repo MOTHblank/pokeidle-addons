@@ -205,22 +205,6 @@ pub struct HistoryDay {
     pub drops: BTreeMap<String,u64>,
 }
 impl HistoryDay {
-    fn to_value(&self) -> Value {
-        json!({
-            "day":self.day,"hunt":self.hunt,
-            "kills":self.kills,"captures":self.captures,
-            "shinySeen":self.shiny_seen,"shinyCaptured":self.shiny_captured,
-            "trainerXp":self.trainer_xp,"pokemonXp":self.pokemon_xp,
-            "observedSeconds":self.observed_seconds,
-            "timedKills":self.timed_kills,
-            "timedTrainerXp":self.timed_trainer_xp,
-            "timedPokemonXp":self.timed_pokemon_xp,
-            "timedTrainerReceipts":self.timed_trainer_receipts,
-            "timedPokemonReceipts":self.timed_pokemon_receipts,
-            "combatGold":self.combat_gold,"autoSaleGold":self.auto_sale_gold,
-            "ballsUsed":self.balls_used,"drops":self.drops
-        })
-    }
     fn from_value(value: &Value) -> Option<Self> {
         let day = value.get("day")?.as_u64()?;
         let hunt = value.get("hunt")?.as_str()?.to_owned();
@@ -309,11 +293,6 @@ impl HistoryForecast {
         Some(Self{day:hour/24,hour,hunt:hunt.into(),
             trainer_xp_h,pokemon_xp_h,kills_h,calibrated})
     }
-    fn to_value(&self)->Value{
-        json!({"day":self.day,"hour":self.hour,"hunt":self.hunt,
-            "trainerH":self.trainer_xp_h,"pokemonH":self.pokemon_xp_h,
-            "killsH":self.kills_h,"calibrated":self.calibrated})
-    }
     fn from_value(raw:&Value)->Option<Self>{
         let hunt=raw.get("hunt")?.as_str()?.to_owned();
         if hunt.is_empty()||hunt.len()>128{return None}
@@ -356,13 +335,6 @@ pub struct HistorySnapshot {
     pub save_error: Option<String>,
 }
 impl HistorySnapshot {
-    fn to_value(&self, nick: &str) -> Value {
-        json!({"version":1,"nick":nick,
-            "lifetime":self.lifetime.to_value(),
-            "days":self.days.iter().map(HistoryDay::to_value).collect::<Vec<_>>(),
-            "forecasts":self.forecasts.iter().map(HistoryForecast::to_value)
-                .collect::<Vec<_>>()})
-    }
     fn from_value(value: &Value, nick: &str) -> Result<Self,String> {
         if value.get("version").and_then(Value::as_u64)!=Some(1)
             || value.get("nick").and_then(Value::as_str)!=Some(nick) {

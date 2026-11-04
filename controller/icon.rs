@@ -49,6 +49,9 @@ pub fn rgba(size: u32) -> Vec<u8> {
     rgba
 }
 
+// Also compiled into build.rs, which calls this on Windows. The runtime
+// binary includes this module for RGBA icons but does not write ICO files.
+#[allow(dead_code)]
 pub fn write_ico(path: &Path, size: u32) -> io::Result<()> {
     if !(1..=256).contains(&size) {
         return Err(io::Error::new(

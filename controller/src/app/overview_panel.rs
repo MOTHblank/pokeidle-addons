@@ -404,7 +404,9 @@ pub(super) fn draw_overview_card(
                 }
                 if fresh {
                     if let Some(status) = sample.native.as_ref().map(|s| &s.native_pvp) {
-                        if pvp_on || status.cancelling {
+                        // Use the worker's effective state for operational details;
+                        // the button above uses the saved preference for immediate toggles.
+                        if status.enabled || status.cancelling {
                             let info = if status.cancelling {
                                 if pt_br() { "Desligando PvP" } else { "Stopping PvP" }.to_owned()
                             } else if status.paused {
