@@ -177,6 +177,9 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         }
                     });
                 }
+                ui.label(RichText::new(tr(
+                    "Export includes manually entered marker labels. Review them before sharing a report."
+                )).size(10.0).color(DIM));
                 let current = recording.snapshot();
                 if let Some(snapshot) = current {
                     ui.add_space(12.0);
