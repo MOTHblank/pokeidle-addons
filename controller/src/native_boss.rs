@@ -125,7 +125,7 @@ pub struct LootWriteStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Stage { GoingCenter, CancellingCenter, Running, Returning }
+enum Stage { GoingCenter, Running, Returning }
 struct Trip {
     key: String,
     original: Option<String>,
@@ -408,9 +408,12 @@ impl BossManager {
         });
         self.view.original_hunt = original;
         self.view.warning = None;
-        self.view.phase = "Traveling to Pokémon Center".into();
-        if hunt.in_center { navigator.cancel(); }
-        else { navigator.center(now); }
+        self.view.phase = "Waiting for a safe boss switch opening".into();
+        // Boss entry is a destination change, not a Center trip. Replace any
+        // older pending navigation and wait on the exact same server gate used
+        // by Hunt Atlas before sending the boss command.
+        navigator.cancel();
+        let _ = now;
         Ok(())
     }
     pub fn stop(&mut self, navigator: &mut HuntNavigator,
@@ -423,19 +426,12 @@ impl BossManager {
         let trip = self.trip.as_mut()?;
         trip.ended = true;
         if trip.stage == Stage::GoingCenter {
-            // The server may still complete centro.ir after Stop. Do not lose
-            // the saved hunt if Center was already dispatched or reached.
-            let in_flight = navigator.center_command_sent() || hunt.in_center;
+            // No boss command has been dispatched while this stage is active;
+            // cancelling is therefore immediate and cannot consume an entry.
             navigator.cancel();
-            if in_flight && trip.original.is_some() {
-                trip.stage = Stage::CancellingCenter;
-                trip.dispatched_at = Some(now);
-                self.view.phase = "Cancelling boss travel; checking server location".into();
-            } else {
-                self.trip = None;
-                self.view.original_hunt = None;
-                self.view.phase = "Boss trip cancelled before entry".into();
-            }
+            self.trip = None;
+            self.view.original_hunt = None;
+            self.view.phase = "Boss request cancelled before entry".into();
             return None;
         }
         if !trip.repeat { return None; }
@@ -575,60 +571,26 @@ impl BossManager {
                        navigator: &mut HuntNavigator, now: Instant) -> Option<GameCommand> {
         let trip = self.trip.as_mut()?;
         if trip.recovering { return None; }
-        if trip.stage == Stage::CancellingCenter {
-            if hunt.in_center && !self.view.auto && self.view.arena.is_none() {
-                if let Some(original) = trip.original.as_ref() {
-                    if hunt.catalog_ready &&
-                        hunt.hunts.iter().any(|entry| entry.slug == *original) {
-                        navigator.select(original.clone(), now);
-                        trip.stage = Stage::Returning;
-                        self.view.phase = "Returning to saved hunt".into();
-                    } else {
-                        self.view.warning = Some(
-                            "Original hunt is no longer available; return manually".into()
-                        );
-                        self.trip = None;
-                        self.view.original_hunt = None;
-                    }
-                } else {
-                    self.trip = None;
-                    self.view.original_hunt = None;
-                }
-            } else if !self.view.auto && self.view.arena.is_none() &&
-                trip.dispatched_at.is_some_and(|at|
-                    now.saturating_duration_since(at) >= Duration::from_secs(20)) {
-                // A rejected or lost Center request must not lock the UI.
-                // Never issue a boss command while cancelling this trip.
-                if hunt.hunt_slug.as_deref() != trip.original.as_deref() {
-                    self.view.warning = Some(
-                        "Boss travel cancellation timed out; verify the current location".into()
-                    );
-                }
-                self.trip = None;
-                self.view.original_hunt = None;
-                self.view.phase = "Boss trip cancelled before entry".into();
-            }
-            return None;
-        }
         if trip.resume_stop {
             trip.resume_stop = false;
             // Fresh command, only after the new authenticated welcome confirms
             // the server is still repeating the same boss we were stopping.
             return Some(GameCommand::BossAuto { active:false, key:trip.key.clone() });
         }
-        if trip.stage == Stage::GoingCenter && hunt.in_center {
-            // Inventory can change while travel is waiting for a safe opening.
-            // Recheck against the latest server snapshot, never the initial
-            // click-time balance. Do not ask the server for a doomed entry.
+        if trip.stage == Stage::GoingCenter && navigator.switch_open(hunt, now) {
+            // Inventory can change while waiting for the same safe opening
+            // Hunt Atlas uses for a hunt change. Recheck against the latest
+            // server snapshot, never the initial click-time balance.
             let allowed = self.view.catalog.iter().find(|boss| boss.key == trip.key)
                 .is_some_and(|boss| hunt.trainer_level.unwrap_or(0) >= boss.min_level &&
                     hunt.items.get(&boss.token_id).copied().unwrap_or(0) >= boss.tokens_per_entry);
             if !allowed {
-                trip.stage = Stage::Running;
-                trip.ended = true;
+                navigator.cancel();
                 self.view.warning = Some(
-                    "Boss tokens or requirements changed before entry; returning to saved hunt".into());
+                    "Boss tokens or requirements changed before entry; request cancelled".into());
                 self.view.phase = "Boss entry cancelled".into();
+                self.trip = None;
+                self.view.original_hunt = None;
                 return None;
             }
             trip.stage = Stage::Running;
@@ -702,18 +664,15 @@ impl BossManager {
     /// establishes the server's current arena, auto state and location.
     pub fn on_disconnect(&mut self, navigator: &HuntNavigator, hunt: &HuntView) {
         if let Some(trip) = self.trip.as_mut() {
-            if trip.stage == Stage::GoingCenter &&
-                !navigator.center_command_sent() && !hunt.in_center {
-                // No Center command left this socket; it is safe to discard
-                // the pending boss trip without a return obligation.
+            if trip.stage == Stage::GoingCenter {
+                // The boss command is emitted only after this stage changes to
+                // Running, so a disconnect here proves nothing was sent.
                 self.trip = None;
                 self.view.original_hunt = None;
                 self.view.warning = Some(
-                    "Boss trip cancelled before entry because the connection dropped".into());
+                    "Boss request cancelled before entry because the connection dropped".into());
                 self.view.phase = "Boss trip interrupted".into();
             } else {
-                // A Center command already in flight may complete during the
-                // outage. Keep the return target but never replay boss entry.
                 trip.recovering = true;
                 self.view.warning = Some(
                     "Connection interrupted; verifying boss state before restoring saved hunt".into());
