@@ -24,9 +24,13 @@ impl ControllerApp {
         match Config::save_ui_options(&updated) {
             Ok(()) => {
                 self.ui_options = updated;
+                self.workspace.options_failed_save = None;
                 self.set_status(tr("Controller options saved").to_owned(), false);
             }
-            Err(error) => self.set_status(error, true),
+            Err(error) => {
+                self.workspace.options_failed_save = Some((updated, error.clone()));
+                self.set_status(error, true);
+            },
         }
     }
 
