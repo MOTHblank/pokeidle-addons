@@ -273,18 +273,45 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             "Todos os streamers oficiais são listados, inclusive offline. Favoritos têm prioridade após sequências pendentes. Duas vagas de visualização fixas; todos os saldos são consultados com autenticação."))
             .size(10.0).color(MUTED));
         ui.add_space(6.0);
-        if let Some(snapshot) = snapshot.as_ref() {
-            if snapshot.streamers.is_empty() {
-                ui.label(RichText::new(if desired == 0 {
-                    label(br, "No official live Twitch channels provided by PokéIdle yet.",
-                        "Ainda não há canais oficiais ao vivo fornecidos pelo PokéIdle.")
-                } else {
-                    label(br, "Waiting for channel information.",
-                        "Aguardando informações dos canais.")
-                }).size(11.0).color(MUTED));
-            }
+        {
             let favorites=app.workspace.twitch_favorites[index].clone();
-            let mut rows=snapshot.streamers.iter().collect::<Vec<_>>();
+            let mut channels=std::collections::BTreeMap::<String,moth_twitch::StreamerState>::new();
+            // Server-authoritative catalog stays visible even before Twitch
+            // authentication has completed or the miner has polled balances.
+            if let Some(state)=game_state.as_ref() {
+                if let Some(official)=state.twitch_official_roster.as_ref() {
+                    for login in official {
+                        channels.insert(login.clone(),moth_twitch::StreamerState {
+                            login:login.clone(), ..Default::default()
+                        });
+                    }
+                }
+            }
+            for name in &favorites {
+                channels.entry(name.clone()).or_insert_with(||
+                    moth_twitch::StreamerState {
+                        login:name.clone(), ..Default::default()
+                    });
+            }
+            if let Some(snapshot)=snapshot.as_ref() {
+                for streamer in &snapshot.streamers {
+                    channels.insert(streamer.login.clone(),streamer.clone());
+                }
+            }
+            if let Some(state)=game_state.as_ref() {
+                if let Some(live)=state.twitch_official_live.as_ref() {
+                    for channel in channels.values_mut() {
+                        channel.live=live.binary_search(&channel.login).is_ok();
+                    }
+                }
+            }
+            if channels.is_empty() {
+                ui.label(RichText::new(label(br,
+                    "No official streamer catalog yet. Connect PokéIdle to discover channels.",
+                    "Ainda não há catálogo oficial. Conecte o PokéIdle para descobrir canais."))
+                    .size(11.0).color(MUTED));
+            }
+            let mut rows=channels.values().collect::<Vec<_>>();
             rows.sort_by(|a,b| {
                 b.live.cmp(&a.live)
                     .then_with(||favorites.contains(&b.login).cmp(&favorites.contains(&a.login)))
@@ -310,11 +337,6 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     label(br,"Offline streamers","Streamers offline")))
                     .size(10.0).color(MUTED));
             }
-        } else {
-            ui.label(RichText::new(label(br,
-                "Miner inactive. A Twitch sign-in is optional and will not prevent PokéIdle from running.",
-                "Minerador inativo. O login Twitch é opcional e não impede o PokéIdle de funcionar."))
-                .size(11.0).color(MUTED));
         }
     });
 }
