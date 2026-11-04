@@ -290,6 +290,141 @@ fn push_event(events: &Arc<Mutex<VecDeque<MinerEvent>>>, event: MinerEvent) {
     }
 }
 
+fn confirm_streak(
+    login:&str,
+    channel:&mut ChannelCache,
+    reason:&str,
+    snapshot:&Arc<Mutex<MinerSnapshot>>,
+    events:&Arc<Mutex<VecDeque<MinerEvent>>>,
+) {
+    if channel.streak_confirmed==Some(true) {return;}
+    channel.streak_confirmed=Some(true);
+    channel.streak_priority_exhausted=false;
+    channel.streak_checked=Some(Instant::now());
+    push_event(events,MinerEvent::StreakConfirmed {
+        channel:login.to_owned(),reason:reason.to_owned()
+    });
+    if let Ok(mut current)=snapshot.lock() {
+        current.last_received=Some(Instant::now());
+    }
+}
+
+fn apply_pubsub_events(
+    gql:&TwitchGql,
+    config:&MinerConfig,
+    pending:&mut VecDeque<PubSubEvent>,
+    cache:&mut HashMap<String,ChannelCache>,
+    snapshot:&Arc<Mutex<MinerSnapshot>>,
+    events:&Arc<Mutex<VecDeque<MinerEvent>>>,
+) {
+    let count=pending.len();
+    for _ in 0..count {
+        let Some(event)=pending.pop_front() else {break};
+        match event {
+            PubSubEvent::Connected=>{
+                if let Ok(mut current)=snapshot.lock() {
+                    current.pubsub_connected=true;
+                    current.pubsub_error=None;
+                }
+            }
+            PubSubEvent::Warning(error)=>{
+                if let Ok(mut current)=snapshot.lock() {
+                    current.pubsub_connected=false;
+                    current.pubsub_error=Some(error.clone());
+                }
+                push_event(events,MinerEvent::Warning(error));
+            }
+            PubSubEvent::PointsEarned{channel_id,amount,balance,reason}=>{
+                let Some((login,channel))=cache.iter_mut()
+                    .find(|(_,channel)|channel.channel_id.as_deref()==Some(channel_id.as_str()))
+                    .map(|(login,channel)|(login.clone(),channel))
+                else {
+                    pending.push_back(PubSubEvent::PointsEarned {
+                        channel_id,amount,balance,reason
+                    });
+                    continue;
+                };
+                let before=channel.balance;
+                let next=match before {
+                    Some(current) if amount>0=>current.saturating_add(amount),
+                    Some(current)=>balance.unwrap_or(current),
+                    None=>balance.unwrap_or(amount),
+                };
+                channel.balance=Some(next);
+                channel.last_points_checked=Some(Instant::now());
+                channel.last_error=None;
+                let gained=if amount>0 {
+                    amount
+                } else {
+                    before.and_then(|old|next.checked_sub(old)).unwrap_or(0)
+                };
+                if gained>0 {
+                    if let Ok(mut current)=snapshot.lock() {
+                        current.points_gained=current.points_gained.saturating_add(gained);
+                        current.last_received=Some(Instant::now());
+                    }
+                    push_event(events,MinerEvent::PointsGained {
+                        channel:login.clone(),amount:gained,balance:next
+                    });
+                }
+                match reason.as_str() {
+                    "WATCH_STREAK"=>confirm_streak(
+                        &login,channel,"PubSub WATCH_STREAK",snapshot,events
+                    ),
+                    "WATCH"=>{
+                        channel.watch_reward_count=
+                            channel.watch_reward_count.saturating_add(1);
+                        // Reference parity: a second ordinary WATCH reward
+                        // proves Twitch processed enough watch activity to
+                        // resolve the current streak even if RewardList lags.
+                        if channel.watch_reward_count>=2 {
+                            confirm_streak(
+                                &login,channel,"PubSub WATCH x2",snapshot,events
+                            );
+                        }
+                    }
+                    _=>{}
+                }
+                update_streamer(snapshot,&login,channel,None);
+            }
+            PubSubEvent::ClaimAvailable{channel_id,claim_id}=>{
+                let Some((login,channel))=cache.iter_mut()
+                    .find(|(_,channel)|channel.channel_id.as_deref()==Some(channel_id.as_str()))
+                    .map(|(login,channel)|(login.clone(),channel))
+                else {
+                    pending.push_back(PubSubEvent::ClaimAvailable {
+                        channel_id,claim_id
+                    });
+                    continue;
+                };
+                if !config.claim_bonuses
+                    || channel.last_claim_id.as_deref()==Some(claim_id.as_str()) {
+                    continue;
+                }
+                match gql.claim_bonus(&channel_id,&claim_id) {
+                    Ok(())=>{
+                        channel.last_claim_id=Some(claim_id);
+                        channel.last_error=None;
+                        if let Ok(mut current)=snapshot.lock() {
+                            current.bonuses_claimed=
+                                current.bonuses_claimed.saturating_add(1);
+                            current.last_received=Some(Instant::now());
+                        }
+                        push_event(events,MinerEvent::BonusClaimed{channel:login});
+                    }
+                    Err(error)=>{
+                        channel.last_error=Some(error.user_message());
+                        push_event(events,MinerEvent::Warning(format!(
+                            "{}: {}",login,error.user_message()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    while pending.len()>128 {pending.pop_front();}
+}
+
 fn set_phase(
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     wake: &PhaseWake,
@@ -595,7 +730,10 @@ fn poll_channels(
                         channel.streak_confirmed=None;
                         channel.streak_checked=None;
                         channel.watch_attempts=0;
+                        channel.watch_reward_count=0;
+                        channel.streak_priority_exhausted=false;
                         channel.last_watch=None;
+                        channel.last_media_activity=None;
                     }
                 }
                 Ok(None) => {
@@ -604,6 +742,8 @@ fn poll_channels(
                     channel.streak_confirmed=None;
                     channel.streak_checked=None;
                     channel.watch_attempts=0;
+                    channel.watch_reward_count=0;
+                    channel.streak_priority_exhausted=false;
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
@@ -620,7 +760,7 @@ fn poll_channels(
             match gql.streak(id) {
                 Ok(milestone) => {
                     channel.streak_length=milestone.length;
-                    channel.streak_confirmed=match (
+                    let detected=match (
                         channel.stream_started.as_deref(),
                         milestone.achieved_at.as_deref()
                     ) {
@@ -629,6 +769,11 @@ fn poll_channels(
                         (Some(_),None) if milestone.length.is_some() => Some(false),
                         _ => None,
                     };
+                    if detected==Some(true) {
+                        confirm_streak(login,channel,"RewardList",snapshot,events);
+                    } else if channel.streak_confirmed!=Some(true) {
+                        channel.streak_confirmed=detected;
+                    }
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
