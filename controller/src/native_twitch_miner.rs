@@ -105,11 +105,21 @@ impl TwitchMinerSession {
 
     pub fn replace_token(
         &self,
-        token: &str,
-        wake: Option<PhaseWake>,
-    ) -> Result<(), String> {
-        if self.closed.load(Ordering::Acquire) {
-            return Err("Twitch miner session is stopped".into());
+        token:&str,
+        wake:Option<PhaseWake>,
+    )->Result<(),String> {
+        self.replace_token_checked(token,wake,||true).and_then(|applied|
+            if applied {Ok(())} else {Err("Twitch miner replacement was superseded".into())})
+    }
+
+    pub fn replace_token_checked(
+        &self,
+        token:&str,
+        wake:Option<PhaseWake>,
+        is_current:impl Fn()->bool,
+    )->Result<bool,String> {
+        if self.closed.load(Ordering::Acquire) || !is_current() {
+            return Ok(false);
         }
         if let Some(wake)=wake {
             if let Ok(mut current)=self.phase_wake.lock() {
@@ -124,15 +134,15 @@ impl TwitchMinerSession {
             miner.set_phase_waker(wake);
         }
         let new_control = miner.control();
-        if self.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || !is_current() {
             miner.stop();
-            return Err("Twitch miner session is stopped".into());
+            return Ok(false);
         }
         let mut slot = self.miner.lock()
             .map_err(|_| "Twitch miner state unavailable".to_owned())?;
-        if self.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || !is_current() {
             miner.stop();
-            return Err("Twitch miner session is stopped".into());
+            return Ok(false);
         }
         if let Some(previous) = slot.take() {
             previous.stop();
@@ -140,7 +150,7 @@ impl TwitchMinerSession {
         *slot = Some(miner);
         drop(slot);
         self.control.attach(Some(new_control));
-        Ok(())
+        Ok(true)
     }
 
     pub fn clear_login(&self) {
