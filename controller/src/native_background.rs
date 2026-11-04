@@ -299,9 +299,45 @@ impl NativeSession {
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
-        let twitch_miner = TwitchMinerSession::start_optional(
-            bootstrap.get("twitch").filter(|value| !value.is_null())
-        );
+
+        // Twitch authentication has its own protected vault, like Kick.
+        // Migrate an older bootstrap token once, then prefer the current
+        // Firefox cookie when no dedicated credential exists yet.
+        let mut twitch_token = crate::native_auth::load_twitch_token(profile)
+            .unwrap_or_else(|error| {
+                crate::logging::warn(&format!(
+                    "{} Twitch credential lookup unavailable: {error}", profile.name()
+                ));
+                None
+            });
+        if twitch_token.is_none() {
+            let legacy = bootstrap.get("twitch")
+                .and_then(|value| value.get("token"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned);
+            if let Some(token) = legacy {
+                if let Err(error) = crate::native_auth::save_twitch_token(profile, &token) {
+                    crate::logging::warn(&format!(
+                        "{} could not migrate Twitch login to protected storage: {error}",
+                        profile.name()
+                    ));
+                }
+                twitch_token = Some(token);
+            }
+        }
+        if twitch_token.is_none() {
+            match crate::native_twitch_login::import_existing(profile) {
+                Ok(found) => twitch_token = found,
+                Err(error) => crate::logging::warn(&format!(
+                    "{} automatic Twitch login import unavailable: {error}",
+                    profile.name()
+                )),
+            }
+        }
+
+        let twitch_miner = TwitchMinerSession::start_optional(twitch_token.as_deref());
         Self::spawn(profile, credentials, twitch_miner, Some(initial),
             bootstrap.get("autocatch").cloned())
     }
@@ -551,6 +587,30 @@ impl NativeSession {
     }
     pub fn set_twitch_favorites(&self, channels: Vec<String>) {
         self.twitch_miner.set_favorites(channels);
+    }
+    pub fn refresh_twitch_login(&self) -> Result<bool, String> {
+        let Some(token)=crate::native_auth::load_twitch_token(self.profile)? else {
+            self.twitch_miner.clear_login();
+            return Ok(false);
+        };
+        let wake=self.phase_wake.lock().ok().and_then(|slot|slot.clone());
+        self.twitch_miner.replace_token(&token,wake)?;
+
+        // Reapply the latest server-derived targeting immediately instead of
+        // waiting for another PokéIdle frame after a successful Firefox login.
+        let state=self.snapshot();
+        let control=self.twitch_miner.control();
+        if let Some(channels)=state.twitch_official_roster.clone() {
+            control.set_channels(channels);
+        }
+        if let Some(channels)=state.twitch_official_live.clone() {
+            control.set_live_channels(channels);
+        }
+        control.set_expected_login(state.twitch_login.clone());
+        Ok(true)
+    }
+    pub fn forget_twitch_login(&self) {
+        self.twitch_miner.clear_login();
     }
     pub fn twitch_miner_snapshot(&self) -> Option<moth_twitch::MinerSnapshot> {
         self.twitch_miner.snapshot()
