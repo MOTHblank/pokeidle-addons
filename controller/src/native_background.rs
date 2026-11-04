@@ -1081,8 +1081,11 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         let vip = hunt_intel.view.bonuses.vip_active;
                         let vip_auto = hunt_intel.view.automation.as_ref()
                             .and_then(|a| a.get("pvpAutoFila")).and_then(Value::as_bool);
-                        if let Some(action) = pvp.next(pref, vip, vip_auto,
-                            hunt_intel.view.trainer_level, Instant::now()) {
+                        // Do not treat an unconfirmed VIP status as non-VIP:
+                        // matchmaking must wait until the server reports it.
+                        if hunt_intel.view.bonuses.vip_known {
+                            if let Some(action) = pvp.next(pref, vip, vip_auto,
+                                hunt_intel.view.trainer_level, Instant::now()) {
                             match action {
                                 PvpAction::SetVipAuto(wanted) => {
                                     if let Err(error) = automation_writer.queue(
@@ -1098,6 +1101,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     }
                                 },
                             }
+                        }
                         }
                         last_pvp_tick = Instant::now();
                     }
