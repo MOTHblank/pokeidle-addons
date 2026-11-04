@@ -151,7 +151,12 @@ impl PvpAutomation {
             if let Some(ms) = recusa.get("restaMs").and_then(Value::as_u64) {
                 self.cooldown_until = Some(now + Duration::from_millis(ms.min(MAX_SERVER_COOLDOWN_MS)));
             }
-            self.warning = Some("PokéIdle refused the PvP queue request; checking eligibility before retrying".into());
+            self.warning = Some(recusa.get("msg").and_then(Value::as_str)
+                .filter(|reason| !reason.trim().is_empty())
+                .map_or_else(
+                    || "PokéIdle refused the PvP queue request; checking eligibility before retrying".to_owned(),
+                    |reason| format!("PokéIdle refused the PvP queue request: {reason}"),
+                ));
             self.queue_known = false;
             self.next_info_at = Some(now + REFUSAL_BACKOFF);
         }
@@ -168,7 +173,7 @@ impl PvpAutomation {
         }
         if frame.get("filaAutoDesligada").and_then(Value::as_bool) == Some(true) {
             self.vip_rejected = true;
-            self.warning = Some("PokéIdle disabled VIP automatic matchmaking. Check your PvP team and trainer level, then turn Auto PvP off and on to retry.".into());
+            self.warning = Some("PokéIdle disabled VIP automatic matchmaking; Moth will use direct matchmaking while Auto PvP stays enabled.".into());
         }
     }
 
@@ -215,12 +220,16 @@ impl PvpAutomation {
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
             retry_secs: self.next_join_at.map(|until|
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
-            waiting_for_team: enabled && !vip && self.team_ready == Some(false),
-            waiting_for_level: if enabled && !vip {
-                self.min_level.filter(|minimum| level.is_none_or(|lv| lv < *minimum))
+            // Optional pvp.info metadata is advisory. Only an explicit server
+            // report that the team/level is invalid may block direct matchmaking.
+            waiting_for_team: enabled && self.team_ready == Some(false),
+            waiting_for_level: if enabled {
+                self.min_level.filter(|minimum| level.is_some_and(|lv| lv < *minimum))
             } else { None },
             checking_queue: enabled && !self.queue_known,
-            paused: enabled && vip && self.vip_rejected,
+            // An explicit Moth preference can recover through direct
+            // matchmaking even when the game's VIP auto-queue disables itself.
+            paused: enabled && vip && self.vip_rejected && preference.is_none(),
             cancelling: !enabled && (self.owned_queue || self.vip_cancel_pending),
             rank: self.rank.clone(),
             placement_matches: self.placement_matches,
@@ -228,15 +237,19 @@ impl PvpAutomation {
         }
     }
 
-    /// Returns at most one low-frequency wire intent per tick. A VIP account
-    /// uses the game's native auto-queue and NEVER joins via the client loop.
+    /// Returns at most one low-frequency wire intent per tick. VIP keeps the
+    /// game's native auto-queue, but direct matchmaking is also a recovery path
+    /// when that setting is unavailable or reports no active queue.
     pub fn next(&mut self, preference: Option<bool>, vip: bool,
         vip_auto: Option<bool>, level: Option<u32>, now: Instant) -> Option<PvpAction> {
         let enabled = Self::enabled(preference, vip, vip_auto);
 
-        // Turning off a queue we started must cancel it. Do not cancel a
-        // player-created queue when this controller never joined it.
-        if !enabled && self.owned_queue {
+        // Turning off a queue we started must cancel it. On VIP, disable the
+        // server auto-queue first so it cannot immediately recreate the search.
+        // Do not cancel a player-created queue when this controller never joined it.
+        let must_disable_vip_auto_first =
+            vip && preference == Some(false) && vip_auto != Some(false);
+        if !enabled && self.owned_queue && !must_disable_vip_auto_first {
             // Wait for an outstanding Join acknowledgement before cancelling;
             // the server can complete independent handlers out of order.
             if let Some(sent) = self.join_sent {
@@ -313,14 +326,17 @@ impl PvpAutomation {
                     return Some(PvpAction::Leave);
                 }
             }
-            // A VIP queue can also run with the PvP page closed. Keep the
-            // read-only PvP snapshot fresh even while Auto PvP is disabled so
-            // the overview can always show the trainer's current rank.
-            if self.next_info_at.is_none_or(|due| now >= due) {
-                self.next_info_at = Some(now + INFO_INTERVAL);
-                return Some(PvpAction::Info);
+            // When disabled, VIP still gets the same read-only rank refresh.
+            // When enabled, fall through to the direct queue coordinator too:
+            // the server-native switch remains preferred, but it is no longer
+            // a single point of failure for Moth Auto PvP.
+            if !enabled {
+                if self.next_info_at.is_none_or(|due| now >= due) {
+                    self.next_info_at = Some(now + INFO_INTERVAL);
+                    return Some(PvpAction::Info);
+                }
+                return None;
             }
-            return None;
         }
         if !enabled {
             // Rank is useful account information, not an automation-only
@@ -347,8 +363,13 @@ impl PvpAutomation {
         }
         if !self.queue_known { return None; }
         if self.queued || self.owned_queue { return None; }
-        if self.team_ready != Some(true) ||
-            self.min_level.is_none_or(|min| level.is_none_or(|lv| lv < min)) {
+        // pvp.info is a partial message family upstream. Missing team/rules
+        // fields are not proof of ineligibility; the queue command itself is
+        // server-authoritative and returns filaRecusa when something is wrong.
+        // Block only conditions the server explicitly told us are invalid.
+        let known_low_level = self.min_level.zip(level)
+            .is_some_and(|(minimum, current)| current < minimum);
+        if self.team_ready == Some(false) || known_low_level {
             if self.next_info_at.is_none_or(|due| now >= due) {
                 self.next_info_at = Some(now + INFO_INTERVAL);
                 return Some(PvpAction::Info);
@@ -443,6 +464,18 @@ mod tests {
         assert_eq!(PvpAction::Join.wire().unwrap(),json!({"t":"pvp.fila.entrar"}));
     }
     #[test]
+    fn partial_pvp_info_does_not_block_server_validated_matchmaking() {
+        let t=Instant::now();
+        let mut p=PvpAutomation::default();
+        assert_eq!(p.next(Some(true),false,None,None,t),Some(PvpAction::Info));
+        // Upstream pvp messages are partial. Queue state alone is enough to
+        // establish that a direct matchmaking attempt is safe; the server
+        // remains authoritative for team and level eligibility.
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        assert_eq!(p.next(Some(true),false,None,None,t),Some(PvpAction::Join));
+    }
+
+    #[test]
     fn no_team_low_level_cooldown_and_refusal_are_respected() {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
@@ -514,15 +547,21 @@ mod tests {
         assert!(!p.owned_queue);
     }
     #[test]
-    fn vip_inherits_server_setting_and_never_client_joins() {
+    fn vip_native_auto_has_direct_matchmaking_fallback() {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
         assert_eq!(p.next(None,true,Some(true),Some(30),t),Some(PvpAction::Info));
         assert!(p.status(None,true,Some(true),Some(30),t).enabled);
-        assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
+        // A confirmed native setting is not enough: if pvp.info says the
+        // account is not actually queued, Moth may submit the normal command.
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        assert_eq!(p.next(None,true,Some(true),Some(30),t),Some(PvpAction::Join));
+
+        let mut sync=PvpAutomation::default();
+        assert_eq!(sync.next(Some(false),true,Some(true),Some(30),t),
             Some(PvpAction::SetVipAuto(false)));
-        assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
-        assert_eq!(p.next(Some(true),true,Some(false),Some(30),t),
+        assert_eq!(sync.next(Some(false),true,Some(true),Some(30),t),None);
+        assert_eq!(sync.next(Some(true),true,Some(false),Some(30),t),
             Some(PvpAction::SetVipAuto(true)));
     }
     #[test]
@@ -599,20 +638,22 @@ mod tests {
         assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Leave));
     }
     #[test]
-    fn server_vip_refusal_pauses_retries_until_user_rearms() {
+    fn server_vip_refusal_falls_back_to_direct_matchmaking() {
         let t = Instant::now();
         let mut p = PvpAutomation::default();
         p.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
-        assert!(p.status(Some(true),true,Some(false),Some(25),t).paused);
+        assert!(!p.status(Some(true),true,Some(false),Some(25),t).paused);
+        // Do not hammer the rejected VIP switch. Query the authoritative queue
+        // and continue through the same manual command available to non-VIP.
         assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),Some(PvpAction::Info));
-        assert_eq!(p.next(Some(true),true,Some(false),Some(25),
-            t + Duration::from_secs(30)),None);
-        assert_eq!(p.next(Some(false),true,Some(false),Some(25),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
         assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
-            Some(PvpAction::SetVipAuto(true)));
-        p.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
-        p.on_user_toggle(); // Off/on happened between polling ticks.
-        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
+            Some(PvpAction::Join));
+
+        let mut rearmed=PvpAutomation::default();
+        rearmed.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
+        rearmed.on_user_toggle();
+        assert_eq!(rearmed.next(Some(true),true,Some(false),Some(25),t),
             Some(PvpAction::SetVipAuto(true)));
     }
     #[test]
