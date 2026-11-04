@@ -1044,12 +1044,13 @@ fn read_twitch_auth_cookie(session: &mut BrowserSession) -> Option<Value> {
         if name != "auth-token" || (domain != "twitch.tv" && !domain.ends_with(".twitch.tv")) {
             continue;
         }
-        let encoded = cookie.get("value")?;
+        let Some(encoded) = cookie.get("value") else { continue };
         let token = if encoded.get("type").and_then(Value::as_str) == Some("string") {
             encoded.get("value").and_then(Value::as_str)
         } else {
             encoded.as_str()
-        }?.trim();
+        };
+        let Some(token)=token.map(str::trim) else { continue };
         if token.is_empty() || token.len() > 2048
             || token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
         {
