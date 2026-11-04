@@ -638,6 +638,7 @@ fn poll_channels(
             .then_with(||a.cmp(b))
     });
     let mut checked_this_tick=0usize;
+    let mut id_checks=0usize;
     for login in ordered {
         if stop.load(Ordering::Acquire) {return false;}
         let channel = cache.entry(login.clone()).or_default();
@@ -646,14 +647,12 @@ fn poll_channels(
         } else {
             Duration::from_secs(180)
         };
-        let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
-        if !due || checked_this_tick>=4 {
-            update_streamer(snapshot,login,channel,None);
-            continue;
-        }
-        checked_this_tick+=1;
-        channel.last_points_attempt=Some(Instant::now());
         if channel.channel_id.is_none() {
+            if id_checks>=8 {
+                update_streamer(snapshot,login,channel,None);
+                continue;
+            }
+            id_checks+=1;
             match gql.lookup_channel_id(login) {
                 Ok(id) => channel.channel_id = Some(id),
                 Err(error) => {
@@ -667,6 +666,13 @@ fn poll_channels(
                 }
             }
         }
+        let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
+        if !due || checked_this_tick>=4 {
+            update_streamer(snapshot,login,channel,None);
+            continue;
+        }
+        checked_this_tick+=1;
+        channel.last_points_attempt=Some(Instant::now());
 
         match gql.points_context(login) {
             Ok(context) => {
