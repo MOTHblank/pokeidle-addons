@@ -102,6 +102,7 @@ pub(crate) struct DiagnosticsSampler {
     previous: Option<(Instant, ProcessCounters)>,
     previous_thread_read: Option<Instant>,
     previous_thread_cpu: HashMap<u64, u128>,
+    thread_probe: Option<crate::diagnostics_threads::ThreadProbe>,
     pub(crate) inspect_threads: bool,
     pub(crate) hot_threads: Vec<ThreadHotspot>,
     pub(crate) thread_history: VecDeque<ThreadCpuSample>,
@@ -119,6 +120,9 @@ pub(crate) struct DiagnosticsSampler {
     pub(crate) last_preflight_ms: Option<f64>,
     pub(crate) last_panel_ms: Option<f64>,
     pub(crate) last_process_probe_ms: Option<f64>,
+    pub(crate) peak_process_probe_ms: f64,
+    pub(crate) last_thread_probe_ms: Option<f64>,
+    pub(crate) peak_thread_probe_ms: f64,
     pub(crate) last_network_probe_ms: Option<f64>,
 }
 
@@ -215,6 +219,7 @@ impl DiagnosticsSampler {
         self.last_thread_count = None;
         self.previous_thread_read = None;
         self.previous_thread_cpu.clear();
+        self.thread_probe = None;
         self.hot_threads.clear();
         self.threads_unavailable = false;
     }
@@ -226,6 +231,7 @@ impl DiagnosticsSampler {
             self.previous = None;
             self.previous_thread_read = None;
             self.previous_thread_cpu.clear();
+            self.thread_probe = None;
             self.hot_threads.clear();
             self.last_thread_read = None;
             self.last_thread_count = None;
@@ -247,9 +253,51 @@ impl DiagnosticsSampler {
         while self.history.len() > limit { self.history.pop_front(); }
     }
 
-    /// Returns true only on a due tick. Never polls while paused.
+    fn poll_thread_probe(&mut self) {
+        let completed = self.thread_probe.as_ref()
+            .and_then(crate::diagnostics_threads::ThreadProbe::try_take);
+        let Some(completed) = completed else { return; };
+        self.thread_probe = None;
+        let elapsed_ms = completed.elapsed.as_secs_f64() * 1000.0;
+        self.last_thread_probe_ms = Some(elapsed_ms);
+        self.peak_thread_probe_ms = self.peak_thread_probe_ms.max(elapsed_ms);
+        match completed.snapshot {
+            Some(snapshot) => {
+                self.last_thread_count = Some(snapshot.count);
+                self.threads_unavailable = false;
+                self.hot_threads = self.previous_thread_read.map(|prior| {
+                    calculate_hotspots(
+                        &self.previous_thread_cpu, prior, &snapshot.threads, completed.captured_at
+                    )
+                }).unwrap_or_default();
+                if self.recording && !self.hot_threads.is_empty() {
+                    self.thread_history.push_back(ThreadCpuSample {
+                        at: completed.captured_at,
+                        hottest: self.hot_threads.clone(),
+                    });
+                    while self.thread_history.len() > MAX_RECORDING_HISTORY / 2 {
+                        self.thread_history.pop_front();
+                    }
+                }
+                self.previous_thread_cpu = snapshot.threads.iter()
+                    .map(|thread| (thread.id, thread.cpu_ns)).collect();
+                self.previous_thread_read = Some(completed.captured_at);
+            }
+            None => {
+                self.last_thread_count = None;
+                self.previous_thread_read = None;
+                self.previous_thread_cpu.clear();
+                self.hot_threads.clear();
+                self.threads_unavailable = true;
+            }
+        }
+    }
+
+    /// Returns true only on a due process tick. Detailed thread inspection is
+    /// dispatched to a named worker and polled without blocking the caller.
     pub(crate) fn sample_if_due(&mut self) -> bool {
         if self.paused { return false; }
+        self.poll_thread_probe();
         let now = Instant::now();
         if self.last_read.is_some_and(|at| now.saturating_duration_since(at) < self.sample_interval()) {
             return false;
@@ -262,44 +310,24 @@ impl DiagnosticsSampler {
             thread_sample_due(self.last_thread_read, now)
         };
         let probe_start = Instant::now();
-        // The detailed thread snapshot includes the thread count, so avoid
-        // enumerating the same OS threads twice on the same tick.
+        // Detailed thread inspection is asynchronous, so the synchronous
+        // process probe never opens every thread handle on the UI/recorder caller.
         let counters = read_process_counters(include_threads && !self.inspect_threads);
+        let process_probe_ms = probe_start.elapsed().as_secs_f64() * 1000.0;
+        self.last_process_probe_ms = Some(process_probe_ms);
+        self.peak_process_probe_ms = self.peak_process_probe_ms.max(process_probe_ms);
+
         if include_threads {
-            self.last_thread_read = Some(now);
             if self.inspect_threads {
-                match crate::diagnostics_threads::inspect() {
-                    Some(snapshot) => {
-                        self.last_thread_count = Some(snapshot.count);
-                        self.threads_unavailable = false;
-                        self.hot_threads = self.previous_thread_read.map(|prior| {
-                            calculate_hotspots(&self.previous_thread_cpu, prior, &snapshot.threads, now)
-                        }).unwrap_or_default();
-                        if self.recording && !self.hot_threads.is_empty() {
-                            self.thread_history.push_back(ThreadCpuSample {
-                                at: now, hottest: self.hot_threads.clone(),
-                            });
-                            while self.thread_history.len() > MAX_RECORDING_HISTORY / 2 {
-                                self.thread_history.pop_front();
-                            }
-                        }
-                        self.previous_thread_cpu = snapshot.threads.iter()
-                            .map(|thread| (thread.id, thread.cpu_ns)).collect();
-                        self.previous_thread_read = Some(now);
-                    }
-                    None => {
-                        self.last_thread_count = None;
-                        self.previous_thread_read = None;
-                        self.previous_thread_cpu.clear();
-                        self.hot_threads.clear();
-                        self.threads_unavailable = true;
-                    }
+                if self.thread_probe.is_none() {
+                    self.last_thread_read = Some(now);
+                    self.thread_probe = Some(crate::diagnostics_threads::ThreadProbe::start());
                 }
             } else {
+                self.last_thread_read = Some(now);
                 self.last_thread_count = counters.as_ref().and_then(|stats| stats.threads);
             }
         }
-        self.last_process_probe_ms = Some(probe_start.elapsed().as_secs_f64() * 1000.0);
 
         let Some(counters) = counters else {
             self.previous = None;
@@ -363,6 +391,13 @@ impl DiagnosticsSampler {
             "logical_processors": logical_processor_count(),
             "memory_baseline_bytes": self.resident_baseline,
             "detailed_thread_inspection": self.inspect_threads,
+            "diagnostics_overhead": {
+                "last_process_probe_ms": self.last_process_probe_ms,
+                "peak_process_probe_ms": self.peak_process_probe_ms,
+                "last_thread_probe_ms": self.last_thread_probe_ms,
+                "peak_thread_probe_ms": self.peak_thread_probe_ms,
+                "last_refresh_probe_ms": self.last_network_probe_ms,
+            },
             "thread_cpu_hotspots": self.hot_threads.iter().map(|thread| serde_json::json!({
                 "thread_id": thread.id,
                 "thread_name": thread.name.as_str(),
@@ -391,6 +426,7 @@ impl DiagnosticsSampler {
                 "last_preflight_ms": self.last_preflight_ms,
                 "last_panel_ms": self.last_panel_ms,
                 "last_process_probe_ms": self.last_process_probe_ms,
+                "last_thread_probe_ms": self.last_thread_probe_ms,
                 "last_diagnostics_refresh_ms": self.last_network_probe_ms,
             },
             "kick_hls": self.network.as_ref().map(|network| serde_json::json!({
