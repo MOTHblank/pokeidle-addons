@@ -169,6 +169,7 @@ fn draw_boss_details(
     live: bool,
     reference: Option<&AtlasReference>,
     restock_enabled: bool,
+    pending_start: Option<(&str, bool)>,
     action: &mut Option<GameCommand>,
 ) {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
@@ -264,19 +265,37 @@ fn draw_boss_details(
                 && has_tokens;
             ui.add_space(9.0);
             let compact_actions = ui.available_width() < 340.0;
+            let pending_mode = pending_start
+                .filter(|(key, _)| *key == entry.key.as_str())
+                .map(|(_, repeat)| repeat);
             ui.horizontal_wrapped(|ui| {
                 let farm_label = if compact_actions {
                     tr("Auto farm")
                 } else {
                     tr("Farm until tokens run out")
                 };
-                if ui.add_enabled(
-                    ready,
+                if pending_mode == Some(true) {
+                    ui.add_enabled(false,
+                        egui::Button::new(RichText::new(tr("Starting farm…")).strong())
+                            .fill(WARN.linear_multiply(0.14))
+                            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7)))
+                            .corner_radius(8.0));
+                    ui.label(RichText::new(tr(if hunt.in_center {
+                        "Entering boss from Pokémon Center…"
+                    } else {
+                        "Waiting for a safe opening to reach Pokémon Center…"
+                    })).size(10.0).color(WARN));
+                } else if ui.add_enabled(
+                    ready && pending_mode.is_none(),
                     egui::Button::new(RichText::new(farm_label).strong())
-                        .fill(if ready { ACCENT.linear_multiply(0.32) } else { PANEL_ALT })
+                        .fill(if ready && pending_mode.is_none() {
+                            ACCENT.linear_multiply(0.32)
+                        } else { PANEL_ALT })
                         .stroke(Stroke::new(
                             1.0,
-                            if ready { ACCENT.linear_multiply(0.65) } else { BORDER },
+                            if ready && pending_mode.is_none() {
+                                ACCENT.linear_multiply(0.65)
+                            } else { BORDER },
                         ))
                         .corner_radius(8.0),
                 ).on_hover_text(tr("Farm until tokens run out")).clicked() {
@@ -285,14 +304,27 @@ fn draw_boss_details(
                         repeat: true,
                     });
                 }
-                if ui.add_enabled(ready, egui::Button::new(tr("Fight once"))).clicked() {
+                if pending_mode == Some(false) {
+                    ui.add_enabled(false,
+                        egui::Button::new(tr("Starting fight…"))
+                            .fill(WARN.linear_multiply(0.14))
+                            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+                    ui.label(RichText::new(tr(if hunt.in_center {
+                        "Entering boss from Pokémon Center…"
+                    } else {
+                        "Waiting for a safe opening to reach Pokémon Center…"
+                    })).size(10.0).color(WARN));
+                } else if ui.add_enabled(
+                    ready && pending_mode.is_none(),
+                    egui::Button::new(tr("Fight once")),
+                ).clicked() {
                     *action = Some(GameCommand::BossStart {
                         key: entry.key.clone(),
                         repeat: false,
                     });
                 }
             });
-            if !ready {
+            if !ready && pending_mode.is_none() {
                 let reason = if !live {
                     tr("Game disconnected. Boss controls will become available after reconnection.").to_owned()
                 } else if !view.state_known {
@@ -700,6 +732,40 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+
+    // Same immediate-feedback bridge as Hunt Atlas: acknowledge the click in
+    // the UI now, then let the worker's authoritative BossView take over.
+    if let (Some(key), Some(repeat)) =
+        (view.request_key.as_deref(), view.request_repeat) {
+        let same = app.workspace.boss_start_pending[index].as_ref()
+            .is_some_and(|(pending, mode, _)| pending == key && *mode == repeat);
+        if !same {
+            app.workspace.boss_start_pending[index] =
+                Some((key.to_owned(), repeat, Instant::now()));
+        }
+    } else if app.workspace.boss_start_pending[index].as_ref().is_some_and(
+        |(key, repeat, at)| {
+            !live ||
+            view.arena.as_deref() == Some(key.as_str()) ||
+            (*repeat && view.auto && view.auto_key.as_deref() == Some(key.as_str())) ||
+            (!view.busy && at.elapsed() > Duration::from_millis(500)) ||
+            at.elapsed() > Duration::from_secs(5)
+        },
+    ) {
+        app.workspace.boss_start_pending[index] = None;
+    }
+    if app.workspace.boss_stop_pending[index].is_some_and(|at|
+        !live || (!view.phase.starts_with("Stopping") &&
+            at.elapsed() > Duration::from_millis(500))) {
+        app.workspace.boss_stop_pending[index] = None;
+    }
+    if app.workspace.boss_leave_pending[index].is_some_and(|at|
+        !live || (!view.phase.starts_with("Leaving") &&
+            at.elapsed() > Duration::from_millis(500))) {
+        app.workspace.boss_leave_pending[index] = None;
+    }
+    let pending_start = app.workspace.boss_start_pending[index].as_ref()
+        .map(|(key, repeat, _)| (key.clone(), *repeat));
     let mut action = None;
 
     egui::ScrollArea::vertical()
@@ -817,7 +883,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 .find(|entry| entry.key == *selected) {
                                 draw_boss_details(
                                     ui, entry, &view, &hunt, live,
-                                    reference.as_deref(), restock_enabled, &mut action,
+                                    reference.as_deref(), restock_enabled,
+                                    pending_start.as_ref().map(|(key, repeat)| (key.as_str(), *repeat)),
+                                    &mut action,
                                 );
                             }
                         });
@@ -843,7 +911,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .find(|entry| entry.key == *selected) {
                         draw_boss_details(
                             ui, entry, &view, &hunt, live,
-                            reference.as_deref(), restock_enabled, &mut action,
+                            reference.as_deref(), restock_enabled,
+                                    pending_start.as_ref().map(|(key, repeat)| (key.as_str(), *repeat)),
+                                    &mut action,
                         );
                     }
                 }
