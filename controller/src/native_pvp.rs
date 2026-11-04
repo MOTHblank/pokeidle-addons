@@ -20,6 +20,7 @@ pub struct PvpStatus {
     pub waiting_for_level: Option<u32>,
     pub checking_queue: bool,
     pub paused: bool,
+    pub cancelling: bool,
     pub warning: Option<String>,
 }
 
@@ -178,6 +179,7 @@ impl PvpAutomation {
             } else { None },
             checking_queue: enabled && !self.queue_known,
             paused: enabled && vip && self.vip_rejected,
+            cancelling: !enabled && (self.owned_queue || self.vip_cancel_pending),
             warning: enabled.then(|| self.warning.clone()).flatten(),
         }
     }
@@ -236,7 +238,7 @@ impl PvpAutomation {
                 if !(wanted && self.vip_rejected) && vip_auto != Some(wanted) &&
                     self.last_vip_sync.is_none_or(|(old, sent)|
                         old != wanted || now.saturating_duration_since(sent) >= VIP_SYNC_RETRY) {
-                    if !wanted && vip_auto == Some(true) {
+                    if !wanted && vip_auto != Some(false) {
                         // Disable the server auto-join first. Cancel its
                         // currently active search only after confirmation.
                         self.vip_cancel_pending = true;
@@ -256,8 +258,9 @@ impl PvpAutomation {
                 }
                 self.vip_cancel_pending = false;
                 if self.queued {
-                    self.queued = false;
-                    self.queue_known = false;
+                    // Reuse the same verified Leave lifecycle as non-VIP.
+                    self.owned_queue = true;
+                    self.leave_sent = Some(now);
                     return Some(PvpAction::Leave);
                 }
             }
