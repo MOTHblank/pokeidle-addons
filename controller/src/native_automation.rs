@@ -31,7 +31,7 @@ impl AutomationWriter {
         match field {
             "autoPotion" | "autoRevive" | "autoVendaLoot" |
             "autoLockShiny" | "autoLockNota9" | "autoLockP5" |
-            "autoVoltarHunt" => value.is_boolean(),
+            "autoVoltarHunt" | "pvpAutoFila" => value.is_boolean(),
             "hpLimiar" => value.as_f64().is_some_and(|v|
                 v.is_finite() && (0.0..=100.0).contains(&v)),
             "autoLockNotaMin" => value.as_f64().is_some_and(|v|

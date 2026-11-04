@@ -53,7 +53,8 @@ impl SettingsBackup {
                     })).collect::<Vec<_>>()
             })),
             "accounts": self.accounts.iter().enumerate().map(|(slot, account)| {
-                json!({"slot": slot, "name": account.name, "enabled": account.enabled})
+                json!({"slot": slot, "name": account.name, "enabled": account.enabled,
+                    "autoPvp": account.auto_pvp})
             }).collect::<Vec<_>>(),
         })
     }
@@ -83,7 +84,8 @@ impl SettingsBackup {
                 .ok_or("Invalid account name in backup")?;
             let enabled = entry.get("enabled").and_then(Value::as_bool)
                 .ok_or("Invalid account enabled state in backup")?;
-            accounts[slot] = AccountConfig { name: name.to_owned(), enabled };
+            let auto_pvp = entry.get("autoPvp").and_then(Value::as_bool);
+            accounts[slot] = AccountConfig { name: name.to_owned(), enabled, auto_pvp };
             slots_seen[slot] = true;
         }
         if slots_seen.iter().any(|seen| !seen) {
@@ -181,8 +183,10 @@ mod tests {
 
     #[test]
     fn backup_contains_only_allowlisted_settings_and_account_names() {
-        let accounts = std::array::from_fn(|i| AccountConfig::default_for(
+        let mut accounts = std::array::from_fn(|i| AccountConfig::default_for(
             crate::config::GameProfile::from_index(i).unwrap()));
+        accounts[0].auto_pvp = Some(true);
+        accounts[1].auto_pvp = Some(false);
         let mut backup = SettingsBackup::from_active(AppPreferences::default(), UiOptions::default(), &accounts);
         backup.kick = Some(KickBackup {
             channels: ["pokemon".into(), String::new(), String::new(), String::new()],
@@ -191,7 +195,13 @@ mod tests {
         let value = backup.to_value();
         let restored = SettingsBackup::from_value(&value).unwrap();
         assert_eq!(restored.accounts[0].name, accounts[0].name);
+        assert_eq!(restored.accounts[0].auto_pvp, Some(true));
+        assert_eq!(restored.accounts[1].auto_pvp, Some(false));
+        assert_eq!(restored.accounts[2].auto_pvp, None);
         assert_eq!(restored.kick.unwrap().channels[0], "pokemon");
+        let mut legacy = value.clone();
+        legacy["accounts"][0].as_object_mut().unwrap().remove("autoPvp");
+        assert_eq!(SettingsBackup::from_value(&legacy).unwrap().accounts[0].auto_pvp, None);
         let raw = value.to_string();
         assert!(!raw.contains("token"));
         assert!(!raw.contains("password"));

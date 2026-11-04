@@ -25,6 +25,7 @@ mod native_hunt_navigation;
 mod native_boss;
 mod native_history;
 mod native_automation;
+mod native_pvp;
 mod native_market;
 mod native_atlas;
 mod native_atlas_models;
