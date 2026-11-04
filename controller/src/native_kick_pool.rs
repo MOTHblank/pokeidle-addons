@@ -48,7 +48,7 @@ pub(crate) struct PoolUsage {
 }
 impl Pool {
     fn usage(&self) -> Option<PoolUsage> {
-        self.shared.queue.lock().ok().map(|queue| PoolUsage {
+        self.shared.queue.try_lock().ok().map(|queue| PoolUsage {
             workers: queue.workers, idle: queue.idle, pending: queue.pending.len(),
         })
     }
