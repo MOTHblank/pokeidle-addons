@@ -12,6 +12,7 @@ const PLAYBACK_ACCESS_HASH: &str = "ed230aa1e33e07eebb8928504583da78a5173989fadf
 const CLAIM_POINTS_HASH: &str = "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af229395f1f6d1feed05b3d0";
 const REWARD_LIST_HASH: &str = "0b1471876d7647993731b9e3c6a13bf304c67fb31d07f06a945d42286ee377c4";
 const STREAM_INFO_HASH: &str = "e785b65ff71ad7b363b34878335f27dd9372869ad0c5740a130b9268bcdbe7e7";
+const STREAM_LIVE_HASH: &str = "04e46329a6786ff3a81c01c50bfa5d725902507a0deb83b0edbf7abe7a3716ea";
 
 #[derive(Debug)]
 pub(crate) enum GqlError {
@@ -58,6 +59,10 @@ pub(crate) struct PlaybackAccess {
 pub(crate) struct StreamInfo {
     pub(crate) broadcast_id: String,
     pub(crate) started_at: String,
+}
+
+pub(crate) struct LiveStream {
+    pub(crate) started_at: Option<String>,
 }
 
 pub(crate) struct StreakMilestone {
@@ -242,6 +247,25 @@ impl TwitchGql {
             .filter(|id| !id.is_empty())
             .map(str::to_owned);
         Ok(PointsContext { balance, available_claim_id })
+    }
+
+    pub(crate) fn is_stream_live(&self, channel_id: &str) -> Result<Option<LiveStream>, GqlError> {
+        let value = self.post(
+            "WithIsStreamLiveQuery",
+            STREAM_LIVE_HASH,
+            json!({ "id": channel_id }),
+        )?;
+        let Some(stream) = value.pointer("/data/user/stream") else {
+            return Ok(None);
+        };
+        if stream.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(LiveStream {
+            started_at: stream.get("createdAt").and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+        }))
     }
 
     pub(crate) fn stream_info(&self, login: &str) -> Result<Option<StreamInfo>, GqlError> {
