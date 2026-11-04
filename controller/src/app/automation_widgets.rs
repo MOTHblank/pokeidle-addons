@@ -46,7 +46,8 @@ pub(super) fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good
                         .color(if good { GOOD } else { MUTED }),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT));
+                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT))
+                    .on_hover_text(tr(value));
             });
         }).response
 }
