@@ -267,6 +267,17 @@ pub fn clear_twitch_token(profile: GameProfile) -> Result<(), String> {
     platform::clear_twitch(profile)
 }
 
+pub fn clear_twitch_token_checked(
+    profile:GameProfile,
+    is_current:impl Fn()->bool,
+)->Result<bool,String> {
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
+    if !is_current(){return Ok(false)}
+    platform::clear_twitch(profile)?;
+    Ok(true)
+}
+
 // UI events may toggle Auto Catch and native Restock in rapid succession.
 // Serialize the read-modify-encrypt-write cycle so one toggle never silently
 // overwrites the other; no credentials are exposed outside OS vault storage.
