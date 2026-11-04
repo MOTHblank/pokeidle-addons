@@ -4,7 +4,7 @@ pub const MAX_CHANNELS: usize = 32;
 
 #[derive(Clone, Debug)]
 pub struct Credentials {
-    pub username: String,
+    pub username: Option<String>,
     pub oauth_token: String,
 }
 
@@ -18,7 +18,17 @@ impl Credentials {
         {
             return Err("Invalid Twitch OAuth token".into());
         }
-        Ok(Self { username, oauth_token })
+        Ok(Self { username: Some(username), oauth_token })
+    }
+
+    pub fn token_only(oauth_token: impl Into<String>) -> Result<Self, String> {
+        let oauth_token = oauth_token.into().trim().to_owned();
+        if oauth_token.is_empty() || oauth_token.len() > 2048
+            || oauth_token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            return Err("Invalid Twitch OAuth token".into());
+        }
+        Ok(Self { username: None, oauth_token })
     }
 }
 
@@ -139,6 +149,7 @@ mod tests {
     #[test]
     fn credentials_reject_whitespace_tokens() {
         assert!(Credentials::new("valid_name", "token").is_ok());
+        assert!(Credentials::token_only("token").is_ok());
         assert!(Credentials::new("valid_name", "bad token").is_err());
         assert!(Credentials::new("Bad-Name", "token").is_err());
     }
