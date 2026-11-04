@@ -328,6 +328,13 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     "Primeiro entre com o código de dispositivo da Twitch. O token é salvo no cofre protegido do Moth; depois inicie o PokéIdle para receber a lista oficial de streamers.")
             }).size(11.0).color(MUTED));
             if let Some(state)=snapshot.as_ref() {
+                ui.label(RichText::new(if state.reference_client {
+                    label(br,"✓ Reference Twitch client session",
+                        "✓ Sessão com cliente Twitch de referência")
+                } else {
+                    label(br,"◌ Firefox compatibility session",
+                        "◌ Sessão de compatibilidade via Firefox")
+                }).size(10.0).color(if state.reference_client {GOOD}else{WARN}));
                 let pubsub_text=if state.pubsub_connected {
                     label(br,"● Channel-points events connected",
                         "● Eventos de pontos conectados")
