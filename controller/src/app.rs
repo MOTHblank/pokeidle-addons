@@ -1085,6 +1085,7 @@ pub struct ControllerApp {
     restore_signal: Arc<RestoreSignal>,
     last_alert: [Option<Instant>; 4],
     last_native_phase: [Option<String>; 4],
+    disconnection_alerts: [alerts::DisconnectAlertState; 4],
     last_notification_inspection: Option<Instant>,
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
@@ -1197,6 +1198,7 @@ impl ControllerApp {
             restore_signal,
             last_alert: [None; 4],
             last_native_phase: std::array::from_fn(|_| None),
+            disconnection_alerts: [alerts::DisconnectAlertState::default(); 4],
             last_notification_inspection: None,
             hunt_reference: None,
             hunt_reference_error: None,
@@ -1318,22 +1320,20 @@ impl ControllerApp {
         self.last_notification_inspection = Some(now);
         for index in 0..self.runtimes.len() {
             let game = &self.runtimes[index].game;
-            if game.stopping {
-                self.last_native_phase[index] = None;
-                continue;
-            }
-            let phase = game.native.as_ref().map(|native| native.snapshot().phase);
+            let phase = if game.stopping { None }
+                else { game.native.as_ref().map(|native| native.snapshot().phase) };
             let was_online = self.last_native_phase[index].as_deref() == Some("Online");
             let changed = self.last_native_phase[index].as_deref() != phase.as_deref();
-            if changed {
-                if phase.as_deref() == Some("NeedsLogin") {
-                    alerts::maybe_notify("sign-in required", true,
-                        self.preferences, &mut self.last_alert);
-                } else if was_online && matches!(phase.as_deref(),
-                    Some("Offline" | "Reconnecting")) {
-                    alerts::maybe_notify("connection lost", true,
-                        self.preferences, &mut self.last_alert);
-                }
+            if changed && phase.as_deref() == Some("NeedsLogin") {
+                alerts::maybe_notify_kind(alerts::AlertKind::Auth,
+                    self.preferences, &mut self.last_alert);
+            }
+            let still_active = !game.stopping && (game.native.is_some()
+                || game.child.is_some() || game.orphaned_pid.is_some());
+            if self.disconnection_alerts[index].observe(
+                was_online, phase.as_deref(), still_active, now) {
+                alerts::maybe_notify_kind(alerts::AlertKind::Disconnect,
+                    self.preferences, &mut self.last_alert);
             }
             self.last_native_phase[index] = phase;
         }
