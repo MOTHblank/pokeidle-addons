@@ -87,9 +87,6 @@ pub struct TabInfo {
     pub kind: String,
     pub title: String,
     pub url: String,
-    pub low_resource: bool,
-    /// Count requested by the managed Twitch popout URL, not a count of tabs.
-    pub twitch_channels: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -106,8 +103,6 @@ pub struct Health {
     pub active_pokemon: String,
     pub fallen_count: u32,
     pub economy_mode: bool,
-    pub twitch_tabs: u8,
-    pub twitch_low_resource_ok: u8,
     pub performance_enabled: Option<bool>,
     pub performance_fps: String,
     pub performance_scene_runs: String,
@@ -122,8 +117,6 @@ pub struct Health {
     pub stream_scan_status: String,
     pub stream_scan_live: u32,
     pub stream_scan_opened: u32,
-    /// Scanner Twitch channel count; None if the installed scanner is too old.
-    pub stream_scan_twitch_channels: Option<u32>,
     pub xp_bonuses: Vec<String>,
     pub player_level: u32,
     pub player_xp: String,
@@ -133,11 +126,13 @@ pub struct Health {
     pub player_xp_to_next: Option<u64>,
     pub gold: u64,
     pub orbs: u64,
-    pub stream_bonus: String,
-    pub stream_bonus_pct: f32,
-    pub stream_watching: Vec<String>,
-    pub stream_live_bonus: Vec<String>,
-    pub stream_missing: Vec<String>,
+    pub twitch_linked: Option<bool>,
+    pub twitch_login: String,
+    pub twitch_bonus_pct: f32,
+    pub twitch_xp_until: u64,
+    pub twitch_capture_until: u64,
+    pub twitch_shiny_until: u64,
+    pub twitch_server_now_ms: u64,
     pub xp_sources: Vec<String>,
     pub bridge_connected: bool,
     /// The bridge snapshot was actually readable, regardless of game socket state.
@@ -170,8 +165,6 @@ impl Default for Health {
             active_pokemon: String::new(),
             fallen_count: 0,
             economy_mode: false,
-            twitch_tabs: 0,
-            twitch_low_resource_ok: 0,
             performance_enabled: None,
             performance_fps: String::new(),
             performance_scene_runs: String::new(),
@@ -186,7 +179,6 @@ impl Default for Health {
             stream_scan_status: String::new(),
             stream_scan_live: 0,
             stream_scan_opened: 0,
-            stream_scan_twitch_channels: None,
             xp_bonuses: Vec::new(),
             player_level: 0,
             player_xp: String::new(),
@@ -194,11 +186,13 @@ impl Default for Health {
             player_xp_to_next: None,
             gold: 0,
             orbs: 0,
-            stream_bonus: String::new(),
-            stream_bonus_pct: 0.0,
-            stream_watching: Vec::new(),
-            stream_live_bonus: Vec::new(),
-            stream_missing: Vec::new(),
+            twitch_linked: None,
+            twitch_login: String::new(),
+            twitch_bonus_pct: 0.0,
+            twitch_xp_until: 0,
+            twitch_capture_until: 0,
+            twitch_shiny_until: 0,
+            twitch_server_now_ms: 0,
             xp_sources: Vec::new(),
             bridge_connected: false,
             bridge_snapshot_ok: false,
@@ -375,7 +369,7 @@ impl MonitorHandle {
             .map_err(|_| "native bootstrap timed out; check that the game and bridge are ready".to_owned())?
     }
 
-    /// Close only the game tab; Firefox/Twitch remain alive until Rust has
+    /// Close only the game tab; Firefox remains alive until Rust has
     /// received the server's authenticated welcome on its own connection.
     pub fn close_game_for_handoff(&self, timeout: Duration) -> Result<(), String> {
         if self.stop.load(Ordering::Relaxed) {
@@ -492,7 +486,6 @@ struct BrowserSession {
     tab_signature: Vec<(String, String)>,
     native_capture_installed: bool,
     native_reloaded: BTreeSet<String>,
-    native_twitch_auth_opened: bool,
     bridge_retry_after: Option<Instant>,
 }
 
@@ -522,12 +515,13 @@ struct RuntimeProbe {
     stream_scan_status: String,
     stream_scan_live: u32,
     stream_scan_opened: u32,
-    stream_scan_twitch_channels: Option<u32>,
-    stream_bonus: String,
-    stream_bonus_pct: f32,
-    stream_watching: Vec<String>,
-    stream_live_bonus: Vec<String>,
-    stream_missing: Vec<String>,
+    twitch_linked: Option<bool>,
+    twitch_login: String,
+    twitch_bonus_pct: f32,
+    twitch_xp_until: u64,
+    twitch_capture_until: u64,
+    twitch_shiny_until: u64,
+    twitch_server_now_ms: u64,
     xp_sources: Vec<String>,
     last_game_message_ms: u64,
     xp_bonuses: Vec<String>,
@@ -561,7 +555,6 @@ struct Probe {
     stream_scan_status: String,
     stream_scan_live: u32,
     stream_scan_opened: u32,
-    stream_scan_twitch_channels: Option<u32>,
     xp_bonuses: Vec<String>,
     player_level: u32,
     player_xp: String,
@@ -569,11 +562,13 @@ struct Probe {
     player_xp_to_next: Option<u64>,
     gold: u64,
     orbs: u64,
-    stream_bonus: String,
-    stream_bonus_pct: f32,
-    stream_watching: Vec<String>,
-    stream_live_bonus: Vec<String>,
-    stream_missing: Vec<String>,
+    twitch_linked: Option<bool>,
+    twitch_login: String,
+    twitch_bonus_pct: f32,
+    twitch_xp_until: u64,
+    twitch_capture_until: u64,
+    twitch_shiny_until: u64,
+    twitch_server_now_ms: u64,
     xp_sources: Vec<String>,
     bridge_connected: bool,
     bridge_snapshot_ok: bool,
@@ -898,7 +893,6 @@ fn monitor_loop(
                         current.stream_scan_status = probe.stream_scan_status;
                         current.stream_scan_live = probe.stream_scan_live;
                         current.stream_scan_opened = probe.stream_scan_opened;
-                        current.stream_scan_twitch_channels = probe.stream_scan_twitch_channels;
                         current.xp_bonuses = probe.xp_bonuses;
                         current.player_level = probe.player_level;
                         current.player_xp = probe.player_xp;
@@ -906,19 +900,18 @@ fn monitor_loop(
                         current.player_xp_to_next = probe.player_xp_to_next;
                         current.gold = probe.gold;
                         current.orbs = probe.orbs;
-                        current.stream_bonus = probe.stream_bonus.clone();
-                        current.stream_bonus_pct = probe.stream_bonus_pct;
-                        current.stream_watching = probe.stream_watching;
-                        current.stream_live_bonus = probe.stream_live_bonus;
-                        current.stream_missing = probe.stream_missing;
+                        current.twitch_linked = probe.twitch_linked;
+                        current.twitch_login = probe.twitch_login;
+                        current.twitch_bonus_pct = probe.twitch_bonus_pct;
+                        current.twitch_xp_until = probe.twitch_xp_until;
+                        current.twitch_capture_until = probe.twitch_capture_until;
+                        current.twitch_shiny_until = probe.twitch_shiny_until;
+                        current.twitch_server_now_ms = probe.twitch_server_now_ms;
                         current.xp_sources = probe.xp_sources;
                         current.bridge_connected = probe.bridge_connected;
                         current.bridge_snapshot_ok = probe.bridge_snapshot_ok;
                         current.last_game_message_ms = probe.last_game_message_ms;
                         if let Some(tabs) = probe.tabs {
-                            current.twitch_tabs = tabs.iter().filter(|t| t.kind == "Twitch").count() as u8;
-                            current.twitch_low_resource_ok = tabs.iter()
-                                .filter(|t| t.kind == "Twitch" && t.low_resource).count() as u8;
                             current.tabs = tabs;
                             current.last_tabs_at = Some(sample_at);
                         }
@@ -1030,84 +1023,6 @@ struct Heartbeat {
     logged_in: bool,
 }
 
-/// Capture the authenticated Twitch popout IRC socket from the same Firefox
-/// BiDi session before closing Firefox. Twitch authentication is independent
-/// of the game's cookies; the page's browser automation observes PASS/NICK directly.
-/// Failure to capture is not interpreted as a valid unauthenticated session.
-fn read_twitch_bootstrap(session: &mut BrowserSession) -> Result<Value, String> {
-    let tree_id = session.next_id;
-    session.next_id += 1;
-    let tree = send_and_wait(&mut session.socket, tree_id, json!({
-        "id": tree_id,
-        "method": "browsingContext.getTree",
-        "params": { "maxDepth": 1 }
-    }))?;
-    let mut contexts = Vec::new();
-    if let Some(nodes) = tree.get("result").and_then(|v| v.get("contexts")).and_then(Value::as_array) {
-        for node in nodes { collect_contexts(node, &mut contexts, 0); }
-    }
-    let mut saw_popout = false;
-    let mut reload_candidate = None;
-    for context in contexts.iter().filter(|candidate| {
-        candidate.url.starts_with("https://www.twitch.tv/popout/")
-            && candidate.url.contains("/chat")
-    }) {
-        saw_popout = true;
-        let id = session.next_id;
-        session.next_id += 1;
-        let result = send_and_wait(&mut session.socket, id, json!({
-            "id": id,
-            "method": "script.evaluate",
-            "params": {
-                "expression": "JSON.stringify(window.__mothNativeCaptureV1?.twitch?.() || window.__mothTwitchNativeBootstrapV1?.snapshot?.() || null)",
-                "target": { "context": context.id },
-                "awaitPromise": false
-            }
-        }))?;
-        let Some(raw) = result.get("result").and_then(|v| v.get("result"))
-            .and_then(|v| v.get("value")).and_then(Value::as_str) else { continue; };
-        let Ok(bootstrap) = serde_json::from_str::<Value>(raw) else { continue; };
-        if !bootstrap.is_null() { return Ok(bootstrap); }
-        if !session.native_reloaded.contains(&context.id) {
-            reload_candidate = Some(context.id.clone());
-        }
-    }
-    if let Some(context_id) = reload_candidate {
-        return reload_native_context_once(session, &context_id);
-    }
-    if saw_popout {
-        Err("Twitch IRC authentication pending after one capture reload; reconnecting if needed".to_owned())
-    } else {
-        // All profiles can authenticate Twitch without a browser automation update.
-        // A single temporary Twitch chat is opened only if none exists.
-        // The BiDi preload observes its authenticated PASS/NICK handshake.
-        if session.native_twitch_auth_opened {
-            return Err("Twitch login has not produced an authenticated IRC connection yet".into());
-        }
-        session.native_twitch_auth_opened = true;
-        let id = session.next_id;
-        session.next_id += 1;
-        let created = send_and_wait(&mut session.socket, id, json!({
-            "id": id, "method": "browsingContext.create",
-            "params": { "type": "tab" }
-        }))?;
-        let context = created.get("result").and_then(|v| v.get("context"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Firefox did not create a temporary Twitch login tab".to_owned())?;
-        let id = session.next_id;
-        session.next_id += 1;
-        send_and_wait(&mut session.socket, id, json!({
-            "id": id, "method": "browsingContext.navigate",
-            "params": {
-                "context": context,
-                "url": "https://www.twitch.tv/popout/twitch/chat?moth-generation=native-auth",
-                "wait": "none"
-            }
-        }))?;
-        Err("Opening one temporary Twitch authentication chat; Rust will take over after login".into())
-    }
-}
-
 /// Capture only the bridge-confirmed socket's initial hello. The storage
 /// command returns HttpOnly cookies (page JavaScript cannot access those).
 /// All sensitive results stay inside this in-process handoff.
@@ -1148,7 +1063,6 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         .and_then(|result| result.get("cookies"))
         .and_then(Value::as_array)
         .ok_or_else(|| "Firefox could not provide session cookies through BiDi".to_owned())?;
-    let twitch = read_twitch_bootstrap(session)?;
     // Migrate existing Auto Catch preferences without changing them. The
     // native engine must not silently enable ball spending when the browser
     // previous preferences can still be imported. Only settings, never login data.
@@ -1165,7 +1079,7 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
         .and_then(|frame| frame.get("result")?.get("result")?.get("value")?
             .as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()));
     Ok(json!({ "bootstrap": bootstrap, "cookies": entries,
-        "twitch": twitch, "autocatch": autocatch }))
+        "autocatch": autocatch }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
@@ -1224,15 +1138,13 @@ fn stagger_delay(port: u16, previous_sample: bool) -> Duration {
 // Never exposes tokens in DOM attributes, logs, localStorage or GM storage.
 const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
     try {
-        if (!/(^|\.)pokeidle\.io$|(^|\.)twitch\.tv$/.test(location.hostname)) return;
+        if (!/(^|\\.)pokeidle\\.io$/.test(location.hostname)) return;
         if (window.__mothNativeCaptureV1) return;
         const Ws = window.WebSocket;
         if (!Ws || !Ws.prototype || typeof Ws.prototype.send !== 'function') return;
         const send = Ws.prototype.send;
         const hellos = new WeakMap();
-        const auths = new WeakMap();
         let gameSocket = null;
-        let twitchSocket = null;
         Object.defineProperty(window, '__mothNativeCaptureV1', {
             configurable: false, value: Object.freeze({
                 game() {
@@ -1240,12 +1152,6 @@ const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
                     const hello = socket && hellos.get(socket);
                     return socket?.readyState === Ws.OPEN && hello
                         ? { url: socket.url, hello } : null;
-                },
-                twitch() {
-                    const socket = twitchSocket;
-                    const auth = socket && auths.get(socket);
-                    return socket?.readyState === Ws.OPEN && auth?.pass && auth?.nick
-                        ? { url: socket.url, ...auth } : null;
                 }
             })
         });
@@ -1259,18 +1165,6 @@ const NATIVE_CAPTURE_PRELOAD: &str = r#"() => {
                             hellos.set(this, data);
                             gameSocket = this;
                         }
-                    } else if (host === 'irc-ws.chat.twitch.tv') {
-                        const auth = auths.get(this) || { pass: '', nick: '', cap: '' };
-                        for (const line of data.split(/\r\n|\r|\n/)) {
-                            if (/^PASS\s+oauth:[a-z0-9_-]+$/i.test(line))
-                                auth.pass = line.trim();
-                            if (/^NICK\s+[a-z0-9_]+$/i.test(line))
-                                auth.nick = line.trim();
-                            if (/^CAP\s+REQ\s+:[a-z0-9.\/\s_-]+$/i.test(line))
-                                auth.cap = line.trim();
-                        }
-                        auths.set(this, auth);
-                        twitchSocket = this;
                     }
                 }
             } catch (_) {}
@@ -1334,7 +1228,7 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         return Err(error);
     }
 
-    // Install before the next game/Twitch navigation. This runs in the page
+    // Install before the next game navigation. This runs in the page
     // realm and observes the actual outgoing handshake, independent of the
     // per-profile Firefox extension version.
     let native_capture_installed = send_and_wait(&mut socket, 2, json!({
@@ -1352,7 +1246,6 @@ fn open_session(port: u16) -> Result<BrowserSession, String> {
         tab_signature: Vec::new(),
         native_capture_installed,
         native_reloaded: BTreeSet::new(),
-        native_twitch_auth_opened: false,
         bridge_retry_after: None,
     })
 }
@@ -1605,7 +1498,6 @@ fn probe_page(
         stream_scan_status: runtime.stream_scan_status,
         stream_scan_live: runtime.stream_scan_live,
         stream_scan_opened: runtime.stream_scan_opened,
-        stream_scan_twitch_channels: runtime.stream_scan_twitch_channels,
         xp_bonuses: runtime.xp_bonuses,
         player_level: page.get("playerLevel").and_then(Value::as_str)
             .and_then(|v| v.trim().parse::<u32>().ok())
@@ -1619,15 +1511,13 @@ fn probe_page(
         player_xp_to_next: runtime.player_xp_to_next,
         gold: runtime.gold,
         orbs: runtime.orbs,
-        stream_bonus: if runtime.stream_bonus.is_empty() {
-            page.get("streamBonus").and_then(Value::as_str).unwrap_or_default().to_string()
-        } else {
-            runtime.stream_bonus.clone()
-        },
-        stream_bonus_pct: runtime.stream_bonus_pct,
-        stream_watching: runtime.stream_watching,
-        stream_live_bonus: runtime.stream_live_bonus,
-        stream_missing: runtime.stream_missing,
+        twitch_linked: runtime.twitch_linked,
+        twitch_login: runtime.twitch_login,
+        twitch_bonus_pct: runtime.twitch_bonus_pct,
+        twitch_xp_until: runtime.twitch_xp_until,
+        twitch_capture_until: runtime.twitch_capture_until,
+        twitch_shiny_until: runtime.twitch_shiny_until,
+        twitch_server_now_ms: runtime.twitch_server_now_ms,
         xp_sources: runtime.xp_sources,
         bridge_connected: runtime.bridge_connected,
         bridge_snapshot_ok: runtime.bridge_snapshot_ok,
@@ -1667,21 +1557,12 @@ fn trim_pct(value: f32) -> String {
 }
 
 
-fn needs_tab_script_probe(kind: &str) -> bool {
-    // Only Twitch needs the injected low-resource marker and channel count.
-    // Reading titles from unrelated tabs (including busy game/web tabs)
-    // blocks all heartbeat checks on the single BiDi monitor thread.
-    kind == "Twitch"
-}
-
 fn build_tab_infos(
     contexts: &[ContextInfo],
-    socket: &mut BrowserSocket,
-    next_id: &mut u64,
+    _socket: &mut BrowserSocket,
+    _next_id: &mut u64,
 ) -> Vec<TabInfo> {
-    let mut tabs = Vec::new();
-
-    for context in contexts.iter().filter(|context| context.depth == 0) {
+    contexts.iter().filter(|context| context.depth == 0).map(|context| {
         let lower = context.url.to_ascii_lowercase();
         let kind = if lower.starts_with("https://pokeidle.io/")
             || lower.starts_with("https://www.pokeidle.io/")
@@ -1698,56 +1579,12 @@ fn build_tab_infos(
         } else {
             "Web"
         };
-
-        let result = if needs_tab_script_probe(kind) {
-            let id = *next_id;
-            *next_id += 1;
-
-            Some(send_and_wait(
-                socket,
-                id,
-                json!({
-                    "id": id,
-                    "method": "script.evaluate",
-                    "params": {
-                        "expression": "JSON.stringify({ title: document.title || '', lowResource: !!document.querySelector('#moth-twitch-low-resource-css, #moth-twitch-low-resource-chat-css'), twitchChannels: (() => { const value = new URLSearchParams(location.search).get('moth-channels'); return value === null ? null : new Set(value.split(',').filter(Boolean)).size; })() })",
-                        "target": { "context": context.id },
-                        "awaitPromise": false
-                    }
-                }),
-            ))
-        } else {
-            None
-        };
-
-        let (title, low_resource, twitch_channels) = result
-            .and_then(Result::ok)
-            .and_then(|value| {
-                value.get("result")
-                    .and_then(|v| v.get("result"))
-                    .and_then(|v| v.get("value"))
-                    .and_then(Value::as_str)
-                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            })
-            .map(|value| (
-                value.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
-                value.get("lowResource").and_then(Value::as_bool).unwrap_or(false),
-                if kind == "Twitch" {
-                    value.get("twitchChannels").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32)
-                } else { None },
-            ))
-            .unwrap_or_default();
-
-        tabs.push(TabInfo {
+        TabInfo {
             kind: kind.to_string(),
-            title: if title.is_empty() { context.url.clone() } else { title },
+            title: context.url.clone(),
             url: context.url.clone(),
-            low_resource: kind == "Twitch" && low_resource,
-            twitch_channels,
-        });
-    }
-
-    tabs
+        }
+    }).collect()
 }
 
 fn probe_runtime_details(
@@ -1900,96 +1737,26 @@ fn probe_runtime_details(
         .unwrap_or_default();
 
     let twitch = state.get("twitch").cloned().unwrap_or(Value::Null);
-
-    let stream_bonus_pct = twitch
-        .get("pctAtual")
-        .or_else(|| twitch.get("pct"))
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0) as f32;
-
-    let stream_watching = twitch
-        .get("assistindoEm")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let official_bonus = twitch
-        .get("oficiais")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items.iter()
-                .filter(|item| item.get("bonus").and_then(Value::as_bool).unwrap_or(false))
-                .filter_map(|item| {
-                    item.get("login")
-                        .or_else(|| item.get("nome"))
-                        .and_then(Value::as_str)
-                        .map(|name| name.to_ascii_lowercase())
-                })
-                .collect::<std::collections::HashSet<_>>()
-        })
-        .unwrap_or_default();
-
-    let live_names = twitch
-        .get("lives")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items.iter()
-                .filter_map(|item| {
-                    let login = item.get("login").and_then(Value::as_str)?;
-                    let login_key = login.to_ascii_lowercase();
-                    if official_bonus.contains(&login_key) {
-                        Some(login.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let stream_missing = live_names
-        .iter()
-        .filter(|name| {
-            !stream_watching
-                .iter()
-                .any(|watching| watching.eq_ignore_ascii_case(name))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let stream_bonus = if !stream_watching.is_empty() && stream_bonus_pct > 0.0 {
-        format!(
-            "+{}% XP · watching {}",
-            trim_pct(stream_bonus_pct),
-            stream_watching.join(", ")
-        )
-    } else {
-        String::new()
+    let twitch_linked=if twitch.is_null(){None}else{
+        twitch.get("vinculado").and_then(Value::as_bool)
+            .or_else(||Some(twitch.get("login").and_then(Value::as_str).is_some()))
     };
+    let twitch_login=twitch.get("login").and_then(Value::as_str)
+        .unwrap_or_default().to_string();
+    let twitch_bonus_pct=twitch.get("pct").and_then(Value::as_f64)
+        .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
+    let twitch_bonus=twitch.get("bonus").cloned().unwrap_or(Value::Null);
+    let twitch_xp_until=twitch_bonus.get("xp").and_then(Value::as_u64).unwrap_or(0);
+    let twitch_capture_until=twitch_bonus.get("captura").and_then(Value::as_u64).unwrap_or(0);
+    let twitch_shiny_until=twitch_bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0);
+    let twitch_server_now_ms=state.get("servidorAgora").and_then(Value::as_u64)
+        .map(|value|if (1_000_000_000..10_000_000_000).contains(&value) {
+            value.saturating_mul(1_000)
+        }else{value})
+        .unwrap_or_else(||std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
 
-    let mut xp_sources = Vec::new();
-
-    if !stream_watching.is_empty() && stream_bonus_pct > 0.0 {
-        xp_sources.push(stream_bonus.clone());
-    } else if !stream_missing.is_empty() {
-        let bonus_label = if stream_bonus_pct > 0.0 {
-            format!("+{}% Twitch XP available", trim_pct(stream_bonus_pct))
-        } else {
-            "Twitch XP bonus available".to_string()
-        };
-
-        xp_sources.push(format!(
-            "{} · bonus not registered for: {}",
-            bonus_label,
-            stream_missing.join(", ")
-        ));
-    }
-
+    let mut xp_sources=Vec::new();
     let event = state.get("evento").cloned().unwrap_or(Value::Null);
     let event_trainer = event
         .get("xpTreinadorPct")
@@ -2035,8 +1802,11 @@ fn probe_runtime_details(
         xp_sources.push("Shop XP boost active".to_string());
     }
 
-    if !stream_bonus.is_empty() && !xp_bonuses.iter().any(|item| item == &stream_bonus) {
-        xp_bonuses.push(stream_bonus.clone());
+    xp_bonuses.retain(|item|!item.to_ascii_lowercase().contains("twitch"));
+    if twitch_xp_until>twitch_server_now_ms && twitch_bonus_pct>0.0 {
+        let source=format!("Twitch +{}% XP",trim_pct(twitch_bonus_pct));
+        if !xp_sources.iter().any(|item|item==&source){xp_sources.push(source.clone());}
+        if !xp_bonuses.iter().any(|item|item==&source){xp_bonuses.push(source);}
     }
 
     Ok(RuntimeProbe {
@@ -2063,12 +1833,13 @@ fn probe_runtime_details(
         stream_scan_status: state.get("streamScanStatus").and_then(Value::as_str).unwrap_or_default().to_string(),
         stream_scan_live: state.get("streamScanLive").and_then(Value::as_u64).unwrap_or(0) as u32,
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
-        stream_scan_twitch_channels: state.get("streamScanTwitchChannels").and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32),
-        stream_bonus,
-        stream_bonus_pct,
-        stream_watching,
-        stream_live_bonus: live_names,
-        stream_missing,
+        twitch_linked,
+        twitch_login,
+        twitch_bonus_pct,
+        twitch_xp_until,
+        twitch_capture_until,
+        twitch_shiny_until,
+        twitch_server_now_ms,
         xp_sources,
         last_game_message_ms,
         xp_bonuses,
@@ -2451,11 +2222,7 @@ mod command_tests {
     }
 
     #[test]
-    fn only_twitch_tabs_need_evaluation() {
-        assert!(super::needs_tab_script_probe("Twitch"));
-        for kind in ["PokéIdle", "KICK", "Browser", "Web"] {
-            assert!(!super::needs_tab_script_probe(kind));
-        }
+    fn tab_inventory_does_not_execute_page_scripts() {
         assert!(super::BIDI_IO_TIMEOUT < super::BIDI_RESPONSE_DEADLINE);
         assert!(super::BIDI_RESPONSE_DEADLINE < super::HEARTBEAT_FRESHNESS_LIMIT);
     }
@@ -2464,7 +2231,7 @@ mod command_tests {
     fn tab_inventory_only_runs_on_change_or_slow_refresh() {
         use super::should_inspect_tabs;
         let a = vec![("tab1".to_string(), "https://pokeidle.io/app".to_string())];
-        let b = vec![("tab2".to_string(), "https://www.twitch.tv".to_string())];
+        let b = vec![("tab2".to_string(), "https://example.com/".to_string())];
         assert!(!should_inspect_tabs(false, false, &a, &a));
         assert!(should_inspect_tabs(false, true, &a, &a));
         assert!(should_inspect_tabs(false, false, &b, &a));

@@ -1,4 +1,4 @@
-//! Kick's website viewer session protocol (separate from Twitch IRC and
+//! Kick's website viewer session protocol (separate from the
 //! Kick's public Developer API). This is an undocumented upstream interface;
 //! any endpoint can change without notice. Credentials remain memory-only.
 use crate::native_kick_hls::{AccountBandwidth, MediaRunner, MediaStatus};

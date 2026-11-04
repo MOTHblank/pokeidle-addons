@@ -1,7 +1,7 @@
 //! Per-account native session cache. Credentials must never be placed in
 //! accounts.json, browser telemetry, logs, plain files, or command arguments.
 //!
-//! Windows: current-user DPAPI encrypts the *whole* game+Twitch bootstrap.
+//! Windows: current-user DPAPI encrypts the whole native game bootstrap.
 //! Linux: Secret Service desktop keyring via secret-tool (stdin for writes).
 //! If an OS vault is unavailable, a one-time Firefox authentication is still
 //! required for that launch; there is deliberately no plaintext fallback.
@@ -173,7 +173,7 @@ mod capture_handoff_tests {
     }
 }
 
-/// Kick uses a dedicated OS-vault entry, never the PokeIdle/Twitch cache.
+/// Kick uses a dedicated OS-vault entry, never the PokéIdle game cache.
 /// No plaintext fallback and no Kick credentials written to accounts.json.
 const MAX_KICK_TOKEN_BYTES: usize = 8192;
 fn check_kick_token(token: &str) -> Result<&str, String> {
@@ -698,7 +698,7 @@ mod platform {
     }
     pub fn save(profile: GameProfile, bytes: &[u8]) -> Result<(), String> {
         let args = base_args(profile);
-        let mut cmd = vec!["store", "--label=Moth PokeIdle native game and Twitch"];
+        let mut cmd = vec!["store", "--label=Moth PokeIdle native game"];
         cmd.extend(args);
         secret_tool(&cmd, Some(bytes)).map(|_| ())
     }
@@ -730,7 +730,7 @@ mod tests {
     use serde_json::json;
     #[test]
     fn invalid_auth_data_is_never_persisted() {
-        assert!(serialize(&json!({"twitch": {"pass":"test"}})).is_err());
+        assert!(serialize(&json!({"bootstrap": {"hello":"not enough"}})).is_err());
         assert!(deserialize(b"{}").is_err());
     }
     #[test]

@@ -2,7 +2,7 @@
 //! Called from the expanded account view. No extra monitoring or polling.
 use super::{compact_text, egui, json, multikick_link,
     open_kick_channels_in_regular_browser, tr, Align, ControllerApp, Health,
-    Layout, RichText, ACCENT, DIM, GOOD, MUTED, PANEL_ALT, TEXT, WARN};
+    Layout, RichText, ACCENT, DIM, GOOD, MUTED, PANEL_ALT, TEXT};
 
 pub(super) fn draw_browser_controls(
     app: &mut ControllerApp,
@@ -229,49 +229,23 @@ pub(super) fn draw_browser_controls(
                         } else {
                             for tab in &health.tabs {
                                 ui.horizontal(|ui| {
-                                    let marker = if tab.kind == "Twitch" {
-                                        if tab.low_resource { "●" } else { "○" }
-                                    } else {
-                                        "●"
-                                    };
-
+                                    ui.label(RichText::new("●").size(9.0).color(MUTED));
                                     ui.label(
-                                        RichText::new(marker)
-                                            .size(9.0)
-                                            .color(if tab.kind == "Twitch" && tab.low_resource { GOOD } else { MUTED }),
-                                    );
-
-                                    ui.label(
-                                        RichText::new(if tab.kind == "Twitch" && tab.twitch_channels.is_some() { tr("Shared Twitch chat") } else { tr(&tab.kind) })
+                                        RichText::new(tr(&tab.kind))
                                             .size(9.0)
                                             .strong()
                                             .color(TEXT),
                                     );
-
                                     ui.add_space(5.0);
-
-                                    let channel_label = tab.twitch_channels.map(|n| format!("{} {}", n, tr("channels in this tab")));
-                                    let title = channel_label.as_deref().unwrap_or_else(|| if tab.title.is_empty() { &tab.url } else { &tab.title });
-
+                                    let title=if tab.title.is_empty(){&tab.url}else{&tab.title};
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(compact_text(title, 54))
+                                            RichText::new(compact_text(title,54))
                                                 .size(9.0)
                                                 .color(MUTED),
                                         )
                                         .truncate(),
                                     );
-
-                                    if tab.kind == "Twitch" {
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            ui.label(
-                                                RichText::new(if tab.low_resource { tr("LOW RESOURCE") } else { tr("Not optimized") })
-                                                    .size(8.0)
-                                                    .strong()
-                                                    .color(if tab.low_resource { GOOD } else { WARN }),
-                                            );
-                                        });
-                                    }
                                 });
                             }
                         }

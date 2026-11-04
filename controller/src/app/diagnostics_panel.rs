@@ -643,7 +643,7 @@ pub(super) fn draw_diagnostics_panel(
                     }
                     ui.add_space(6.0);
                     ui.label(RichText::new(tr(
-                        "Only measured Kick HLS payload is included. Twitch, game socket, HTTP overhead, and Firefox network traffic are not measured here."
+                        "Only measured Kick HLS payload is included. Game socket, HTTP overhead, and Firefox network traffic are not measured here."
                     )).size(10.0).color(DIM));
                 });
 

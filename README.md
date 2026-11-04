@@ -1,6 +1,6 @@
 # Moth Controller — PokéIdle
 
-Desenvolvido para ser o **gerenciador de múltiplas contas mais eficiente do PokéIdle**, o Moth Controller reúne até **quatro contas simultâneas** em um único aplicativo. Cada conta pode acompanhar **mais de dez canais da Twitch** por conexões leves de chat, com foco em um consumo extremamente baixo de **CPU e memória RAM**.
+Desenvolvido para ser o **gerenciador de múltiplas contas mais eficiente do PokéIdle**, o Moth Controller reúne até **quatro contas simultâneas** em um único aplicativo, com sessões nativas leves e foco em baixo consumo de **CPU e memória RAM**.
 
 Acompanhe suas caçadas, configure automações e mantenha as sessões funcionando em segundo plano.
 
@@ -14,14 +14,15 @@ Acompanhe suas caçadas, configure automações e mantenha as sessões funcionan
 - **Painel:** acompanhe suas contas, caçadas ativas, Pokémon, adversários e itens em uma visão geral.
 - **Hunt Atlas:** compare caçadas, estimativas de experiência, chances de captura e níveis de Outland.
 - **Automações:** configure captura automática, reposição de Poké Bolas, poções e revives, além de regras de compra no mercado.
-- **Contas:** organize até quatro perfis e acompanhe suas conexões com o PokéIdle e a Twitch.
+- **Contas:** organize até quatro perfis e acompanhe suas sessões do PokéIdle.
+- **Twitch:** exibe o vínculo e os bônus de pontos do canal informados pelo próprio jogo (XP, Capture Boost e Secret Lure), sem abrir chats nem manter conexão IRC.
 - **Kick:** sessões nativas independentes por conta, com tráfego HLS de baixo bitrate, presença via WebSocket da Kick e leitura do saldo real de pontos (ganho mostrado apenas quando confirmado por aumento de saldo).
 
 ## Como começar
 
 1. [**Baixe o Moth Controller**](https://github.com/MOTHblank/pokeidle-addons/releases/latest) e abra o aplicativo.
 2. Acesse **Contas** e configure os perfis que deseja utilizar.
-3. Entre no **PokéIdle** e na **Twitch** quando solicitado.
+3. Entre no **PokéIdle** quando solicitado. Se sua conta Twitch estiver vinculada no jogo, o Moth Controller apenas lê os bônus de pontos do canal já resgatados.
 4. Use o **Painel** para acompanhar suas contas, **Automações** para configurar as automações e **Hunt Atlas** para encontrar as melhores caçadas para seus objetivos.
 
 **Navegador recomendado:** [Firefox Developer Edition](https://www.mozilla.org/pt-BR/firefox/developer/).

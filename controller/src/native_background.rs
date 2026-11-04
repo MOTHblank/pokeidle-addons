@@ -4,7 +4,6 @@
 //! Credentials are captured only from the existing, authenticated Firefox BiDi
 //! session, held in memory, and never printed or persisted by this module.
 use serde_json::Value;
-use crate::native_twitch::{TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_gameplay::GameplayStatus;
@@ -115,9 +114,13 @@ pub struct NativeSnapshot {
     pub pending_pokemon_sale: Option<u64>,
     pub confirmed_pokemon_sales: u64,
     pub pokemon_sale_error: Option<String>,
-    pub twitch_live: Vec<String>,
-    pub twitch_watching: Vec<String>,
+    /// Twitch is game state only. No IRC/chat connection is owned by Moth.
+    pub twitch_linked: Option<bool>,
+    pub twitch_login: Option<String>,
     pub twitch_bonus_pct: f32,
+    pub twitch_xp_until: u64,
+    pub twitch_capture_until: u64,
+    pub twitch_shiny_until: u64,
     /// Live official Kick channels from the authenticated PokéIdle game state.
     /// None = the server has not supplied the roster; Some(empty) = no one live.
     pub kick_official_live: Option<Vec<String>>,
@@ -140,7 +143,8 @@ impl Default for NativeSnapshot {
             native_market: MarketStatus::default(),
             pending_pokemon_sale: None, confirmed_pokemon_sales: 0,
             pokemon_sale_error: None,
-            twitch_live: Vec::new(), twitch_watching: Vec::new(), twitch_bonus_pct: 0.0,
+            twitch_linked: None, twitch_login: None, twitch_bonus_pct: 0.0,
+            twitch_xp_until: 0, twitch_capture_until: 0, twitch_shiny_until: 0,
             kick_official_live: None, kick_official_roster: None,
             kick_roster_revision: 0,
         }
@@ -227,10 +231,7 @@ fn cookie_domain_matches(domain: &str, host: &str) -> bool {
 }
 
 pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
-    Credentials::parse(bootstrap)?;
-    let twitch = bootstrap.get("twitch")
-        .ok_or_else(|| "Twitch IRC authentication missing from Firefox handoff".to_owned())?;
-    crate::native_twitch::validate(twitch)
+    Credentials::parse(bootstrap).map(|_| ())
 }
 
 type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
@@ -268,7 +269,6 @@ pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
     created_at: Instant,
     profile: GameProfile,
-    twitch: TwitchSession,
     stop: Arc<AtomicBool>,
     command_tx: mpsc::SyncSender<GameCommand>,
     auto_catch: Arc<AtomicBool>,
@@ -288,18 +288,15 @@ pub struct NativeSession {
     kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
 }
 impl NativeSession {
-    /// Establish *both* verified WebSockets before handing ownership away
+    /// Establish the verified game WebSocket before handing ownership away
     /// from Firefox. This is blocking and MUST run on a background thread.
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
-        let twitch = TwitchSession::start_verified(bootstrap.get("twitch")
-            .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
-        Self::spawn(profile, credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
+        Self::spawn(profile, credentials, Some(initial), bootstrap.get("autocatch").cloned())
     }
-    fn spawn(profile: GameProfile, credentials: Credentials, twitch: TwitchSession,
+    fn spawn(profile: GameProfile, credentials: Credentials,
         initial: Option<(GameSocket, Value)>, settings: Option<Value>) -> Result<Self, String> {
-        let desired = twitch.desired_handle();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
         let rules=MarketRules::load(profile).unwrap_or_else(|error| {
@@ -357,7 +354,7 @@ impl NativeSession {
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
-                        Arc::clone(&worker_stop), desired, initial,
+                        Arc::clone(&worker_stop), initial,
                         gameplay, restock, command_rx, worker_auto_catch,
                         worker_restock_enabled, worker_pvp_preference,
                         worker_pvp_toggle_epoch, worker_capture_config,
@@ -379,7 +376,7 @@ impl NativeSession {
             .map_err(|error| format!("Could not start the PokéIdle connection: {error}"))?;
         track_game_worker(worker);
         Ok(Self {
-            snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
+            snapshot, created_at: Instant::now(), profile, stop, command_tx, auto_catch, restock_enabled,
             pvp_preference, pvp_toggle_epoch, capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
             background_forecast_reference, phase_wake, kick_roster_publisher
         })
@@ -481,9 +478,6 @@ impl NativeSession {
             restock_enabled: Arc::clone(&self.restock_enabled),
         }
     }
-    pub fn twitch_snapshot(&self) -> TwitchSnapshot {
-        self.twitch.snapshot()
-    }
     pub fn snapshot(&self) -> NativeSnapshot {
         self.snapshot.lock().map(|status| status.clone()).unwrap_or_default()
     }
@@ -535,18 +529,16 @@ impl NativeSession {
         }
     }
     /// Called after the authenticated session is adopted into its account.
-    /// Both game and Twitch state changes can request immediate recovery.
+    /// Game state changes can request immediate recovery.
     pub fn set_phase_waker(&self, wake:Arc<dyn Fn() + Send + Sync>) {
         if let Ok(mut slot)=self.phase_wake.lock() {
             *slot=Some(Arc::clone(&wake));
         }
-        self.twitch.set_phase_waker(Arc::clone(&wake));
         // A worker can expire while its initial handoff is still in flight.
         if self.snapshot().phase=="NeedsLogin" { wake(); }
     }
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.twitch.stop();
     }
 }
 impl Drop for NativeSession {
@@ -637,28 +629,14 @@ fn open_session(credentials: &Credentials) -> Result<(GameSocket, Value), String
     Err("PokéIdle did not confirm the connection".into())
 }
 
-fn normalize_twitch_login(value: &str) -> Option<String> {
-    let value = value.trim_start_matches('#').to_ascii_lowercase();
-    if !value.is_empty() && value.len() <= 25 &&
-        value.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_') {
-        Some(value)
-    } else { None }
-}
-
 #[cfg(test)]
-fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
-    desired: &Arc<Mutex<Vec<String>>>) {
+fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str) {
     let Ok(payload) = serde_json::from_str::<Value>(text) else { return };
-    observe_value(snapshot, &payload, desired);
+    observe_value(snapshot, &payload);
 }
-fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
-    desired: &Arc<Mutex<Vec<String>>>) -> bool {
+fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool {
     let mut changed_kick_roster=false;
     let state = payload.get("estado");
-    let twitch_rooms_updated = state.and_then(|value|value.get("twitch"))
-        .is_some_and(|twitch|
-            twitch.get("lives").and_then(Value::as_array).is_some() ||
-            twitch.get("assistindoEm").and_then(Value::as_array).is_some());
     update(snapshot, |status| {
         status.frames = status.frames.saturating_add(1);
         status.last_received = Some(Instant::now());
@@ -705,39 +683,28 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
                 }
             }
             if let Some(twitch) = state.get("twitch") {
-                if let Some(lives) = twitch.get("lives").and_then(Value::as_array) {
-                    status.twitch_live = lives.iter()
-                        .filter_map(|entry| {
-                            let name = entry.get("login").or_else(|| entry.get("name"))
-                                .and_then(Value::as_str)?;
-                            normalize_twitch_login(name)
-                        }).collect();
+                status.twitch_linked=twitch.get("vinculado").and_then(Value::as_bool)
+                    .or_else(||Some(twitch.get("login").and_then(Value::as_str).is_some()));
+                if let Some(login)=twitch.get("login").and_then(Value::as_str) {
+                    status.twitch_login=Some(login.to_owned());
                 }
-                if let Some(watching) = twitch.get("assistindoEm").and_then(Value::as_array) {
-                    status.twitch_watching = watching.iter()
-                        .filter_map(Value::as_str).filter_map(normalize_twitch_login).collect();
+                if let Some(pct)=twitch.get("pct").and_then(Value::as_f64) {
+                    status.twitch_bonus_pct=if pct.is_finite(){pct.max(0.0) as f32}else{0.0};
                 }
-                if let Some(pct) = twitch.get("pctAtual").or_else(|| twitch.get("pct"))
-                    .and_then(Value::as_f64) {
-                    status.twitch_bonus_pct = pct as f32;
+                if let Some(bonus)=twitch.get("bonus") {
+                    if let Some(raw)=bonus.get("xp") {
+                        status.twitch_xp_until=raw.as_u64().unwrap_or(0);
+                    }
+                    if let Some(raw)=bonus.get("captura") {
+                        status.twitch_capture_until=raw.as_u64().unwrap_or(0);
+                    }
+                    if let Some(raw)=bonus.get("shiny") {
+                        status.twitch_shiny_until=raw.as_u64().unwrap_or(0);
+                    }
                 }
             }
         }
     });
-    // Combat and market packets do not affect Twitch room membership.
-    // Avoid cloning/sorting channels or taking a second lock for those frames.
-    // Preserve both live rooms and reward-active rooms when a list changes.
-    if twitch_rooms_updated {
-        if let Ok(game) = snapshot.lock() {
-            let mut names = game.twitch_live.clone();
-            names.extend(game.twitch_watching.iter().cloned());
-            names.sort_unstable();
-            names.dedup();
-            if let Ok(mut current) = desired.lock() {
-                if *current != names { *current = names; }
-            }
-        }
-    }
     changed_kick_roster
 }
 
@@ -770,7 +737,7 @@ fn current_background_hunt(view:&HuntView)->Option<crate::native_hunts::HuntEntr
 
 fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
-    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, Value)>,
+    first_session: Option<(GameSocket, Value)>,
     mut gameplay: Gameplay, mut restock: Restock,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
@@ -811,7 +778,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
                 // The handshake already parsed this frame; all consumers borrow it.
                 let received_at = Instant::now();
-                let roster_changed=observe_value(&snapshot, &frame, &desired);
+                let roster_changed=observe_value(&snapshot, &frame);
                 publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                 gameplay.ingest_value(&frame, received_at);
                 restock.ingest_value(&frame, received_at);
@@ -1415,7 +1382,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                         restock.status.last_order.as_deref().unwrap_or("purchase")
                                     ));
                                 }
-                                let roster_changed=observe_value(&snapshot, &frame, &desired);
+                                let roster_changed=observe_value(&snapshot, &frame);
                                 publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                             }
                         },
@@ -1567,12 +1534,11 @@ mod tests {
     #[test]
     fn records_battle_events_without_requiring_browser_dom() {
         let status = Arc::new(Mutex::new(NativeSnapshot::default()));
-        let desired = Arc::new(Mutex::new(Vec::new()));
         observe(&status, r#"{"t":"batalha","ev":[
             {"k":"morte","quem":"selvagem"},
             {"k":"morte","quem":"jogador"},
             {"k":"bola","sucesso":true}
-        ]}"#, &desired);
+        ]}"#);
         let observed = status.lock().unwrap().clone();
         assert_eq!(observed.battle_kills, 1);
         assert_eq!(observed.captures, 1);
@@ -1581,29 +1547,33 @@ mod tests {
     #[test]
     fn unchanged_official_kick_roster_does_not_advance_ui_revision() {
         let snapshot=Arc::new(Mutex::new(NativeSnapshot::default()));
-        let desired=Arc::new(Mutex::new(Vec::new()));
         let frame=r#"{"t":"estado","estado":{"kick":{"oficiais":[
             {"slug":"sample","aoVivo":true}]}}}"#;
         let first_event=serde_json::from_str::<Value>(frame).unwrap();
-        assert!(observe_value(&snapshot,&first_event,&desired));
+        assert!(observe_value(&snapshot,&first_event));
         let first=snapshot.lock().unwrap().kick_roster_revision;
         assert!(first>0);
-        assert!(!observe_value(&snapshot,&first_event,&desired));
+        assert!(!observe_value(&snapshot,&first_event));
         assert_eq!(snapshot.lock().unwrap().kick_roster_revision,first);
         let offline=serde_json::json!({"t":"estado","estado":{"kick":{"oficiais":[
             {"slug":"sample","aoVivo":false}]}}});
-        assert!(observe_value(&snapshot,&offline,&desired));
+        assert!(observe_value(&snapshot,&offline));
         assert_eq!(snapshot.lock().unwrap().kick_roster_revision,first+1);
     }
     #[test]
-    fn native_twitch_follows_lives_and_protects_rewarded_rooms() {
+    fn twitch_redemption_state_comes_from_game_without_chat_tracking() {
         let status = Arc::new(Mutex::new(NativeSnapshot::default()));
-        let desired = Arc::new(Mutex::new(Vec::new()));
-        observe(&status, r#"{"t":"welcome","estado":{"twitch":{"lives":[{"login":"ChannelA"}],"assistindoEm":["OldChannel"],"pctAtual":10}}}"#, &desired);
-        assert_eq!(*desired.lock().unwrap(), vec!["channela", "oldchannel"]);
-        observe(&status, r#"{"t":"estado","estado":{"twitch":{"lives":[]}}}"#, &desired);
-        assert_eq!(*desired.lock().unwrap(), vec!["oldchannel"]);
-        assert_eq!(status.lock().unwrap().twitch_bonus_pct, 10.0);
+        observe(&status, r#"{"t":"welcome","estado":{"twitch":{
+            "vinculado":true,"login":"trainer","pct":15,
+            "bonus":{"xp":200,"captura":300,"shiny":400}
+        }}}"#);
+        let observed=status.lock().unwrap().clone();
+        assert_eq!(observed.twitch_linked,Some(true));
+        assert_eq!(observed.twitch_login.as_deref(),Some("trainer"));
+        assert_eq!(observed.twitch_bonus_pct,15.0);
+        assert_eq!(observed.twitch_xp_until,200);
+        assert_eq!(observed.twitch_capture_until,300);
+        assert_eq!(observed.twitch_shiny_until,400);
     }
     #[test]
     fn cookie_scoping_and_hello_validation() {

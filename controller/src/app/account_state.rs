@@ -213,12 +213,12 @@ impl ControllerApp {
                 }
             };
 
-            // The setup marker is earned only after both PokéIdle and Twitch
-            // report authenticated connections.
+            // The setup marker is earned after the native PokéIdle session
+            // reports an authenticated connection. Twitch is no longer a
+            // controller-owned login prerequisite.
             let mut setup_complete = accounts::setup_complete(profile).unwrap_or(false);
             let verified = self.runtimes[index].game.native.as_ref().is_some_and(|session| {
                 session.snapshot().phase == "Online"
-                    && session.twitch_snapshot().phase == "Online"
             });
             if verified && !setup_complete {
                 match accounts::complete_setup(profile) {

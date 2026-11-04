@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 const USER_PREFS: &str = r#"
 // Moth defaults: keep the browser quiet and cheap without changing
-// PokéIdle, Twitch, or KICK functionality. This file is created once
+// PokéIdle or KICK functionality. This file is created once
 // per game profile; user changes made later are left intact.
 
 user_pref("browser.newtabpage.enabled", false);
@@ -121,7 +121,7 @@ pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
 }
 
 /// Open the selected account profile in an ordinary, user-controlled Firefox
-/// window for interactive Google/PokéIdle or Twitch authentication.
+/// window for interactive Google/PokéIdle authentication.
 /// Do not add a BiDi/Remote Agent port, and never open sign-in URLs inside
 /// the monitored browser. Authentication is handled by the provider itself.
 pub fn launch_unmonitored(config: &Config, url: &str) -> Result<Child, String> {
@@ -146,11 +146,11 @@ pub fn launch_unmonitored(config: &Config, url: &str) -> Result<Child, String> {
     command.spawn().map_err(format_spawn_error)
 }
 
-/// Only the controller's two interactive sign-in destinations are allowed.
-/// Keeping the launch command separate lets us assert that neither path
+/// Only the controller's PokéIdle interactive sign-in destination is allowed.
+/// Keeping the launch command separate lets us assert that the path never
 /// accidentally regains remote-debugging/automation flags.
 fn unmonitored_login_command(config: &Config, url: &str) -> Result<Command, String> {
-    if url != config.url.as_str() && url != crate::accounts::TWITCH_LOGIN {
+    if url != config.url.as_str() {
         return Err("unsupported unmonitored sign-in URL".to_owned());
     }
     let mut command = Command::new(&config.firefox_executable);
@@ -647,28 +647,27 @@ mod unmonitored_login_tests {
     }
 
     #[test]
-    fn both_interactive_logins_use_a_regular_non_automated_browser() {
+    fn interactive_login_uses_a_regular_non_automated_browser() {
         let config = config();
-        for url in [&config.url[..], crate::accounts::TWITCH_LOGIN] {
-            let command = unmonitored_login_command(&config, url).unwrap();
-            let args: Vec<_> = command.get_args()
-                .map(|arg| arg.to_string_lossy().to_string()).collect();
-            assert!(args.contains(&"--no-remote".to_owned()));
-            assert!(args.contains(&"--profile".to_owned()));
-            assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
-            assert!(args.contains(&"--new-window".to_owned()));
-            assert!(args.contains(&url.to_owned()));
-            assert!(!args.iter().any(|arg| {
-                arg.contains("remote-debugging") ||
-                arg.contains("marionette") ||
-                arg.contains("headless")
-            }));
-        }
+        let url=&config.url[..];
+        let command = unmonitored_login_command(&config, url).unwrap();
+        let args: Vec<_> = command.get_args()
+            .map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--no-remote".to_owned()));
+        assert!(args.contains(&"--profile".to_owned()));
+        assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
+        assert!(args.contains(&"--new-window".to_owned()));
+        assert!(args.contains(&url.to_owned()));
+        assert!(!args.iter().any(|arg| {
+            arg.contains("remote-debugging") ||
+            arg.contains("marionette") ||
+            arg.contains("headless")
+        }));
     }
 
     #[test]
     fn unmonitored_login_refuses_unrelated_urls() {
         assert!(unmonitored_login_command(&config(), "https://example.com/").is_err());
-        assert!(unmonitored_login_command(&config(), "http://www.twitch.tv/login").is_err());
+        assert!(unmonitored_login_command(&config(), "https://www.twitch.tv/login").is_err());
     }
 }

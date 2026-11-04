@@ -1,12 +1,14 @@
 # Moth Controller — Desenvolvimento
 
-Aplicativo desktop do [PokéIdle Addons](../README.md), desenvolvido em Rust com egui/eframe. Gerencia até quatro perfis independentes do PokéIdle e conexões com a Twitch.
+Aplicativo desktop do [PokéIdle Addons](../README.md), desenvolvido em Rust com egui/eframe. Gerencia até quatro perfis independentes do PokéIdle com sessões nativas em segundo plano.
 
 **[Baixar a versão mais recente](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
 
 ## Uso
 
-Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quando solicitado. Os cartões mostram o estado das conexões e os controles de cada sessão.
+Em **Contas**, configure seus perfis e faça login no PokéIdle quando solicitado. Os cartões mostram o estado da sessão do jogo e os controles de cada conta.
+
+Desde o PokéIdle v1.400, o Moth Controller **não autentica Twitch, não entra em chats e não mantém IRC**. O bônus automático por presença em chat foi removido pelo jogo. A interface apenas lê do estado autenticado do PokéIdle o vínculo da conta Twitch e os temporizadores dos bônus resgatados com pontos do canal: XP, Capture Boost e Secret Lure.
 
 - **Painel:** visão geral da atividade das contas e detalhes das sessões.
 - **Hunt Atlas:** análise e comparação de caçadas.
@@ -168,7 +170,7 @@ uma sessão no viewer WebSocket e recebe mídia HLS escolhendo a menor taxa
 anunciada, descartando bytes sem decodificar. Não há mensagens de chat.
 Por transmitir os bytes do vídeo, **o consumo de banda pode ser considerável**.
 
-**Segurança:** o login Kick é isolado das credenciais PokéIdle/Twitch.
+**Segurança:** o login Kick é isolado das credenciais PokéIdle.
 Windows usa um arquivo criptografado com DPAPI específico do perfil Kick;
 Linux usa um item separado no Secret Service. Não existe fallback para
 arquivo em texto simples. O token pode expirar e exigir substituição.

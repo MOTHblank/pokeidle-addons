@@ -474,12 +474,17 @@ impl GameSlot {
             health.autocatch_on = state.native_auto_catch;
             health.autocatch_balls_used = state.native_throws.min(u32::MAX as u64) as u32;
             health.autocatch_captures = state.captures.min(u32::MAX as u64) as u32;
-            health.stream_watching = state.twitch_watching.clone();
-            health.stream_bonus_pct = state.twitch_bonus_pct;
-            health.stream_scan_twitch_channels = Some(state.twitch_live.len() as u32);
-            health.stream_bonus = if state.twitch_bonus_pct > 0.0 {
-                format!("+{}% XP", state.twitch_bonus_pct)
-            } else { String::new() };
+            health.twitch_linked = state.twitch_linked;
+            health.twitch_login = state.twitch_login.clone().unwrap_or_default();
+            health.twitch_bonus_pct = state.twitch_bonus_pct;
+            health.twitch_xp_until = state.twitch_xp_until;
+            health.twitch_capture_until = state.twitch_capture_until;
+            health.twitch_shiny_until = state.twitch_shiny_until;
+            health.twitch_server_now_ms = view.server_now.map(|value|
+                if (1_000_000_000..10_000_000_000).contains(&value) {
+                    value.saturating_mul(1_000)
+                } else { value }
+            ).unwrap_or(0);
             health.game_ready = state.phase == "Online";
             health.logged_in = state.phase == "Online";
             health.hunt_slug = view.hunt_slug.clone().or(state.hunt_slug.clone()).unwrap_or_default();
@@ -942,7 +947,7 @@ struct CachedNativeEvent {
     result: Result<Option<NativeSession>, String>,
 }
 
-/// Authenticated Rust game WSS + Twitch IRC must both be confirmed before
+/// The authenticated Rust game WebSocket must be confirmed before
 /// the complete Firefox process may close.
 struct NativeVerifiedEvent {
     index: usize,
@@ -998,7 +1003,6 @@ enum AccountsSection { Profiles, Kick }
 #[derive(Clone, Copy)]
 enum ProfileAction {
     GoogleSignIn,
-    Twitch,
     Folder,
 }
 
@@ -1263,7 +1267,7 @@ impl ControllerApp {
         self.runtimes[index].invalidate_session();
     }
 
-    // Native and Twitch recovery signals wake the control-plane pump directly.
+    // Native game recovery signals wake the control-plane pump directly.
     // Display refresh throttling never blocks an expired-login transition.
     fn adopt_native_session(&mut self, index: usize, session: NativeSession) {
         // Adopted sessions have independent settings lifetimes even when the
@@ -1675,7 +1679,7 @@ impl eframe::App for ControllerApp {
             self.save_dirty_account_names();
         }
         // Apply the persisted preference immediately to all Firefox monitors.
-        // Neither native game nor Twitch connections are throttled.
+        // Native game connections are never throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
         if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
             sampler.record_frame(start.elapsed(), diagnostics_preflight, diagnostics_panel_elapsed);

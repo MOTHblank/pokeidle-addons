@@ -14,9 +14,9 @@ impl ControllerApp {
         self.runtimes[index].session.native_handoff_busy = true;
         self.runtimes[index].session.native_handoff_last_attempt = Some(Instant::now());
         logging::info(&format!(
-            "{} capturing native game + Twitch IRC session via Firefox BiDi",
+            "{} capturing native game session via Firefox BiDi",
             self.account_name(profile)));
-        self.set_status(format!("{}: signing in to PokéIdle and Twitch",
+        self.set_status(format!("{}: signing in to PokéIdle",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
         let generation_state=Arc::clone(&self.runtimes[index].session.auth_generation);
@@ -124,7 +124,7 @@ impl ControllerApp {
     }
 
     /// Authentication-only browser fallback. Never call as the ordinary
-    /// Launch path while reusable native game + Twitch credentials exist.
+    /// Launch path while reusable native game credentials exist.
     pub(super) fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
         self.launch_firefox_bootstrap_impl(profile, headless, true);
     }
@@ -464,8 +464,7 @@ impl ControllerApp {
         }
     }
 
-    /// Use the same non-automated, visible Firefox for BOTH provider logins.
-    /// Never send the Twitch login URL to a monitored BiDi profile.
+    /// Open a non-automated, visible Firefox for an explicit PokéIdle/Google sign-in.
     pub(super) fn open_unmonitored_sign_in(&mut self, profile: GameProfile, action: ProfileAction) {
         let index = Self::game_index(profile);
         let account_name = self.account_name(profile);
@@ -509,11 +508,6 @@ impl ControllerApp {
                 config.url.as_str(),
                 " opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
             ),
-            ProfileAction::Twitch => (
-                "Twitch",
-                accounts::TWITCH_LOGIN,
-                " opened Firefox without remote debugging for Twitch sign-in. After signing in, close that window and launch this account normally from the dashboard.",
-            ),
             ProfileAction::Folder => return,
         };
 
@@ -527,7 +521,7 @@ impl ControllerApp {
                 self.runtimes[index].game.headless = false;
                 // After the user closes this window, refresh browser auth
                 // before returning to native mode instead of trusting stale
-                // cached Twitch or game login credentials.
+                // cached game login credentials.
                 self.runtimes[index].session.require_browser_login = true;
                 logging::info(&format!(
                     "{} Firefox spawned for {} sign-in without remote debugging (PID {})",
@@ -547,7 +541,7 @@ impl ControllerApp {
 
     pub(super) fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
         let result = match action {
-            ProfileAction::GoogleSignIn | ProfileAction::Twitch => {
+            ProfileAction::GoogleSignIn => {
                 self.open_unmonitored_sign_in(profile, action);
                 return;
             }

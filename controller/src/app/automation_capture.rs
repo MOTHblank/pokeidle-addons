@@ -53,7 +53,6 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
     let profile = runtime.game.profile;
     let Some(native) = runtime.game.native.as_ref() else { return; };
     let game = native.snapshot();
-    let twitch = native.twitch_snapshot();
 
     egui::Frame::new()
         .fill(PANEL_ALT)
@@ -62,8 +61,6 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 automation_badge(ui, "PokéIdle", &game.phase, game.phase == "Online");
-                let twitch_status = format!("{} · {}/{} channels", tr(&twitch.phase), twitch.joined, twitch.desired);
-                automation_badge(ui, "Twitch", &twitch_status, twitch.phase == "Online");
             });
             ui.add_space(7.0);
             ui.separator();

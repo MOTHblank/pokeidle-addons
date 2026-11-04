@@ -336,7 +336,7 @@ impl ControllerApp {
             self.runtimes[index].session.native_close_cancelled = false;
             let tx = self.native_closed_tx.clone();
             logging::info(&format!(
-                "{} native game welcome + Twitch IRC 001 confirmed; closing Firefox",
+                "{} native game welcome confirmed; closing Firefox",
                 self.account_name(profile)));
             let worker = std::thread::spawn(move || {
                 let mut result = if let Some(child) = child.as_mut() {
@@ -411,7 +411,7 @@ impl ControllerApp {
                         continue;
                     }
                     logging::info(&format!(
-                        "{}: connecting to PokéIdle and Twitch", self.account_name(profile)));
+                        "{}: connecting to PokéIdle", self.account_name(profile)));
                     self.adopt_native_session(index, event.native);
                     self.runtimes[index].capture.capture_draft=None;
                     self.runtimes[index].capture.restock_draft=None;
@@ -422,7 +422,7 @@ impl ControllerApp {
                         .map(|warning| format!(" · You may need to sign in next time: {warning}"))
                         .unwrap_or_default();
                     self.set_status(format!(
-                        "{}: PokéIdle and Twitch connected. Firefox closed{cache_note}",
+                        "{}: PokéIdle connected. Firefox closed{cache_note}",
                         self.account_name(profile)), false);
                 }
                 Err(error) => {
@@ -477,7 +477,7 @@ impl ControllerApp {
                     self.runtimes[event.index].capture.capture_draft=None;
                     self.runtimes[event.index].automation.automation_draft=AutomationDraft::default();
                     self.set_status(format!(
-                        "{}: PokéIdle and Twitch connected with your saved login",
+                        "{}: PokéIdle connected with your saved login",
                         self.account_name(profile)), false);
                 },
                 Ok(None) => {
@@ -508,9 +508,7 @@ impl ControllerApp {
                     let pending = error.to_ascii_lowercase();
                     let is_bootstrap = pending.contains("reloaded")
                         || pending.contains("waiting") || pending.contains("pending")
-                        || pending.contains("temporary twitch")
-                        || pending.contains("hook installed")
-                        || pending.contains("login has not produced");
+                        || pending.contains("hook installed");
                     if is_bootstrap {
                         self.runtimes[event.index].session.native_error = None;
                     } else {
@@ -554,7 +552,7 @@ impl ControllerApp {
                     let generation_state=Arc::clone(&self.runtimes[index].session.auth_generation);
                     let cache_warning = event.cache_warning;
                     logging::info(&format!(
-                        "{}: checking PokéIdle and Twitch connections before closing Firefox",
+                        "{}: checking PokéIdle connection before closing Firefox",
                         self.account_name(profile)));
                     let spawned = std::thread::Builder::new()
                         .name(format!("moth-native-handoff-{}", profile.name()))
@@ -623,8 +621,7 @@ impl ControllerApp {
         let mut recover = Vec::new();
         for slot in self.runtimes.iter_mut().map(|runtime| &mut runtime.game) {
             if slot.native.as_ref().is_some_and(|session|
-                session.snapshot().phase == "NeedsLogin" ||
-                session.twitch_snapshot().phase == "NeedsLogin"
+                session.snapshot().phase == "NeedsLogin"
             ) {
                 if let Some(session) = slot.native.take() { session.stop(); }
                 recover.push(slot.profile);

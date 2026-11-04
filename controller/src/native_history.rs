@@ -1,6 +1,6 @@
 //! Bounded, restart-persistent native battle history, independent of userscripts.
 //! Only derived gameplay counters are saved; never raw frames, auth, cookies,
-//! WebSocket URLs, Twitch identities or mutable credentials.
+//! WebSocket URLs or mutable credentials.
 use crate::config::{data_root, GameProfile};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -431,7 +431,7 @@ fn write_atomic(path:&PathBuf,content:&str)->Result<(),String>{
     fs::rename(&tmp,path).map_err(|error|format!("History save: {error}"))
 }
 /// Read-only history for stopped accounts. Never starts a game socket,
-/// Firefox or Twitch. If the profile was reused, show its latest saved
+/// Firefox. If the profile was reused, show its latest saved
 /// identity rather than mixing unrelated accounts' totals.
 pub fn load_offline(profile:GameProfile)->HistorySnapshot {
     let mut fallback=HistorySnapshot::default();

@@ -1,11 +1,11 @@
 //! Account profile management cards and profile/Kick workspace routing.
 use super::{egui, kick_panel, localize_status, pt_br, status_chip, tr, tr_dynamic,
     AccountsSection, Align, Color32, ControllerApp, Duration, FontId, GameProfile,
-    Layout, ProfileAction, RichText, Stroke, BAD, BORDER, DIM, GOOD, MUTED,
+    Layout, ProfileAction, RichText, Stroke, BAD, BORDER, GOOD, MUTED,
     PANEL, PANEL_ALT, TEXT, WARN};
 
 /// Show all four account slots at once; a card never switches or stops another
-/// account. All indicators come from the current game and Twitch connection.
+/// account. Connection indicators come from the authenticated game session.
 pub(super) fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         if ui.selectable_label(app.workspace.accounts_section == AccountsSection::Profiles,
@@ -66,16 +66,14 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
     let health = app.runtimes[index].game.health();
     let running = app.runtimes[index].game.is_running();
     let game_phase = app.runtimes[index].game.native.as_ref().map(|session| session.snapshot().phase);
-    let twitch_phase = app.runtimes[index].game.native.as_ref().map(|session| session.twitch_snapshot());
     let game_online = game_phase.as_deref() == Some("Online")
         || (running && health.telemetry_is_fresh() && health.logged_in);
-    let twitch_online = twitch_phase.as_ref().is_some_and(|state| state.phase == "Online");
     let connecting = app.runtimes[index].session.native_verifying || app.runtimes[index].session.native_handoff_busy
         || app.runtimes[index].session.cached_native_busy || app.runtimes[index].game.handoff_closing;
 
     ui.set_width(width);
     egui::Frame::new().fill(PANEL_ALT)
-        .stroke(Stroke::new(1.0, if game_online && twitch_online { GOOD } else { BORDER }))
+        .stroke(Stroke::new(1.0, if game_online { GOOD } else { BORDER }))
         .corner_radius(10.0).inner_margin(12.0).show(ui, |ui| {
         let mut changed = false;
         ui.horizontal(|ui| {
@@ -129,27 +127,9 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             else if connecting { tr("Connecting") }
             else if running { tr("Waiting for login") }
             else { tr("Not signed in") };
-        let twitch_label = if twitch_online { tr("Connected") }
-            else if let Some(state) = twitch_phase.as_ref() {
-                if state.phase == "NeedsLogin" { tr("Sign-in required") }
-                else if state.phase == "Reconnecting" { tr("Reconnecting") }
-                else if connecting { tr("Connecting") }
-                else { tr(&state.phase) }
-            } else if running { tr("Waiting for Twitch sign-in") }
-            else { tr("Not verified") };
         ui.horizontal_wrapped(|ui| {
-            status_chip(ui, "Twitch", twitch_label, twitch_online);
             status_chip(ui, "PokéIdle", game_label, game_online);
         });
-        if let Some(state) = twitch_phase.as_ref() {
-            if twitch_online {
-                ui.label(RichText::new(tr_dynamic(format!("{} / {} Twitch channels",
-                    state.joined, state.desired))).size(10.0).color(DIM));
-            }
-            if let Some(error) = &state.error {
-                ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
-            }
-        }
         if let Some(error) = app.runtimes[index].session.native_error.as_deref() {
             ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
         }
@@ -176,7 +156,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        // Keep game/Twitch profile cards compact; Kick has its own workspace.
+        // Keep game profile cards compact; Kick has its own workspace.
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let kick_running = app.runtimes[index].kick.kick_monitor.is_some();
@@ -206,27 +186,21 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             status_chip(ui, "Firefox profile",
                 if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
                 setup.profile_ready);
-            status_chip(ui, "Twitch login", twitch_label, twitch_online);
             status_chip(ui, "PokéIdle login", game_label, game_online);
             ui.add_space(7.0);
-            if game_online && twitch_online {
+            if game_online {
                 ui.label(RichText::new(tr(
-                    "Both logins are connected. Future starts can reuse your saved login."
+                    "PokéIdle is connected. Future starts can reuse your saved login."
                 )).size(10.0).color(GOOD));
             } else {
                 ui.label(RichText::new(tr(
-                    "Use the buttons below to open Firefox without monitoring. After signing in, close Firefox and start the account to verify both logins."
+                    "Open Firefox without monitoring, sign in to PokéIdle, then close Firefox and start the account."
                 )).size(10.0).color(MUTED));
             }
             ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(tr("Twitch sign-in (unmonitored)")).clicked() {
-                    app.profile_action(profile, ProfileAction::Twitch);
-                }
-                if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
-                    app.profile_action(profile, ProfileAction::GoogleSignIn);
-                }
-            });
+            if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
+                app.profile_action(profile, ProfileAction::GoogleSignIn);
+            }
         });
         if changed {
             let trimmed = app.accounts[index].name.trim();

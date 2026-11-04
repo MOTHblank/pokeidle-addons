@@ -141,7 +141,7 @@ fn performance(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     tr("Reduce updates when minimized to the system tray"));
             }
             ui.add_space(10.0);
-            description(ui, "PokéIdle, Twitch, and automations run independently of display refresh.");
+            description(ui, "PokéIdle and automations run independently of display refresh.");
         });
     if next != app.ui_options {
         app.save_ui_options(next);
