@@ -453,11 +453,16 @@ fn poll_channels(
         && channel.balance.is_some()).count();
     // Inspect every live official stream on a bounded cadence. A fresh
     // broadcast always resets prior streak evidence and watch attempts.
+    // Limit metadata/reward-list work per tick to prevent large rosters from
+    // delaying minute-watched credit and point claims.
+    let mut metadata_checks=0usize;
+    let mut streak_checks=0usize;
     for login in live {
         let Some(channel)=cache.get_mut(login) else {continue};
         let Some(id)=channel.channel_id.as_deref() else {continue};
-        if channel.stream_checked.is_none_or(|at|
+        if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
             at.elapsed() >= Duration::from_secs(180)) {
+            metadata_checks+=1;
             channel.stream_checked=Some(Instant::now());
             match gql.stream_info(login) {
                 Ok(Some(stream)) => {
@@ -483,8 +488,10 @@ fn poll_channels(
                 }
             }
         }
-        if channel.broadcast_id.is_some() && channel.streak_checked.is_none_or(|at|
-            at.elapsed() >= Duration::from_secs(180)) {
+        if streak_checks<4 && channel.broadcast_id.is_some()
+            && channel.streak_checked.is_none_or(|at|
+                at.elapsed() >= Duration::from_secs(180)) {
+            streak_checks+=1;
             channel.streak_checked=Some(Instant::now());
             match gql.streak(id) {
                 Ok(milestone) => {
