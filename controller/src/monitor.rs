@@ -369,7 +369,7 @@ impl MonitorHandle {
             .map_err(|_| "native bootstrap timed out; check that the game and bridge are ready".to_owned())?
     }
 
-    /// Close only the game tab; Firefox/Twitch remain alive until Rust has
+    /// Close only the game tab; Firefox remains alive until Rust has
     /// received the server's authenticated welcome on its own connection.
     pub fn close_game_for_handoff(&self, timeout: Duration) -> Result<(), String> {
         if self.stop.load(Ordering::Relaxed) {
@@ -1737,8 +1737,10 @@ fn probe_runtime_details(
         .unwrap_or_default();
 
     let twitch = state.get("twitch").cloned().unwrap_or(Value::Null);
-    let twitch_linked=twitch.get("vinculado").and_then(Value::as_bool)
-        .or_else(||Some(twitch.get("login").and_then(Value::as_str).is_some()));
+    let twitch_linked=if twitch.is_null(){None}else{
+        twitch.get("vinculado").and_then(Value::as_bool)
+            .or_else(||Some(twitch.get("login").and_then(Value::as_str).is_some()))
+    };
     let twitch_login=twitch.get("login").and_then(Value::as_str)
         .unwrap_or_default().to_string();
     let twitch_bonus_pct=twitch.get("pct").and_then(Value::as_f64)
@@ -1754,6 +1756,7 @@ fn probe_runtime_details(
         .unwrap_or_else(||std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
 
+    let mut xp_sources=Vec::new();
     let event = state.get("evento").cloned().unwrap_or(Value::Null);
     let event_trainer = event
         .get("xpTreinadorPct")
@@ -2219,7 +2222,7 @@ mod command_tests {
     }
 
     #[test]
-    fn tab_inventory_does_not_execute_twitch_page_scripts() {
+    fn tab_inventory_does_not_execute_page_scripts() {
         assert!(super::BIDI_IO_TIMEOUT < super::BIDI_RESPONSE_DEADLINE);
         assert!(super::BIDI_RESPONSE_DEADLINE < super::HEARTBEAT_FRESHNESS_LIMIT);
     }
@@ -2228,7 +2231,7 @@ mod command_tests {
     fn tab_inventory_only_runs_on_change_or_slow_refresh() {
         use super::should_inspect_tabs;
         let a = vec![("tab1".to_string(), "https://pokeidle.io/app".to_string())];
-        let b = vec![("tab2".to_string(), "https://www.twitch.tv".to_string())];
+        let b = vec![("tab2".to_string(), "https://example.com/".to_string())];
         assert!(!should_inspect_tabs(false, false, &a, &a));
         assert!(should_inspect_tabs(false, true, &a, &a));
         assert!(should_inspect_tabs(false, false, &b, &a));
