@@ -1303,6 +1303,11 @@ impl Drop for ControllerApp {
 
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The clock is not even queried outside active diagnostics. Starting
+        // here includes process refresh, connection work and all UI panels.
+        let diagnostics_frame_start = (self.workspace.panel_tab == PanelTab::Diagnostics
+            && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused))
+            .then(Instant::now);
         self.refresh_processes();
         self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
@@ -1316,6 +1321,7 @@ impl eframe::App for ControllerApp {
             self.refresh_account_setup();
         }
 
+        let diagnostics_preflight = diagnostics_frame_start.map(|start| start.elapsed());
         // Native workers publish state independently of the display timer.
         // Batch normal redraws; tray/background retains its cheaper cadence.
         let background = self.controller_in_background(ui.ctx());
@@ -1350,9 +1356,7 @@ impl eframe::App for ControllerApp {
             // This frees the short history and CPU baseline immediately.
             self.diagnostics = None;
         }
-        let frame_start = (diagnostics_active &&
-            self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused))
-            .then(Instant::now);
+        let frame_start = diagnostics_frame_start.filter(|_| diagnostics_active);
 
         egui::Panel::top("header")
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(20, 13)))
@@ -1411,6 +1415,7 @@ impl eframe::App for ControllerApp {
                 });
             });
 
+        let diagnostics_panel_start = frame_start.map(|_| Instant::now());
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(16, 10)))
             .show(ui, |ui| {
@@ -1450,6 +1455,7 @@ impl eframe::App for ControllerApp {
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
+        let diagnostics_panel_elapsed = diagnostics_panel_start.map(|start| start.elapsed());
 
         // Keep exactly the Pokémon art used by Overview this frame (at most
         // two sprites per account). Hunt Atlas and other tabs keep none.
@@ -1482,7 +1488,7 @@ impl eframe::App for ControllerApp {
         // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
         if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
-            sampler.record_frame(start.elapsed());
+            sampler.record_frame(start.elapsed(), diagnostics_preflight, diagnostics_panel_elapsed);
         }
         // Decide *after* UI controls have been processed: clicking Pause must
         // not arm a new diagnostics-specific repaint timer.
