@@ -541,6 +541,7 @@ impl NativeSession {
         if let Ok(mut slot)=self.phase_wake.lock() {
             *slot=Some(Arc::clone(&wake));
         }
+        self.twitch_miner.set_phase_waker(Arc::clone(&wake));
         // A worker can expire while its initial handoff is still in flight.
         if self.snapshot().phase=="NeedsLogin" { wake(); }
     }
