@@ -165,8 +165,15 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
             "Os bosses lutam no nível do Pokémon elegível mais forte da sua equipe, nunca abaixo do próprio nível de liberação. O nível do treinador continua definindo quais bosses estão liberados; tokens de entrada e faixas de drop não mudaram.",
         "Boss status" => "Status do boss",
         "Boss battle history" => "Histórico de batalhas de boss",
+        "Boss victories & loot" => "Vitórias e loot dos bosses",
         "Current fight" => "Batalha atual",
         "Boss fight active" => "Batalha de boss ativa",
+        "Boss cancelled; returning to saved hunt" =>
+            "Boss cancelado; retornando à hunt salva",
+        "Waiting for Pokémon Center confirmation after Give Up" =>
+            "Aguardando confirmação do Centro Pokémon após desistir",
+        "Pokémon Center was not confirmed after three Give Up attempts. Navigation is paused; check game state or cancel the destination." =>
+            "O Centro Pokémon não foi confirmado após três tentativas de desistência. Navegação pausada; verifique o jogo ou cancele o destino.",
         "Boss farm active" => "Farm de boss ativo",
         "Return destination" => "Hunt de retorno",
         "Server repeating" => "Repetição no servidor",
