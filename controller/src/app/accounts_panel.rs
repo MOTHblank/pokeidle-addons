@@ -248,11 +248,14 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                     app.profile_action(profile, ProfileAction::GoogleSignIn);
                 }
                 if ui.button(tr("Twitch miner sign-in (optional)")).clicked() {
-                    app.profile_action(profile, ProfileAction::TwitchMiner);
+                    app.runtimes[index].twitch.login_done_seen=false;
+                    if let Err(error)=crate::native_twitch_login::start(profile) {
+                        app.set_status(error,true);
+                    }
                 }
             });
             ui.label(RichText::new(tr(
-                "Twitch mining is optional and never blocks PokéIdle startup."
+                "Twitch mining is optional and never blocks PokéIdle startup. Existing Firefox login is imported automatically; a new Twitch login is detected and its temporary Firefox window closes automatically."
             )).size(10.0).color(MUTED));
         });
         if changed {
