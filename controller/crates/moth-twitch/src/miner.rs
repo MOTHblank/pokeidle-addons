@@ -3,6 +3,7 @@ use crate::model::{
     normalize_channels, Credentials, MinerConfig, MinerEvent, MinerPhase, MinerSnapshot,
     StreamerState,
 };
+use crate::pubsub::{self, PubSubEvent};
 use crate::watch::WatchClient;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,9 @@ use std::time::{Duration, Instant};
 
 type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 const WATCH_SLOTS: usize = 2;
+const STREAK_PRIORITY_BASE: Duration = Duration::from_secs(7 * 60);
+const STREAK_PRIORITY_EXTENDED: Duration = Duration::from_secs(20 * 60);
+const LONG_SESSION: Duration = Duration::from_secs(10 * 60 * 60);
 
 #[derive(Clone)]
 pub struct MinerControl {
@@ -109,6 +113,7 @@ impl Miner {
         let worker_favorites = Arc::clone(&favorites);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
+        let worker_wake = wake_tx.clone();
         thread::Builder::new()
             .name(format!("moth-twitch-{worker_name}"))
             .spawn(move || {
@@ -123,6 +128,7 @@ impl Miner {
                     worker_favorites,
                     worker_stop,
                     worker_phase_wake,
+                    worker_wake,
                     wake_rx,
                 )
             })
@@ -179,8 +185,10 @@ struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
     last_watch: Option<Instant>,
+    last_media_activity: Option<Instant>,
     last_watch_attempt: Option<Instant>,
     watch_failures: u8,
+    watch_reward_count: u8,
     last_points_attempt: Option<Instant>,
     last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
@@ -191,6 +199,7 @@ struct ChannelCache {
     streak_confirmed: Option<bool>,
     streak_length: Option<u32>,
     watch_attempts: u32,
+    streak_priority_exhausted: bool,
     last_error: Option<String>,
 }
 
@@ -200,26 +209,36 @@ struct WatchSlot {
     login: String,
     broadcast_id: String,
     entered: Instant,
+    streak_limit: Duration,
 }
 
 fn streak_pending(channel:&ChannelCache)->bool {
-    channel.streak_confirmed!=Some(true) && channel.watch_attempts<20
+    channel.streak_confirmed!=Some(true) && !channel.streak_priority_exhausted
 }
 
-/// Hold two candidate broadcasts long enough for Twitch to issue a streak
-/// milestone (up to 20 minutes), then rotate. Do not fill temporary gaps
+fn watch_backed_off(channel:&ChannelCache,now:Instant)->bool {
+    if channel.watch_failures<3 {return false;}
+    let steps=u64::from(channel.watch_failures.saturating_sub(2));
+    let seconds=(steps*5*60).min(30*60);
+    channel.last_watch_attempt.is_some_and(|attempt|
+        now.saturating_duration_since(attempt)<Duration::from_secs(seconds))
+}
+
+/// Hold two candidate broadcasts through the reference miner's streak
+/// priority window (7 minutes normally, 20 after 10 hours), then rotate. Do not fill temporary gaps
 /// between two telemetry POSTs with extra streams: two slots means two streams.
 fn refresh_watch_slots(
     slots:&mut Vec<WatchSlot>, live:&[String],
     cache:&mut HashMap<String,ChannelCache>,favorites:&[String],
-    now:Instant,
+    now:Instant, streak_limit:Duration,
 ) {
     for slot in slots.iter() {
-        if now.saturating_duration_since(slot.entered)>=Duration::from_secs(20*60) {
+        if now.saturating_duration_since(slot.entered)>=slot.streak_limit {
             if let Some(channel)=cache.get_mut(&slot.login) {
-                // A timed-out attempt does not imply the streak was awarded.
+                // Like the reference miner, stop prioritizing an unconfirmed
+                // streak after its watch window without claiming success.
                 if channel.streak_confirmed!=Some(true) {
-                    channel.watch_attempts=20;
+                    channel.streak_priority_exhausted=true;
                 }
             }
         }
@@ -233,22 +252,16 @@ fn refresh_watch_slots(
             || channel.broadcast_id.as_deref()!=Some(slot.broadcast_id.as_str()) {
             return false;
         }
-        let backed_off=channel.watch_failures>=3
-            && channel.last_watch_attempt.is_some_and(|at|
-                now.saturating_duration_since(at)<Duration::from_secs(300));
-        if backed_off {return false;}
+        if watch_backed_off(channel,now) {return false;}
         let elapsed=now.saturating_duration_since(slot.entered);
-        if streak_pending(channel) && elapsed<Duration::from_secs(20*60) {
+        if streak_pending(channel) && elapsed<slot.streak_limit {
             return true;
         }
         !waiting_streak && elapsed<Duration::from_secs(600)
     });
     let mut candidates=live.iter().filter(|name|cache.get(*name)
         .is_some_and(|channel| {
-            channel.broadcast_id.is_some() &&
-                !(channel.watch_failures>=3 &&
-                    channel.last_watch_attempt.is_some_and(|at|
-                        now.saturating_duration_since(at)<Duration::from_secs(300)))
+            channel.broadcast_id.is_some() && !watch_backed_off(channel,now)
         })).collect::<Vec<_>>();
     candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
     for name in candidates {
@@ -257,7 +270,7 @@ fn refresh_watch_slots(
         let Some(broadcast_id)=cache.get(name).and_then(|c|c.broadcast_id.clone())
             else {continue};
         slots.push(WatchSlot {
-            login:name.clone(),broadcast_id,entered:now
+            login:name.clone(),broadcast_id,entered:now,streak_limit
         });
     }
 }
@@ -275,6 +288,141 @@ fn push_event(events: &Arc<Mutex<VecDeque<MinerEvent>>>, event: MinerEvent) {
         }
         events.push_back(event);
     }
+}
+
+fn confirm_streak(
+    login:&str,
+    channel:&mut ChannelCache,
+    reason:&str,
+    snapshot:&Arc<Mutex<MinerSnapshot>>,
+    events:&Arc<Mutex<VecDeque<MinerEvent>>>,
+) {
+    if channel.streak_confirmed==Some(true) {return;}
+    channel.streak_confirmed=Some(true);
+    channel.streak_priority_exhausted=false;
+    channel.streak_checked=Some(Instant::now());
+    push_event(events,MinerEvent::StreakConfirmed {
+        channel:login.to_owned(),reason:reason.to_owned()
+    });
+    if let Ok(mut current)=snapshot.lock() {
+        current.last_received=Some(Instant::now());
+    }
+}
+
+fn apply_pubsub_events(
+    gql:&TwitchGql,
+    config:&MinerConfig,
+    pending:&mut VecDeque<PubSubEvent>,
+    cache:&mut HashMap<String,ChannelCache>,
+    snapshot:&Arc<Mutex<MinerSnapshot>>,
+    events:&Arc<Mutex<VecDeque<MinerEvent>>>,
+) {
+    let count=pending.len();
+    for _ in 0..count {
+        let Some(event)=pending.pop_front() else {break};
+        match event {
+            PubSubEvent::Connected=>{
+                if let Ok(mut current)=snapshot.lock() {
+                    current.pubsub_connected=true;
+                    current.pubsub_error=None;
+                }
+            }
+            PubSubEvent::Warning(error)=>{
+                if let Ok(mut current)=snapshot.lock() {
+                    current.pubsub_connected=false;
+                    current.pubsub_error=Some(error.clone());
+                }
+                push_event(events,MinerEvent::Warning(error));
+            }
+            PubSubEvent::PointsEarned{channel_id,amount,balance,reason}=>{
+                let Some((login,channel))=cache.iter_mut()
+                    .find(|(_,channel)|channel.channel_id.as_deref()==Some(channel_id.as_str()))
+                    .map(|(login,channel)|(login.clone(),channel))
+                else {
+                    pending.push_back(PubSubEvent::PointsEarned {
+                        channel_id,amount,balance,reason
+                    });
+                    continue;
+                };
+                let before=channel.balance;
+                let next=match before {
+                    Some(current) if amount>0=>current.saturating_add(amount),
+                    Some(current)=>balance.unwrap_or(current),
+                    None=>balance.unwrap_or(amount),
+                };
+                channel.balance=Some(next);
+                channel.last_points_checked=Some(Instant::now());
+                channel.last_error=None;
+                let gained=if amount>0 {
+                    amount
+                } else {
+                    before.and_then(|old|next.checked_sub(old)).unwrap_or(0)
+                };
+                if gained>0 {
+                    if let Ok(mut current)=snapshot.lock() {
+                        current.points_gained=current.points_gained.saturating_add(gained);
+                        current.last_received=Some(Instant::now());
+                    }
+                    push_event(events,MinerEvent::PointsGained {
+                        channel:login.clone(),amount:gained,balance:next
+                    });
+                }
+                match reason.as_str() {
+                    "WATCH_STREAK"=>confirm_streak(
+                        &login,channel,"PubSub WATCH_STREAK",snapshot,events
+                    ),
+                    "WATCH"=>{
+                        channel.watch_reward_count=
+                            channel.watch_reward_count.saturating_add(1);
+                        // Reference parity: a second ordinary WATCH reward
+                        // proves Twitch processed enough watch activity to
+                        // resolve the current streak even if RewardList lags.
+                        if channel.watch_reward_count>=2 {
+                            confirm_streak(
+                                &login,channel,"PubSub WATCH x2",snapshot,events
+                            );
+                        }
+                    }
+                    _=>{}
+                }
+                update_streamer(snapshot,&login,channel,None);
+            }
+            PubSubEvent::ClaimAvailable{channel_id,claim_id}=>{
+                let Some((login,channel))=cache.iter_mut()
+                    .find(|(_,channel)|channel.channel_id.as_deref()==Some(channel_id.as_str()))
+                    .map(|(login,channel)|(login.clone(),channel))
+                else {
+                    pending.push_back(PubSubEvent::ClaimAvailable {
+                        channel_id,claim_id
+                    });
+                    continue;
+                };
+                if !config.claim_bonuses
+                    || channel.last_claim_id.as_deref()==Some(claim_id.as_str()) {
+                    continue;
+                }
+                match gql.claim_bonus(&channel_id,&claim_id) {
+                    Ok(())=>{
+                        channel.last_claim_id=Some(claim_id);
+                        channel.last_error=None;
+                        if let Ok(mut current)=snapshot.lock() {
+                            current.bonuses_claimed=
+                                current.bonuses_claimed.saturating_add(1);
+                            current.last_received=Some(Instant::now());
+                        }
+                        push_event(events,MinerEvent::BonusClaimed{channel:login});
+                    }
+                    Err(error)=>{
+                        channel.last_error=Some(error.user_message());
+                        push_event(events,MinerEvent::Warning(format!(
+                            "{}: {}",login,error.user_message()
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    while pending.len()>128 {pending.pop_front();}
 }
 
 fn set_phase(
@@ -305,6 +453,7 @@ fn run(
     favorites: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
+    wake: SyncSender<()>,
     wake_rx: Receiver<()>,
 ) {
     let mut watch = match WatchClient::new() {
@@ -317,6 +466,10 @@ fn run(
     let mut identity: Option<ViewerIdentity> = None;
     let mut cache: HashMap<String, ChannelCache> = HashMap::new();
     let mut watch_slots: Vec<WatchSlot> = Vec::new();
+    let started_at=Instant::now();
+    let (pubsub_tx,pubsub_rx)=mpsc::channel();
+    let mut pubsub_started=false;
+    let mut pending_pubsub=VecDeque::new();
     let interval = config.poll_interval.max(Duration::from_secs(10));
 
     while !stop.load(Ordering::Acquire) {
@@ -346,6 +499,11 @@ fn run(
             }
         }
 
+        pending_pubsub.extend(pubsub_rx.try_iter());
+        apply_pubsub_events(
+            &gql,&config,&mut pending_pubsub,&mut cache,&snapshot,&events
+        );
+
         let channels = desired.lock().map(|channels| channels.clone()).unwrap_or_default();
         cache.retain(|channel, _| channels.binary_search(channel).is_ok());
         if let Ok(mut current) = snapshot.lock() {
@@ -372,6 +530,11 @@ fn run(
                     )),
                 );
             } else if !channels.is_empty() {
+                let streak_limit=if started_at.elapsed()>LONG_SESSION {
+                    STREAK_PRIORITY_EXTENDED
+                } else {
+                    STREAK_PRIORITY_BASE
+                };
                 let auth_failed = poll_channels(
                     &gql,
                     &mut watch,
@@ -382,10 +545,22 @@ fn run(
                     &favorites.lock().map(|items|items.clone()).unwrap_or_default(),
                     &mut cache,
                     &mut watch_slots,
+                    streak_limit,
                     &stop,
                     &snapshot,
                     &events,
                     &phase_wake,
+                );
+                if !pubsub_started && !auth_failed {
+                    pubsub::spawn(
+                        gql.oauth_token().to_owned(),viewer.user_id.clone(),
+                        Arc::clone(&stop),pubsub_tx.clone(),wake.clone()
+                    );
+                    pubsub_started=true;
+                }
+                pending_pubsub.extend(pubsub_rx.try_iter());
+                apply_pubsub_events(
+                    &gql,&config,&mut pending_pubsub,&mut cache,&snapshot,&events
                 );
                 if auth_failed {
                     identity = None;
@@ -415,6 +590,7 @@ fn poll_channels(
     favorites: &[String],
     cache: &mut HashMap<String, ChannelCache>,
     watch_slots: &mut Vec<WatchSlot>,
+    streak_limit: Duration,
     stop: &AtomicBool,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
@@ -442,7 +618,7 @@ fn poll_channels(
             Duration::from_secs(180)
         };
         let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
-        if !due || checked_this_tick>=8 {
+        if !due || checked_this_tick>=4 {
             update_streamer(snapshot,login,channel,None);
             continue;
         }
@@ -543,7 +719,7 @@ fn poll_channels(
         let Some(channel)=cache.get_mut(login) else {continue};
         let Some(id)=channel.channel_id.as_deref() else {continue};
         if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
-            at.elapsed() >= Duration::from_secs(180)) {
+            at.elapsed() >= Duration::from_secs(120)) {
             metadata_checks+=1;
             channel.stream_checked=Some(Instant::now());
             match gql.stream_info(login) {
@@ -554,7 +730,10 @@ fn poll_channels(
                         channel.streak_confirmed=None;
                         channel.streak_checked=None;
                         channel.watch_attempts=0;
+                        channel.watch_reward_count=0;
+                        channel.streak_priority_exhausted=false;
                         channel.last_watch=None;
+                        channel.last_media_activity=None;
                     }
                 }
                 Ok(None) => {
@@ -563,6 +742,8 @@ fn poll_channels(
                     channel.streak_confirmed=None;
                     channel.streak_checked=None;
                     channel.watch_attempts=0;
+                    channel.watch_reward_count=0;
+                    channel.streak_priority_exhausted=false;
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
@@ -573,13 +754,13 @@ fn poll_channels(
         }
         if streak_checks<4 && channel.broadcast_id.is_some()
             && channel.streak_checked.is_none_or(|at|
-                at.elapsed() >= Duration::from_secs(180)) {
+                at.elapsed() >= Duration::from_secs(120)) {
             streak_checks+=1;
             channel.streak_checked=Some(Instant::now());
             match gql.streak(id) {
                 Ok(milestone) => {
                     channel.streak_length=milestone.length;
-                    channel.streak_confirmed=match (
+                    let detected=match (
                         channel.stream_started.as_deref(),
                         milestone.achieved_at.as_deref()
                     ) {
@@ -588,6 +769,11 @@ fn poll_channels(
                         (Some(_),None) if milestone.length.is_some() => Some(false),
                         _ => None,
                     };
+                    if detected==Some(true) {
+                        confirm_streak(login,channel,"RewardList",snapshot,events);
+                    } else if channel.streak_confirmed!=Some(true) {
+                        channel.streak_confirmed=detected;
+                    }
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
@@ -602,21 +788,31 @@ fn poll_channels(
     // Watch selection persists across polling iterations. Do not create
     // fresh temporary watch sessions while selected streams are between
     // their minute-watched requests.
-    refresh_watch_slots(watch_slots,live,cache,favorites,Instant::now());
+    refresh_watch_slots(
+        watch_slots,live,cache,favorites,Instant::now(),streak_limit
+    );
     for slot in watch_slots.iter() {
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(&slot.login) else {continue};
         if channel.last_watch_attempt.is_some_and(|at|
-            at.elapsed()<Duration::from_secs(55)) {continue;}
+            at.elapsed()<Duration::from_secs(15)) {continue;}
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
         channel.last_watch_attempt=Some(Instant::now());
         match watch.send_minute_watched(
-            &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id
+            &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id,
+            || gql.playback_access(&slot.login).map_err(|error|error.user_message())
         ) {
-            Ok(())=>{
+            Ok(ack)=>{
                 channel.last_watch=Some(Instant::now());
                 channel.watch_failures=0;
                 channel.watch_attempts=channel.watch_attempts.saturating_add(1);
+                if let Some(media_error)=ack.media_error {
+                    push_event(events,MinerEvent::Warning(format!(
+                        "{} media activity: {media_error}",slot.login
+                    )));
+                } else {
+                    channel.last_media_activity=Some(Instant::now());
+                }
                 if let Ok(mut current)=snapshot.lock(){
                     current.watch_signals=current.watch_signals.saturating_add(1);
                 }
@@ -671,8 +867,7 @@ fn watch_priority(
 )->std::cmp::Ordering {
     let left=&cache[a];
     let right=&cache[b];
-    let pending=|channel:&ChannelCache|
-        channel.streak_confirmed!=Some(true) && channel.watch_attempts<20;
+    let pending=streak_pending;
     let l_pending=pending(left);
     let r_pending=pending(right);
     let favorite=|login:&String|
@@ -718,17 +913,17 @@ mod priority_tests {
             });
         }
         let mut slots=Vec::new();
-        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start,STREAK_PRIORITY_BASE);
         assert_eq!(slots.len(),2);
         let initial=slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>();
         assert_eq!(initial,vec!["alpha","beta"]);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
-            start+Duration::from_secs(90));
+            start+Duration::from_secs(90),STREAK_PRIORITY_BASE);
         assert_eq!(slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>(),
             initial,"a polling cycle must not rotate unfinished streaks");
         cache.get_mut("alpha").unwrap().streak_confirmed=Some(true);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
-            start+Duration::from_secs(180));
+            start+Duration::from_secs(180),STREAK_PRIORITY_BASE);
         assert_eq!(slots.len(),2);
         assert!(slots.iter().any(|slot|slot.login=="beta"));
         assert!(slots.iter().any(|slot|slot.login=="gamma"));
@@ -747,12 +942,81 @@ mod priority_tests {
             });
         }
         let mut slots=Vec::new();
-        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start,STREAK_PRIORITY_BASE);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
-            start+Duration::from_secs(20*60+1));
+            start+STREAK_PRIORITY_BASE+Duration::from_secs(1),STREAK_PRIORITY_BASE);
         assert!(slots.iter().any(|slot|slot.login=="gamma"));
         assert_eq!(cache.get("alpha").unwrap().streak_confirmed,None);
-        assert_eq!(cache.get("alpha").unwrap().watch_attempts,20);
+        assert!(cache.get("alpha").unwrap().streak_priority_exhausted);
+    }
+
+    #[test]
+    fn pubsub_watch_rewards_confirm_streak_like_reference() {
+        let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
+        let config=MinerConfig::default();
+        let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
+        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            channel_id:Some("123".to_owned()),
+            streak_confirmed:Some(false),
+            ..Default::default()
+        });
+        let mut pending=VecDeque::from([
+            PubSubEvent::PointsEarned {
+                channel_id:"123".into(),amount:10,balance:Some(110),
+                reason:"WATCH".into()
+            },
+            PubSubEvent::PointsEarned {
+                channel_id:"123".into(),amount:10,balance:Some(120),
+                reason:"WATCH".into()
+            },
+        ]);
+        apply_pubsub_events(
+            &gql,&config,&mut pending,&mut cache,&snapshot,&events
+        );
+        let channel=&cache["alpha"];
+        assert_eq!(channel.watch_reward_count,2);
+        assert_eq!(channel.streak_confirmed,Some(true));
+        assert_eq!(channel.balance,Some(120));
+        assert_eq!(snapshot.lock().unwrap().points_gained,20);
+    }
+
+    #[test]
+    fn pubsub_watch_streak_confirms_immediately() {
+        let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
+        let config=MinerConfig::default();
+        let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
+        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            channel_id:Some("123".to_owned()),
+            streak_confirmed:Some(false),
+            ..Default::default()
+        });
+        let mut pending=VecDeque::from([PubSubEvent::PointsEarned {
+            channel_id:"123".into(),amount:450,balance:Some(1450),
+            reason:"WATCH_STREAK".into()
+        }]);
+        apply_pubsub_events(
+            &gql,&config,&mut pending,&mut cache,&snapshot,&events
+        );
+        assert_eq!(cache["alpha"].streak_confirmed,Some(true));
+    }
+
+    #[test]
+    fn watch_backoff_grows_from_five_to_thirty_minutes() {
+        let now=Instant::now();
+        let channel=ChannelCache {
+            watch_failures:3,last_watch_attempt:Some(now),..Default::default()
+        };
+        assert!(watch_backed_off(&channel,now+Duration::from_secs(4*60+59)));
+        assert!(!watch_backed_off(&channel,now+Duration::from_secs(5*60)));
+        let channel=ChannelCache {
+            watch_failures:8,last_watch_attempt:Some(now),..Default::default()
+        };
+        assert!(watch_backed_off(&channel,now+Duration::from_secs(29*60)));
+        assert!(!watch_backed_off(&channel,now+Duration::from_secs(30*60)));
     }
 
     #[test]
@@ -781,10 +1045,12 @@ fn update_streamer(
             state.channel_id.clone_from(&cache.channel_id);
             state.points = cache.balance;
             state.last_watch_signal = cache.last_watch;
+            state.last_media_activity = cache.last_media_activity;
             state.streak_confirmed=cache.streak_confirmed;
             state.streak_length=cache.streak_length;
             state.streak_checked=cache.streak_checked;
             state.streak_watch_attempts=cache.watch_attempts;
+            state.streak_priority_exhausted=cache.streak_priority_exhausted;
             state.last_update = cache.last_points_checked;
             state.error = error.or_else(||cache.last_error.clone());
         }
@@ -793,10 +1059,12 @@ fn update_streamer(
             channel_id: cache.channel_id.clone(),
             points: cache.balance,
             last_watch_signal: cache.last_watch,
+            last_media_activity:cache.last_media_activity,
             streak_confirmed:cache.streak_confirmed,
             streak_length:cache.streak_length,
             streak_checked:cache.streak_checked,
             streak_watch_attempts:cache.watch_attempts,
+            streak_priority_exhausted:cache.streak_priority_exhausted,
             live:false,
             watching:false,
             last_update: cache.last_points_checked,

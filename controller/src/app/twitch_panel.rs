@@ -82,10 +82,14 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                     label(br, "○ Awaiting data", "○ Aguardando dados")
                 }).size(10.0).color(if recent { GOOD } else if checked { WARN } else { MUTED }));
                 if channel.live {
-                    let (streak_text,streak_color)=match channel.streak_confirmed {
-                        Some(true)=>(label(br,"✓ Streak collected","✓ Sequência coletada"),GOOD),
-                        Some(false)=>(label(br,"◌ Streak pending","◌ Sequência pendente"),WARN),
-                        None=>(label(br,"◌ Streak unverified","◌ Sequência não verificada"),MUTED),
+                    let (streak_text,streak_color)=if channel.streak_confirmed==Some(true) {
+                        (label(br,"✓ Streak collected","✓ Sequência coletada"),GOOD)
+                    } else if channel.streak_priority_exhausted {
+                        (label(br,"○ Streak not confirmed","○ Sequência não confirmada"),WARN)
+                    } else if channel.watching {
+                        (label(br,"◌ Collecting streak","◌ Coletando sequência"),WARN)
+                    } else {
+                        (label(br,"◌ Waiting for streak slot","◌ Aguardando vaga de sequência"),MUTED)
                     };
                     ui.label(RichText::new(streak_text).size(10.0).color(streak_color));
                 }
@@ -102,11 +106,11 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 ui.label(RichText::new(error).size(10.0).color(WARN));
             }
             ui.collapsing(label(br, "Technical details", "Detalhes técnicos"), |ui| {
-                if channel.live && channel.streak_confirmed!=Some(true)
-                    && channel.streak_watch_attempts>=20 {
+                if channel.live && channel.streak_priority_exhausted
+                    && channel.streak_confirmed!=Some(true) {
                     ui.label(RichText::new(label(br,
-                        "Streak not confirmed after watch window; still retrying in rotation.",
-                        "Sequência não confirmada após janela de visualização; tentativas continuam em rodízio."))
+                        "Reference streak-priority window ended without Twitch confirmation. Farming continues normally and RewardList/PubSub can still confirm it later.",
+                        "A janela de prioridade de sequência terminou sem confirmação da Twitch. A mineração continua normalmente e RewardList/PubSub ainda podem confirmar depois."))
                         .size(10.0).color(WARN));
                 }
                 if let Some(length)=channel.streak_length {
@@ -120,6 +124,10 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 if let Some(at) = channel.last_update {
                     ui.label(format!("{}: {} s", label(br, "Last check", "Última consulta"),
                         at.elapsed().as_secs()));
+                }
+                if let Some(at) = channel.last_media_activity {
+                    ui.label(format!("{}: {} s", label(br, "Last HLS media activity",
+                        "Última atividade de mídia HLS"), at.elapsed().as_secs()));
                 }
                 if let Some(at) = channel.last_watch_signal {
                     ui.label(format!("{}: {} s", label(br, "Last acknowledged watch signal",
@@ -256,8 +264,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(label(br, "Twitch connection", "Conexão Twitch"))
                 .size(13.0).strong().color(TEXT));
             ui.label(RichText::new(if connected {
-                label(br, "Authenticated in this session. The miner runs without a Twitch browser tab.",
-                    "Autenticado nesta sessão. O minerador funciona sem aba da Twitch.")
+                label(br, "Authenticated in this session. The miner uses HLS media activity, watch telemetry, and authenticated channel-points events without a Twitch browser tab.",
+                    "Autenticado nesta sessão. O minerador usa atividade HLS, telemetria de visualização e eventos autenticados de pontos sem aba da Twitch.")
             } else if has_game {
                 label(br, "Twitch is optional. Sign in using this account's isolated Firefox profile, then restart the account to import the session.",
                     "A Twitch é opcional. Entre pelo perfil isolado do Firefox desta conta e reinicie a conta para importar a sessão.")
@@ -265,6 +273,20 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 label(br, "Start PokéIdle to use its official Twitch channel list. Sign in to Twitch separately if you want to mine points.",
                     "Inicie o PokéIdle para usar a lista de canais oficiais da Twitch. Entre na Twitch separadamente para minerar pontos.")
             }).size(11.0).color(MUTED));
+            if let Some(state)=snapshot.as_ref() {
+                let pubsub_text=if state.pubsub_connected {
+                    label(br,"● Channel-points events connected",
+                        "● Eventos de pontos conectados")
+                } else {
+                    label(br,"○ Channel-points events reconnecting; polling fallback remains active",
+                        "○ Eventos de pontos reconectando; consulta periódica continua ativa")
+                };
+                ui.label(RichText::new(pubsub_text).size(10.0)
+                    .color(if state.pubsub_connected {GOOD}else{WARN}));
+                if let Some(error)=state.pubsub_error.as_deref() {
+                    ui.label(RichText::new(error).size(10.0).color(WARN));
+                }
+            }
             ui.add_space(5.0);
             if ui.button(label(br, "Sign in to Twitch with Firefox",
                 "Entrar na Twitch pelo Firefox")).clicked() {
