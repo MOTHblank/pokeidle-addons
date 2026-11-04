@@ -133,12 +133,13 @@ const AUTH_PROGRESS_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 const UI_NATIVE_REPAINT_INTERVAL: Duration = Duration::from_secs(2);
 const UI_MULTI_ACCOUNT_REPAINT_INTERVAL: Duration = Duration::from_secs(4);
 // Worker completions may arrive in bursts (multiple accounts, Twitch/Kick,
-// asset loading, auth handoff). They only need to make the UI responsive,
+// auth handoff and persistence jobs). They only need to make the UI responsive,
 // not turn the immediate-mode renderer into a 60 FPS event consumer.
 // request_repaint_after is coalesced by egui to the earliest outstanding
 // deadline, so a burst becomes at most one visible frame per 100 ms.
 const UI_WORKER_REPAINT_DELAY: Duration = Duration::from_millis(100);
 
+#[track_caller]
 fn request_worker_repaint(ctx: &egui::Context) {
     ctx.request_repaint_after(UI_WORKER_REPAINT_DELAY);
 }
@@ -896,6 +897,7 @@ impl<T> Clone for WakeSender<T> {
     }
 }
 impl<T> WakeSender<T> {
+    #[track_caller]
     fn send(&self, event: T) -> Result<(), mpsc::SendError<T>> {
         self.sender.send(event)?;
         request_worker_repaint(&self.ctx);
@@ -1527,8 +1529,8 @@ impl eframe::App for ControllerApp {
         // diagnostics never starts it or leaves any background worker.
         let recording_frame_start = self.recording.as_ref()
             .is_some_and(RecordingSession::is_running).then(Instant::now);
-        // The clock is not even queried outside active diagnostics. Starting
-        // here includes process refresh, connection work and all UI panels.
+        // The clock is not even queried outside active diagnostics. This
+        // measures the paint/UI pass; control-plane work now lives in logic().
         let diagnostics_frame_start = (self.diagnostics_enabled
             && self.workspace.panel_tab == PanelTab::Diagnostics
             && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
