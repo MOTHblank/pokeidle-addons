@@ -321,7 +321,7 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                     std::thread::Builder::new()
                         .name(format!("moth-capture-save-{}",profile.name()))
                         .spawn(move || {
-                        let result=std::panic::catch_unwind(
+                            let result=std::panic::catch_unwind(
                             std::panic::AssertUnwindSafe(||
                                 crate::native_auth::persist_and_apply_capture_settings(
                                     profile,&to_save,&generation_state,generation,&updater))
