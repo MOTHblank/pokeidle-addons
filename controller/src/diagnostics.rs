@@ -37,6 +37,26 @@ pub(crate) struct HlsNetworkSample {
     pub(crate) last_minute: u64,
 }
 
+/// Queue and worker data taken from existing snapshots while diagnostics is open.
+/// These are queue occupancy metrics, NOT a per-feature CPU estimate.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct GameQueueSample {
+    pub(crate) slot: usize,
+    pub(crate) phase: String,
+    pub(crate) capture_queued: usize,
+    pub(crate) automation_queued: usize,
+    pub(crate) automation_pending: bool,
+    pub(crate) market_pending: bool,
+    pub(crate) restock_pending: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OperationalSample {
+    pub(crate) game: Vec<GameQueueSample>,
+    pub(crate) kick_channels: Option<crate::native_kick_pool::PoolUsage>,
+    pub(crate) kick_hls: Option<crate::native_kick_pool::PoolUsage>,
+}
+
 #[derive(Clone, Copy)]
 struct ProcessCounters {
     cpu_ns: u128,
@@ -54,6 +74,7 @@ pub(crate) struct DiagnosticsSampler {
     pub(crate) current: Option<PerformanceSample>,
     pub(crate) history: VecDeque<PerformanceSample>,
     pub(crate) network: Option<HlsNetworkSample>,
+    pub(crate) operational: Option<OperationalSample>,
     pub(crate) paused: bool,
     pub(crate) last_frame_ms: Option<f64>,
     pub(crate) slowest_frame_ms: f64,
@@ -96,6 +117,7 @@ impl DiagnosticsSampler {
             self.last_read = None;
             self.current = None;
             self.network = None;
+            self.operational = None;
             self.history.push_back(PerformanceSample {
                 at: Some(Instant::now()),
                 ..PerformanceSample::default()
