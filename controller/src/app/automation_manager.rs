@@ -7,9 +7,9 @@ use super::{automation_badge, detail_stat_line, egui, format_hunt_amount,
 pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     // Take one read-only snapshot for the entire render. All network parsing
     // and commands remain on the game worker, never the egui render thread.
-    let (status, view, twitch) = {
+    let (status, view) = {
         let native = app.runtimes[index].game.native.as_ref().expect("native details require a session");
-        (native.snapshot(), native.hunt_snapshot(), native.twitch_snapshot())
+        (native.snapshot(), native.hunt_snapshot())
     };
     let phase_online = status.phase == "Online";
     request_item_catalog(app);
@@ -24,8 +24,6 @@ pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui
                 ui.label(RichText::new(tr("ACCOUNT DETAILS")).size(12.0)
                     .strong().color(TEXT));
                 automation_badge(ui, "PokéIdle connection", &status.phase, phase_online);
-                automation_badge(ui, "Twitch", &twitch.phase,
-                    twitch.phase == "Online");
                 if let Some(last) = status.last_received {
                     ui.label(RichText::new(tr_dynamic(format!("Last game update: {}s ago",
                         last.elapsed().as_secs()))).size(10.0).color(MUTED));
