@@ -91,8 +91,7 @@ fn run_connection(
     socket.send(Message::text(listen.to_string()))
         .map_err(|error| format!("Twitch PubSub subscribe failed: {error}"))?;
 
-    let _ = event_tx.send(PubSubEvent::Connected);
-    let _ = wake.try_send(());
+    let mut subscribed=false;
     let mut last_pong = Instant::now();
     let mut last_ping = Instant::now();
 
@@ -127,6 +126,11 @@ fn run_connection(
                             .filter(|error| !error.trim().is_empty())
                         {
                             return Err(format!("Twitch PubSub subscription rejected: {error}"));
+                        }
+                        if !subscribed {
+                            subscribed=true;
+                            let _=event_tx.send(PubSubEvent::Connected);
+                            let _=wake.try_send(());
                         }
                     }
                     "MESSAGE" => {
