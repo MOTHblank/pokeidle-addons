@@ -159,11 +159,7 @@ pub struct TwitchMinerSession {
 }
 
 impl TwitchMinerSession {
-    pub fn start_optional(token: Option<&str>) -> Self {
-        Self::start_optional_for("Twitch",token)
-    }
-
-    pub fn start_optional_for(account_label:impl Into<String>,token: Option<&str>) -> Self {
+    pub fn start_optional(account_label:impl Into<String>,token: Option<&str>) -> Self {
         let control = TwitchMinerControl::default();
         let session = Self {
             account_label:account_label.into(),
