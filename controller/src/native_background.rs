@@ -4,7 +4,7 @@
 //! Credentials are captured only from the existing, authenticated Firefox BiDi
 //! session, held in memory, and never printed or persisted by this module.
 use serde_json::Value;
-use crate::native_twitch::{TwitchSession, TwitchSnapshot};
+use crate::native_twitch::{TwitchControl, TwitchSession, TwitchSnapshot};
 use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_gameplay::GameplayStatus;
@@ -227,10 +227,9 @@ fn cookie_domain_matches(domain: &str, host: &str) -> bool {
 }
 
 pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
-    Credentials::parse(bootstrap)?;
-    let twitch = bootstrap.get("twitch")
-        .ok_or_else(|| "Twitch IRC authentication missing from Firefox handoff".to_owned())?;
-    crate::native_twitch::validate(twitch)
+    // PokéIdle authentication is independently reusable. Twitch is an optional
+    // native service and must never prevent the game worker from starting.
+    Credentials::parse(bootstrap).map(|_| ())
 }
 
 type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
@@ -288,18 +287,18 @@ pub struct NativeSession {
     kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
 }
 impl NativeSession {
-    /// Establish *both* verified WebSockets before handing ownership away
-    /// from Firefox. This is blocking and MUST run on a background thread.
+    /// Verify the PokéIdle socket before handing ownership away from Firefox.
+    /// Twitch starts opportunistically when an OAuth token is already available,
+    /// but it is no longer part of the game authentication contract.
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
-        let twitch = TwitchSession::start_verified(bootstrap.get("twitch")
-            .ok_or_else(|| "Twitch IRC bootstrap required".to_owned())?)?;
+        let twitch = TwitchSession::start_optional(bootstrap.get("twitch"));
         Self::spawn(profile, credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
     }
     fn spawn(profile: GameProfile, credentials: Credentials, twitch: TwitchSession,
         initial: Option<(GameSocket, Value)>, settings: Option<Value>) -> Result<Self, String> {
-        let desired = twitch.desired_handle();
+        let desired = twitch.control();
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
         let rules=MarketRules::load(profile).unwrap_or_else(|error| {
@@ -647,12 +646,12 @@ fn normalize_twitch_login(value: &str) -> Option<String> {
 
 #[cfg(test)]
 fn observe(snapshot: &Arc<Mutex<NativeSnapshot>>, text: &str,
-    desired: &Arc<Mutex<Vec<String>>>) {
+    desired: &TwitchControl) {
     let Ok(payload) = serde_json::from_str::<Value>(text) else { return };
     observe_value(snapshot, &payload, desired);
 }
 fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
-    desired: &Arc<Mutex<Vec<String>>>) -> bool {
+    desired: &TwitchControl) -> bool {
     let mut changed_kick_roster=false;
     let state = payload.get("estado");
     let twitch_rooms_updated = state.and_then(|value|value.get("twitch"))
@@ -733,9 +732,7 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value,
             names.extend(game.twitch_watching.iter().cloned());
             names.sort_unstable();
             names.dedup();
-            if let Ok(mut current) = desired.lock() {
-                if *current != names { *current = names; }
-            }
+            desired.set_channels(names);
         }
     }
     changed_kick_roster
@@ -770,7 +767,7 @@ fn current_background_hunt(view:&HuntView)->Option<crate::native_hunts::HuntEntr
 
 fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
-    desired: Arc<Mutex<Vec<String>>>, first_session: Option<(GameSocket, Value)>,
+    desired: TwitchControl, first_session: Option<(GameSocket, Value)>,
     mut gameplay: Gameplay, mut restock: Restock,
     command_rx: mpsc::Receiver<GameCommand>,
     auto_catch: Arc<AtomicBool>,
@@ -1567,7 +1564,7 @@ mod tests {
     #[test]
     fn records_battle_events_without_requiring_browser_dom() {
         let status = Arc::new(Mutex::new(NativeSnapshot::default()));
-        let desired = Arc::new(Mutex::new(Vec::new()));
+        let desired = TwitchControl::default();
         observe(&status, r#"{"t":"batalha","ev":[
             {"k":"morte","quem":"selvagem"},
             {"k":"morte","quem":"jogador"},
@@ -1581,7 +1578,7 @@ mod tests {
     #[test]
     fn unchanged_official_kick_roster_does_not_advance_ui_revision() {
         let snapshot=Arc::new(Mutex::new(NativeSnapshot::default()));
-        let desired=Arc::new(Mutex::new(Vec::new()));
+        let desired=TwitchControl::default();
         let frame=r#"{"t":"estado","estado":{"kick":{"oficiais":[
             {"slug":"sample","aoVivo":true}]}}}"#;
         let first_event=serde_json::from_str::<Value>(frame).unwrap();
@@ -1598,11 +1595,11 @@ mod tests {
     #[test]
     fn native_twitch_follows_lives_and_protects_rewarded_rooms() {
         let status = Arc::new(Mutex::new(NativeSnapshot::default()));
-        let desired = Arc::new(Mutex::new(Vec::new()));
+        let desired = TwitchControl::default();
         observe(&status, r#"{"t":"welcome","estado":{"twitch":{"lives":[{"login":"ChannelA"}],"assistindoEm":["OldChannel"],"pctAtual":10}}}"#, &desired);
-        assert_eq!(*desired.lock().unwrap(), vec!["channela", "oldchannel"]);
+        assert_eq!(desired.channels(), vec!["channela", "oldchannel"]);
         observe(&status, r#"{"t":"estado","estado":{"twitch":{"lives":[]}}}"#, &desired);
-        assert_eq!(*desired.lock().unwrap(), vec!["oldchannel"]);
+        assert_eq!(desired.channels(), vec!["oldchannel"]);
         assert_eq!(status.lock().unwrap().twitch_bonus_pct, 10.0);
     }
     #[test]
