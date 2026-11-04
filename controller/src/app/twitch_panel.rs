@@ -203,9 +203,12 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         let watch_signals = snapshot.as_ref().map_or(0, |state| state.watch_signals);
         let gained = snapshot.as_ref().map_or(0, |state| state.points_gained);
         let claimed = snapshot.as_ref().map_or(0, |state| state.bonuses_claimed);
-        let watch_recent = snapshot.as_ref().map(|state| state.streamers.iter()
-            .filter(|channel| channel.last_watch_signal.is_some_and(|at|
-                at.elapsed() < Duration::from_secs(125))).count()).unwrap_or(0);
+        let (streaks_collected, streaks_live)=snapshot.as_ref().map(|state| {
+            let eligible=state.streamers.iter().filter(|channel|channel.live);
+            let live=eligible.clone().count();
+            let confirmed=eligible.filter(|channel|channel.streak_confirmed==Some(true)).count();
+            (confirmed,live)
+        }).unwrap_or((0,0));
 
         egui::Frame::new().fill(PANEL).stroke(Stroke::new(1.0, BORDER))
             .corner_radius(9.0).inner_margin(12.0).show(ui, |ui| {
@@ -218,8 +221,9 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.columns(3, |cols| {
                 metric(&mut cols[0], label(br, "Channels checked", "Canais consultados"),
                     format!("{available}/{desired}"), if available > 0 { GOOD } else { TEXT });
-                metric(&mut cols[1], label(br, "Recent watch signals", "Sinais recentes"),
-                    watch_recent.to_string(), if watch_recent > 0 { GOOD } else { MUTED });
+                metric(&mut cols[1], label(br, "Streaks confirmed", "Sequências confirmadas"),
+                    format!("{streaks_collected}/{streaks_live}"),
+                    if streaks_collected > 0 {GOOD}else{MUTED});
                 metric(&mut cols[2], label(br, "Points earned", "Pontos ganhos"),
                     format!("+{gained}"), if gained > 0 { GOOD } else { TEXT });
             });
