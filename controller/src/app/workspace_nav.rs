@@ -169,7 +169,7 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             if sidebar_button(ui, &format!("  ·  {}", tr("Hunt Atlas")), app.workspace.panel_tab == PanelTab::Hunts).clicked() {
                 app.workspace.panel_tab = PanelTab::Hunts;
             }
-            if sidebar_button(ui, &format!("  ·  {}", tr("Boss Manager")), app.workspace.panel_tab == PanelTab::Boss).clicked() {
+            if sidebar_button(ui, &format!("  ·  {}", tr("Boss Farm")), app.workspace.panel_tab == PanelTab::Boss).clicked() {
                 app.workspace.panel_tab = PanelTab::Boss;
             }
 
