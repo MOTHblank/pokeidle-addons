@@ -99,7 +99,8 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 }
 
 
-pub(super) fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) {
+pub(super) fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus) -> bool {
+    let mut open_updates = false;
     egui::Frame::new()
         .fill(PANEL_ALT)
         .stroke(Stroke::new(1.0, BORDER))
@@ -169,21 +170,26 @@ pub(super) fn draw_credits(ui: &mut egui::Ui, update_status: &SharedUpdateStatus
                         .corner_radius(5.0)
                         .inner_margin(Margin::symmetric(6, 3))
                         .show(ui, |ui| {
-                            ui.hyperlink_to(
-                                RichText::new(format!(
-                                    "{} · v{}",
-                                    tr("Update available"),
-                                    latest_version
-                                ))
-                                .size(10.0)
-                                .strong()
-                                .color(Color32::from_rgb(12, 38, 10)),
-                                update::RELEASES_URL,
-                            );
+                            if ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!(
+                                        "{} · v{}",
+                                        tr("Update available"),
+                                        latest_version
+                                    ))
+                                    .size(10.0)
+                                    .strong()
+                                    .color(Color32::from_rgb(12, 38, 10)),
+                                )
+                                .sense(egui::Sense::click()),
+                            ).on_hover_text(tr("Open update options")).clicked() {
+                                open_updates = true;
+                            }
                         });
                 }
             });
         });
+    open_updates
 }
 
 
