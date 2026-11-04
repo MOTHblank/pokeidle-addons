@@ -46,3 +46,10 @@ Name: "{autoprograms}\Moth Controller"; Filename: "{app}\Moth Controller.exe"; W
 
 [Run]
 Filename: "{app}\Moth Controller.exe"; Description: "Launch Moth Controller"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Moth Controller.exe"; Flags: nowait; Check: IsMothUpdate
+
+[Code]
+function IsMothUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:MOTHUPDATE|0}') = '1';
+end;

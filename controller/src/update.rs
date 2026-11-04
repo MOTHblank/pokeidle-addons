@@ -11,6 +11,18 @@ const RELEASE_API_URL: &str =
 pub const RELEASES_URL: &str = "https://github.com/MOTHblank/pokeidle-addons/releases/latest";
 #[cfg(windows)]
 const LEGACY_WINDOWS_UPDATE_ASSET: &str = "Moth-Controller-Portable-windows-x86_64.exe";
+#[cfg(windows)]
+const WINDOWS_UNINSTALL_KEY: &str =
+    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{5E1E5540-9723-4D63-9A92-7A9AA6BDA74C}_is1";
+#[cfg(windows)]
+const WINDOWS_APP_FILENAME: &str = "Moth Controller.exe";
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowsUpdateKind {
+    Portable,
+    Installer,
+}
 
 #[cfg(windows)]
 fn windows_update_assets(tag: &str) -> [String; 2] {
@@ -20,14 +32,36 @@ fn windows_update_assets(tag: &str) -> [String; 2] {
     ]
 }
 
+#[cfg(windows)]
+fn windows_installer_asset(tag: &str) -> String {
+    format!("Moth-Controller-Setup-{tag}.exe")
+}
+
 #[derive(Clone, Debug)]
 struct ReleaseInfo {
     tag: String,
     notes_url: String,
     #[cfg(windows)]
-    asset_url: Option<String>,
+    portable_asset_url: Option<String>,
     #[cfg(windows)]
-    checksum_url: Option<String>,
+    portable_checksum_url: Option<String>,
+    #[cfg(windows)]
+    installer_asset_url: Option<String>,
+    #[cfg(windows)]
+    installer_checksum_url: Option<String>,
+}
+
+#[cfg(windows)]
+impl ReleaseInfo {
+    fn package(&self, kind: WindowsUpdateKind) -> Option<(&str, &str)> {
+        let (asset, checksum) = match kind {
+            WindowsUpdateKind::Portable =>
+                (&self.portable_asset_url, &self.portable_checksum_url),
+            WindowsUpdateKind::Installer =>
+                (&self.installer_asset_url, &self.installer_checksum_url),
+        };
+        Some((asset.as_deref()?, checksum.as_deref()?))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -43,6 +77,8 @@ pub struct UpdateStatus {
     staged_path: Option<PathBuf>,
     #[cfg(windows)]
     staged_sha256: Option<String>,
+    #[cfg(windows)]
+    staged_kind: Option<WindowsUpdateKind>,
 }
 
 pub type SharedUpdateStatus = Arc<Mutex<UpdateStatus>>;
@@ -86,6 +122,7 @@ pub fn check_now(status: &SharedUpdateStatus) -> Result<bool, String> {
                             #[cfg(windows)]
                             {
                                 state.staged_sha256 = None;
+                                state.staged_kind = None;
                             }
                             state.staged_version = None;
                         }
@@ -142,7 +179,7 @@ fn fetch_latest_release() -> Result<ReleaseInfo, String> {
         .to_string();
 
     #[cfg(windows)]
-    let (asset_url, checksum_url) = {
+    let (portable_asset_url, portable_checksum_url, installer_asset_url, installer_checksum_url) = {
         let assets = response
             .get("assets")
             .and_then(Value::as_array)
@@ -157,30 +194,156 @@ fn fetch_latest_release() -> Result<ReleaseInfo, String> {
                     .map(str::to_string)
             })
         };
-        let mut selected = (None, None);
+        let pair = |name: &str| {
+            let checksum_name = format!("{name}.sha256");
+            (find(name), find(&checksum_name))
+        };
+
+        let mut portable = (None, None);
         for asset_name in windows_update_assets(&tag) {
-            let checksum_name = format!("{asset_name}.sha256");
-            if let (Some(asset), Some(checksum)) = (find(&asset_name), find(&checksum_name)) {
-                selected = (Some(asset), Some(checksum));
+            let candidate = pair(&asset_name);
+            if candidate.0.is_some() && candidate.1.is_some() {
+                portable = candidate;
                 break;
             }
         }
-        selected
+        let installer = pair(&windows_installer_asset(&tag));
+        (portable.0, portable.1, installer.0, installer.1)
     };
 
     Ok(ReleaseInfo {
         tag,
         notes_url,
         #[cfg(windows)]
-        asset_url,
+        portable_asset_url,
         #[cfg(windows)]
-        checksum_url,
+        portable_checksum_url,
+        #[cfg(windows)]
+        installer_asset_url,
+        #[cfg(windows)]
+        installer_checksum_url,
     })
 }
 
 #[cfg(windows)]
+fn hidden_reg_command() -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new("reg.exe");
+    command.creation_flags(0x08000000);
+    command
+}
+
+#[cfg(windows)]
+fn windows_uninstall_key_exists() -> bool {
+    hidden_reg_command()
+        .args(["query", WINDOWS_UNINSTALL_KEY])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(windows)]
+fn windows_registry_value(name: &str) -> Option<String> {
+    let output = hidden_reg_command()
+        .args(["query", WINDOWS_UNINSTALL_KEY, "/v", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines().find_map(|line| {
+        let (_, value) = line.split_once("REG_SZ")?;
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+#[cfg(windows)]
+fn same_windows_path(left: &Path, right: &Path) -> bool {
+    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+    left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+#[cfg(windows)]
+fn expected_windows_install_path() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|root| {
+        PathBuf::from(root)
+            .join("Programs")
+            .join("Moth Controller")
+            .join(WINDOWS_APP_FILENAME)
+    })
+}
+
+#[cfg(windows)]
+fn is_installed_windows_copy() -> bool {
+    if !windows_uninstall_key_exists() {
+        return false;
+    }
+    let Ok(current) = std::env::current_exe() else { return false; };
+    let registered = windows_registry_value("InstallLocation")
+        .map(PathBuf::from)
+        .map(|path| path.join(WINDOWS_APP_FILENAME))
+        .or_else(expected_windows_install_path);
+    registered.is_some_and(|path| same_windows_path(&current, &path))
+}
+
+#[cfg(windows)]
+fn windows_update_kind() -> WindowsUpdateKind {
+    if is_installed_windows_copy() {
+        WindowsUpdateKind::Installer
+    } else {
+        WindowsUpdateKind::Portable
+    }
+}
+
+/// Self-heal the one-time transition from the pre-installer-aware updater.
+/// v0.2.2 can replace an installed executable directly, so the first newer
+/// binary repairs Inno Setup's DisplayVersion before future updates use Setup.
+#[cfg(windows)]
+pub fn repair_windows_install_metadata() -> Result<bool, String> {
+    if !is_installed_windows_copy() {
+        return Ok(false);
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    if windows_registry_value("DisplayVersion")
+        .as_deref()
+        .is_some_and(|registered| compare_versions(registered, current) == Some(Ordering::Equal))
+    {
+        return Ok(false);
+    }
+
+    let output = hidden_reg_command()
+        .args([
+            "add",
+            WINDOWS_UNINSTALL_KEY,
+            "/v",
+            "DisplayVersion",
+            "/t",
+            "REG_SZ",
+            "/d",
+            current,
+            "/f",
+        ])
+        .output()
+        .map_err(|error| format!("could not repair Windows install metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "could not repair Windows install metadata: reg.exe exited with {}",
+            output.status
+        ));
+    }
+    Ok(true)
+}
+
+#[cfg(not(windows))]
+pub fn repair_windows_install_metadata() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(windows)]
 pub fn download_update(status: &SharedUpdateStatus) -> Result<bool, String> {
-    let release = {
+    let (release, kind) = {
         let mut state = status.lock().map_err(|_| "update status lock poisoned")?;
         if state.downloading {
             return Ok(false);
@@ -192,19 +355,25 @@ pub fn download_update(status: &SharedUpdateStatus) -> Result<bool, String> {
         if !is_newer_version(&release.tag, env!("CARGO_PKG_VERSION")) {
             return Err("Moth Controller is already up to date.".into());
         }
-        if release.asset_url.is_none() || release.checksum_url.is_none() {
-            return Err("This release does not include an in-app Windows update package.".into());
+        let kind = windows_update_kind();
+        if release.package(kind).is_none() {
+            return Err(match kind {
+                WindowsUpdateKind::Installer =>
+                    "This release does not include the Windows Setup package required to update the installed edition.".into(),
+                WindowsUpdateKind::Portable =>
+                    "This release does not include the portable Windows update package.".into(),
+            });
         }
         state.downloading = true;
         state.last_error = None;
-        release
+        (release, kind)
     };
 
     let worker_status = Arc::clone(status);
     let spawn = thread::Builder::new()
         .name("release-update-download".into())
         .spawn(move || {
-            let result = download_release(&release);
+            let result = download_release(&release, kind);
             if let Ok(mut state) = worker_status.lock() {
                 state.downloading = false;
                 match result {
@@ -217,6 +386,7 @@ pub fn download_update(status: &SharedUpdateStatus) -> Result<bool, String> {
                         state.staged_version = Some(release.tag.clone());
                         state.staged_path = Some(path);
                         state.staged_sha256 = Some(checksum);
+                        state.staged_kind = Some(kind);
                         state.last_error = None;
                     }
                     Err(error) => {
@@ -249,7 +419,10 @@ fn cleanup_old_update_files(directory: &Path) {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else { continue; };
         let is_update = name.starts_with("moth-controller-") &&
-            (name.ends_with("-update.exe") || name.ends_with("-update.exe.download"));
+            (name.ends_with("-update.exe")
+                || name.ends_with("-update.exe.download")
+                || name.ends_with("-setup.exe")
+                || name.ends_with("-setup.exe.download"));
         if is_update {
             let _ = std::fs::remove_file(path);
         }
@@ -257,17 +430,18 @@ fn cleanup_old_update_files(directory: &Path) {
 }
 
 #[cfg(windows)]
-fn download_release(release: &ReleaseInfo) -> Result<(PathBuf, String), String> {
-    let asset_url = release.asset_url.as_deref().ok_or("missing update asset")?;
-    let checksum_url = release
-        .checksum_url
-        .as_deref()
-        .ok_or("missing update checksum")?;
+fn download_release(
+    release: &ReleaseInfo,
+    kind: WindowsUpdateKind,
+) -> Result<(PathBuf, String), String> {
+    let (asset_url, checksum_url) = release
+        .package(kind)
+        .ok_or("missing update package or checksum")?;
     let directory = crate::config::data_root()?.join("Updates");
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("could not create update staging folder: {error}"))?;
-    // A Windows helper cannot delete its own running image after a successful
-    // replacement. Remove leftovers from previous updates before staging a new one.
+    // A Windows helper or installer cannot delete its own running image after a
+    // successful update. Remove leftovers before staging a new package.
     cleanup_old_update_files(&directory);
 
     let safe_tag = release
@@ -275,7 +449,11 @@ fn download_release(release: &ReleaseInfo) -> Result<(PathBuf, String), String> 
         .chars()
         .filter(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '-' | '_'))
         .collect::<String>();
-    let final_path = directory.join(format!("moth-controller-{safe_tag}-update.exe"));
+    let suffix = match kind {
+        WindowsUpdateKind::Portable => "update.exe",
+        WindowsUpdateKind::Installer => "setup.exe",
+    };
+    let final_path = directory.join(format!("moth-controller-{safe_tag}-{suffix}"));
     let temporary_path = final_path.with_extension("exe.download");
 
     let client = http_client(Duration::from_secs(90))?;
@@ -363,7 +541,7 @@ fn ensure_target_directory_writable(target: &Path) -> Result<(), String> {
 #[cfg(windows)]
 pub fn request_restart_and_install(status: &SharedUpdateStatus) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
-    let (staged, checksum, version) = {
+    let (staged, checksum, version, kind) = {
         let state = status.lock().map_err(|_| "update status lock poisoned")?;
         (
             state
@@ -378,26 +556,51 @@ pub fn request_restart_and_install(status: &SharedUpdateStatus) -> Result<String
                 .staged_version
                 .clone()
                 .ok_or_else(|| "Staged update version is unavailable.".to_string())?,
+            state
+                .staged_kind
+                .ok_or_else(|| "Staged update type is unavailable.".to_string())?,
         )
     };
     if windows_sha256(&staged)? != checksum {
         return Err("Staged update failed SHA-256 verification.".into());
     }
 
-    let target = std::env::current_exe()
-        .map_err(|error| format!("could not locate Moth Controller executable: {error}"))?;
-    ensure_target_directory_writable(&target)?;
+    match kind {
+        WindowsUpdateKind::Installer => {
+            if !is_installed_windows_copy() {
+                return Err("The installed-edition update package no longer matches this Moth Controller location.".into());
+            }
+            let mut setup = Command::new(&staged);
+            setup.creation_flags(0x08000000);
+            setup.args([
+                "/SP-",
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/CLOSEAPPLICATIONS",
+                "/MOTHUPDATE=1",
+            ]);
+            setup
+                .spawn()
+                .map_err(|error| format!("could not start Moth Controller Setup: {error}"))?;
+        }
+        WindowsUpdateKind::Portable => {
+            let target = std::env::current_exe()
+                .map_err(|error| format!("could not locate Moth Controller executable: {error}"))?;
+            ensure_target_directory_writable(&target)?;
 
-    let mut helper = Command::new(&staged);
-    helper.creation_flags(0x08000000);
-    helper
-        .arg("--apply-update")
-        .arg(&target)
-        .arg(&checksum)
-        .arg(std::process::id().to_string());
-    helper
-        .spawn()
-        .map_err(|error| format!("could not start update helper: {error}"))?;
+            let mut helper = Command::new(&staged);
+            helper.creation_flags(0x08000000);
+            helper
+                .arg("--apply-update")
+                .arg(&target)
+                .arg(&checksum)
+                .arg(std::process::id().to_string());
+            helper
+                .spawn()
+                .map_err(|error| format!("could not start update helper: {error}"))?;
+        }
+    }
     Ok(version)
 }
 
