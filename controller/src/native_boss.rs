@@ -25,6 +25,14 @@ pub struct BossEntry {
     pub tokens_per_entry: u64,
 }
 impl BossEntry {
+    /// shared/bosses-lendarios.mjs v1.398.1: the catalog's minimum
+    /// trainer level is the floor for eligibility and the boss's combat
+    /// level, not the fixed opponent level for higher-level trainers.
+    /// Only display this when the account's level is known.
+    pub fn fight_level(&self, trainer_level: Option<u32>) -> Option<u32> {
+        trainer_level.map(|level| level.max(self.min_level.max(1)))
+    }
+
     fn parse(raw: &Value) -> Option<Self> {
         let key = raw.get("key")?.as_str()?.trim();
         if key.is_empty() || key.len() > 128 ||
@@ -768,6 +776,23 @@ mod tests {
         view.trainer_level = Some(22);
         view.items = Arc::new([(500,5)].into());
         view
+    }
+    #[test]
+    fn effective_boss_level_scales_with_trainer_without_changing_unlock_gate() {
+        let catalog=serde_json::json!({"key":"regice","nome":"Regice",
+            "minNivelTreinador":300,
+            "entrada":{"itemId":500,"qtd":1}});
+        let boss=BossEntry::parse(&catalog).expect("playable boss");
+        assert_eq!(boss.min_level,300);
+        assert_eq!(boss.fight_level(None),None,
+            "unknown trainer level must not be invented");
+        assert_eq!(boss.fight_level(Some(300)),Some(300));
+        assert_eq!(boss.fight_level(Some(650)),Some(650));
+        assert_eq!(boss.fight_level(Some(30_000)),Some(30_000));
+        assert_eq!(boss.fight_level(Some(100)),Some(300),
+            "even before unlock the minimum remains the boss's floor");
+        assert_eq!(boss.min_level,300,
+            "the separate unlock requirement cannot change as the trainer levels");
     }
     #[test]
     fn farm_waits_for_center_and_restores_exact_hunt() {
