@@ -2,7 +2,9 @@
 //! Only derived gameplay counters are saved; never raw frames, auth, cookies,
 //! WebSocket URLs or mutable credentials.
 use crate::config::{data_root, GameProfile};
-use serde_json::{json, Value};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
