@@ -60,6 +60,9 @@ pub struct BuyRule {
     // 0 means unrestricted. Only verified listing data can satisfy filters.
     pub min_potency: u64,
     pub max_potency: u64,
+    pub min_level: u64,
+    pub min_iv: u64,
+    pub species_id: u64,
     pub min_listing_quantity: u64,
     pub max_units_per_buy: u64,
 }
@@ -69,7 +72,8 @@ impl Default for BuyRule {
             currency: "gold".into(), enabled: false, buy_max: 0,
             max_spend_session: 0, max_spend_day: 0,
             max_purchases_session: 0, max_quantity_session: 0,
-            min_potency: 0, max_potency: 0, min_listing_quantity: 0, max_units_per_buy: 0 }
+            min_potency: 0, max_potency: 0, min_level: 0, min_iv: 0,
+            species_id: 0, min_listing_quantity: 0, max_units_per_buy: 0 }
     }
 }
 impl BuyRule {
@@ -79,7 +83,7 @@ impl BuyRule {
         matches!(self.currency.as_str(), "gold" | "orb") &&
         (self.kind != "item" || self.item_id > 0) &&
         (self.kind != "pokemon_shiny" || self.currency == "orb") &&
-        self.min_potency <= 5 && self.max_potency <= 5 &&
+        self.min_potency <= 5 && self.max_potency <= 5 && self.min_iv <= 192 &&
         (self.min_potency == 0 || self.max_potency == 0 || self.min_potency <= self.max_potency)
     }
 }
@@ -226,6 +230,7 @@ impl MarketRules {
                     max_purchases_session: number(entry, "maxPurchasesSession").unwrap_or(0),
                     max_quantity_session: number(entry, "maxQuantitySession").unwrap_or(0),
                     min_potency: 0, max_potency: 0,
+                    min_level: 0, min_iv: 0, species_id: 0,
                     min_listing_quantity: 0, max_units_per_buy: 0,
                 };
                 if rule.buy_max > 0 && rule.valid() { out.rules.push(rule); }
@@ -292,6 +297,7 @@ struct Journal { orders: Vec<Order>, archived: Vec<ArchivedExposure> }
 struct Offer {
     id: u64, kind: String, item_id: u64, currency: String, price: u64, qty: u64,
     seller: String, held_until: u64, shiny: Option<bool>, potency: Option<u64>,
+    level: Option<u64>, iv: Option<u64>, species_id: Option<u64>,
     at: Instant,
 }
 impl Offer {
@@ -322,7 +328,14 @@ impl Offer {
             seller: seller.to_owned(),
             held_until: number(v, "compravelEm").unwrap_or(0),
             shiny: ficha.and_then(|v|v.get("shiny")).and_then(Value::as_bool),
-            potency: ficha.and_then(|v|number(v,"potencia")), at: now,
+            potency: ficha.and_then(|v|number(v,"potencia")),
+            level: ficha.and_then(|v|number(v,"level")),
+            iv: ficha.and_then(|v|number(v,"iv").or_else(||number(v,"ivTotal")))
+                .or_else(||ficha.and_then(|v|v.get("ivs")).and_then(Value::as_object)
+                    .and_then(|ivs|ivs.values().try_fold(0u64,|total,x|
+                        x.as_u64().map(|value|total.saturating_add(value))))),
+            species_id: ficha.and_then(|v|number(v,"speciesId")),
+            at: now,
         })
     }
     fn matches(&self, rule: &BuyRule, nick: &str, server_ms: u64) -> bool {
@@ -333,7 +346,10 @@ impl Offer {
         if self.kind=="pokemon" {
             let power=self.potency.unwrap_or(0);
             if (rule.min_potency>0 && power<rule.min_potency) ||
-                (rule.max_potency>0 && power>rule.max_potency) {return false}
+                (rule.max_potency>0 && power>rule.max_potency) ||
+                (rule.min_level>0 && self.level.is_none_or(|value|value<rule.min_level)) ||
+                (rule.min_iv>0 && self.iv.is_none_or(|value|value<rule.min_iv)) ||
+                (rule.species_id>0 && self.species_id!=Some(rule.species_id)) {return false}
         }
         match rule.kind.as_str() {
             "item" => self.kind == "item" && self.item_id == rule.item_id,
@@ -1386,6 +1402,30 @@ mod tests {
         assert_eq!(rule.max_units_per_buy,0);
         assert_eq!(rule.min_potency,0);
         assert_eq!(rule.max_potency,0);
+        assert_eq!(rule.min_level,0);
+        assert_eq!(rule.min_iv,0);
+        assert_eq!(rule.species_id,0);
+    }
+
+    #[test] fn pokemon_species_level_and_iv_require_authentic_listing_evidence() {
+        let now=Instant::now();
+        let rule=BuyRule{id:"verified".into(),kind:"pokemon_any".into(),
+            currency:"orb".into(),enabled:true,buy_max:50,
+            species_id:25,min_level:20,min_iv:120,..Default::default()};
+        let verified=Offer::from_listing(&json!({"id":93,"preco":10,
+            "vendedor":"other","ficha":{"shiny":false,"potencia":3,
+                "speciesId":25,"level":25,"iv":130}}),
+            "pokemon",0,"orb",now).unwrap();
+        assert!(verified.matches(&rule,"me",clock_ms()));
+        let missing=Offer::from_listing(&json!({"id":94,"preco":10,
+            "vendedor":"other","ficha":{"shiny":false,"potencia":3}}),
+            "pokemon",0,"orb",now).unwrap();
+        assert!(!missing.matches(&rule,"me",clock_ms()));
+        let incorrect=Offer::from_listing(&json!({"id":95,"preco":10,
+            "vendedor":"other","ficha":{"shiny":false,"potencia":3,
+                "speciesId":26,"level":25,"iv":130}}),
+            "pokemon",0,"orb",now).unwrap();
+        assert!(!incorrect.matches(&rule,"me",clock_ms()));
     }
     #[test] fn quantity_rules_require_real_lot_size_and_limit_purchase_units() {
         let now=Instant::now();
