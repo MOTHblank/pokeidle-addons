@@ -268,16 +268,22 @@ pub enum LoginStatus {
 struct LoginJob {
     status: LoginStatus,
     cancelled: Arc<AtomicBool>,
+    completed_token: Option<String>,
 }
 fn jobs() -> &'static Mutex<[LoginJob; 4]> {
     static JOBS: OnceLock<Mutex<[LoginJob; 4]>> = OnceLock::new();
     JOBS.get_or_init(|| Mutex::new(std::array::from_fn(|_| LoginJob {
         status: LoginStatus::Idle, cancelled: Arc::new(AtomicBool::new(false)),
+        completed_token: None,
     })))
 }
 pub fn status(profile: GameProfile) -> LoginStatus {
     jobs().lock().ok().map(|jobs| jobs[profile.index()].status.clone())
         .unwrap_or(LoginStatus::Error("Twitch login state unavailable".into()))
+}
+pub fn take_completed_token(profile: GameProfile) -> Option<String> {
+    jobs().lock().ok()
+        .and_then(|mut jobs| jobs[profile.index()].completed_token.take())
 }
 pub fn cancel(profile: GameProfile) {
     if let Ok(jobs) = jobs().lock() {
@@ -288,6 +294,7 @@ pub fn reset(profile: GameProfile) {
     if let Ok(mut jobs) = jobs().lock() {
         if !matches!(jobs[profile.index()].status, LoginStatus::Running) {
             jobs[profile.index()].status = LoginStatus::Idle;
+            jobs[profile.index()].completed_token = None;
         }
     }
 }
@@ -302,6 +309,7 @@ pub fn start(profile: GameProfile) -> Result<(), String> {
         let cancelled = Arc::new(AtomicBool::new(false));
         job.status = LoginStatus::Running;
         job.cancelled = Arc::clone(&cancelled);
+        job.completed_token = None;
         cancelled
     };
     let spawned = thread::Builder::new()
@@ -309,10 +317,16 @@ pub fn start(profile: GameProfile) -> Result<(), String> {
         .spawn(move || {
             let result = login(profile, &cancelled);
             if let Ok(mut jobs) = jobs().lock() {
-                jobs[profile.index()].status = match result {
-                    Ok(()) => LoginStatus::Done,
-                    Err(error) => LoginStatus::Error(error),
-                };
+                match result {
+                    Ok(token) => {
+                        jobs[profile.index()].completed_token = Some(token);
+                        jobs[profile.index()].status = LoginStatus::Done;
+                    }
+                    Err(error) => {
+                        jobs[profile.index()].completed_token = None;
+                        jobs[profile.index()].status = LoginStatus::Error(error);
+                    }
+                }
             }
         });
     if let Err(error) = spawned {
@@ -334,13 +348,14 @@ fn reset_after_spawn_failure(profile: GameProfile) {
 fn twitch_config(profile: GameProfile) -> Result<Config, String> {
     Config::for_profile(profile)
 }
-pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String> {
+pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<String, String> {
     let config = twitch_config(profile)?;
     // A prior Firefox visit to Twitch may already have a session. Avoid
     // opening another login window when it can be reused directly.
     if let Some(token) = read_twitch_cookie(&config.profile_dir)? {
         if cancelled.load(Ordering::Relaxed) { return Err("Twitch login cancelled".into()); }
-        return native_auth::save_twitch_token(profile, &token);
+        native_auth::save_twitch_token(profile, &token)?;
+        return Ok(token);
     }
     if firefox::find_profile_process(&config)?.is_some() {
         return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.".into());
@@ -361,7 +376,7 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
             // The OS vault now owns the login. Close only the temporary
             // Firefox process started by this button, not another account.
             let _ = firefox::stop_child(&mut browser, None);
-            return Ok(());
+            return Ok(token);
         }
         match browser.try_wait() {
             Ok(Some(_)) => break,
@@ -375,7 +390,8 @@ pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String>
     let token = read_twitch_cookie(&config.profile_dir)?.ok_or_else(|| {
         "Twitch login not detected. Sign in using Firefox; Moth will import automatically.".to_owned()
     })?;
-    native_auth::save_twitch_token(profile, &token)
+    native_auth::save_twitch_token(profile, &token)?;
+    Ok(token)
 }
 
 #[cfg(test)]
