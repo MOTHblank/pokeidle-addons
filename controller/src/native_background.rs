@@ -403,7 +403,7 @@ impl NativeSession {
         // Twitch credential resolution is deliberately deferred to its own
         // worker. A locked OS keyring or busy Firefox cookie DB must never
         // delay a verified PokéIdle connection.
-        let twitch_miner=Arc::new(TwitchMinerSession::start_optional_for(profile.label(),None));
+        let twitch_miner=Arc::new(TwitchMinerSession::start_optional(profile.label(),None));
         Self::spawn(profile, credentials, twitch_miner, Some(initial),
             bootstrap.get("autocatch").cloned(), legacy_twitch)
     }
