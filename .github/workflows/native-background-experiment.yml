@@ -50,6 +50,37 @@ jobs:
       - name: Check native controller
         working-directory: controller
         run: cargo check --locked
+      - name: Build Windows binary for installer validation
+        if: runner.os == 'Windows'
+        working-directory: controller
+        run: cargo build --locked
+      - name: Validate Windows installer packaging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc" }
+
+          $match = Select-String -Path 'controller/Cargo.toml' -Pattern '^version = "([^"]+)"' | Select-Object -First 1
+          if (-not $match) { throw 'Could not read controller version' }
+          $version = $match.Matches[0].Groups[1].Value
+          $controller = (Resolve-Path 'controller/target/debug/moth-controller.exe').Path
+
+          Add-Type -AssemblyName System.Drawing
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($controller)
+          $iconPath = Join-Path $env:RUNNER_TEMP 'moth-controller-validation.ico'
+          $stream = [System.IO.File]::Create($iconPath)
+          try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose() }
+
+          $output = Join-Path $env:RUNNER_TEMP 'moth-installer-validation'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          & $iscc "/DAppVersion=$version" "/DControllerExe=$controller" "/DControllerIcon=$iconPath" "/O$output" 'controller/windows/moth-controller.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup validation failed with exit code $LASTEXITCODE" }
+          $installer = Join-Path $output "Moth-Controller-Setup-v$version.exe"
+          if (-not (Test-Path $installer)) { throw "Expected installer was not generated: $installer" }
       - name: Build native preview (manual only)
         if: github.event_name == 'workflow_dispatch'
         working-directory: controller
