@@ -10,6 +10,7 @@ pub(super) struct AccountRuntime {
     pub(super) automation: AutomationState,
     pub(super) hunt: HuntAccountState,
     pub(super) kick: KickAccountState,
+    pub(super) twitch: TwitchAccountState,
     pub(super) telemetry: TelemetryState,
 }
 
@@ -81,6 +82,10 @@ pub(super) struct KickAccountState {
     pub(super) kick_token_revision: u64,
     pub(super) kick_login_done_seen: bool,
     pub(super) kick_remember_login: bool,
+}
+
+pub(super) struct TwitchAccountState {
+    pub(super) login_done_seen: bool,
 }
 
 pub(super) struct TelemetryState {
@@ -161,6 +166,9 @@ impl AccountRuntime {
                 kick_token_revision: 0,
                 kick_login_done_seen: false,
                 kick_remember_login: true,
+            },
+            twitch: TwitchAccountState {
+                login_done_seen: false,
             },
             telemetry: TelemetryState {
                 account_setup: AccountSetup::default(),
