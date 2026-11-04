@@ -421,22 +421,32 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
             "Escolha uma conta para verificar a automação e o estado da reposição.",
         "Restock details" => "Detalhes da reposição",
         "Waiting for account connection" => "Aguardando conexão com a conta",
-        "Performance and updates" => "Desempenho e atualizações",
-        "Background refresh" => "Atualização em segundo plano",
+        "Background performance" => "Desempenho em segundo plano",
+        "Refresh behavior" => "Comportamento das atualizações",
         "Reduce updates when the window is not focused" =>
             "Reduzir atualizações quando a janela estiver sem foco",
         "Reduce updates when minimized to the system tray" =>
             "Reduzir atualizações ao minimizar para a bandeja",
-        "Choose when Moth Controller uses fewer resources in the background." =>
-            "Escolha quando o Moth Controller deve consumir menos recursos em segundo plano.",
-        "When enabled, refresh this window less often while you use other apps. The game keeps running normally." =>
-            "Quando ativado, atualiza esta janela com menos frequência ao usar outros aplicativos. O jogo continua funcionando normalmente.",
-        "On: slower refresh while hidden in the tray. Off: normal foreground refresh continues while hidden." =>
-            "Ativado: atualizações mais lentas na bandeja. Desativado: mantém o ritmo normal mesmo oculto.",
-        "PokéIdle and Twitch keep running normally. These options only change how often the window and Firefox update." =>
-            "PokéIdle e Twitch continuam funcionando normalmente. Estas opções só alteram a frequência de atualização da janela e do Firefox.",
-        "Changes are saved automatically and restored on the next launch." =>
-            "Alterações são salvas automaticamente e restauradas na próxima inicialização.",
+        "Control how often the controller redraws its window and checks Firefox in the background." =>
+            "Controle a frequência de atualização da janela e de monitoramento do Firefox em segundo plano.",
+        "Reduces window redraws and Firefox monitoring while another app is focused." =>
+            "Reduz a atualização da janela e o monitoramento do Firefox enquanto outro aplicativo estiver em foco.",
+        "Reduces window redraws and Firefox monitoring while hidden in the system tray." =>
+            "Reduz a atualização da janela e o monitoramento do Firefox enquanto estiver oculto na bandeja.",
+        "PokéIdle, Twitch and automation run independently of these display and Firefox monitoring settings." =>
+            "PokéIdle, Twitch e automações funcionam independentemente destas configurações de exibição e monitoramento do Firefox.",
+        "Current refresh mode" => "Modo atual de atualização",
+        "Reduced background updates" => "Atualizações reduzidas em segundo plano",
+        "Normal updates" => "Atualizações normais",
+        "Restore default performance settings" => "Restaurar configurações padrão de desempenho",
+        "Could not save options. Previous settings are still active." =>
+            "Não foi possível salvar as opções. As configurações anteriores continuam ativas.",
+        "Retry saving options" => "Tentar salvar novamente",
+        "Open performance diagnostics" => "Abrir diagnóstico de desempenho",
+        "Diagnostics only samples while its screen is visible and focused." =>
+            "O diagnóstico só realiza medições enquanto sua tela estiver visível e em foco.",
+        "Changes take effect after a successful save and are restored on the next launch." =>
+            "As alterações entram em vigor após serem salvas e são restauradas na próxima inicialização.",
         "Controller options saved" => "Opções do controlador salvas",
         "Hunts · Atlas" => "Hunts · Atlas",
         "Hunt Atlas" => "Hunt Atlas",
