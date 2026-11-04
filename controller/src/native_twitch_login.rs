@@ -1,7 +1,7 @@
-//! Twitch login normally uses an ordinary, uninstrumented Firefox window and
-//! reads this profile's own Twitch auth-token from cookies.sqlite. A separate
-//! user-selected fallback opens Firefox with BiDi and asks Firefox itself for
-//! the same first-party cookie when direct SQLite access is troublesome.
+//! Twitch login prefers the Android TV device-code flow used by the reference
+//! channel-points miner so the OAuth token and Twitch Client-ID are paired the
+//! same way. Firefox cookie import and a BiDi cookie reader remain available
+//! as compatibility fallbacks for existing browser sessions.
 use crate::config::{Config, GameProfile};
 use crate::{firefox, native_auth};
 use reqwest::blocking::Client;
