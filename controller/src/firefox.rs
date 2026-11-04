@@ -107,6 +107,29 @@ pub fn launch_twitch_login(config: &Config) -> Result<Child, String> {
     twitch_login_command(config).spawn().map_err(format_spawn_error)
 }
 
+pub fn launch_twitch_login_bidi(config:&Config)->Result<Child,String> {
+    migrate_legacy_profile(config)?;
+    if !config.profile_dir.is_dir() {
+        return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
+    }
+    if find_profile_process(config)?.is_some() {
+        return Err("This account's Firefox profile is already open. Close it before using alternative Twitch sign-in.".into());
+    }
+    ensure_debug_port_available(config.remote_debug_port)?;
+    let mut command=Command::new(&config.firefox_executable);
+    command
+        .arg("--no-remote")
+        .arg(format!("--remote-debugging-port={}",config.remote_debug_port))
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-window")
+        .arg("https://www.twitch.tv/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command.spawn().map_err(format_spawn_error)
+}
+
 fn twitch_login_command(config: &Config) -> Command {
     let mut command = Command::new(&config.firefox_executable);
     command
