@@ -303,6 +303,9 @@ impl ControllerApp {
     /// Returns whether shutdown was accepted (not whether it has finished).
     pub(super) fn stop_one(&mut self, profile: GameProfile) -> bool {
         let index = Self::game_index(profile);
+        // An explicit Stop must not later look like an unexpected outage.
+        self.last_native_phase[index] = None;
+        self.disconnection_alerts[index] = alerts::DisconnectAlertState::default();
         // An explicit Stop cancels any previously requested restart.
         self.runtimes[index].session.after_stop = None;
         if self.runtimes[index].game.stopping {
