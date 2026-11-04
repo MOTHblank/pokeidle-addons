@@ -396,7 +396,7 @@ fn draw_boss_status_card(
                     live && view.can_stop,
                     egui::Button::new(stop_label),
                 ).on_hover_text(tr("Stop repetition and return")).clicked() {
-                    action = Some(GameCommand::BossStop);
+                    *action = Some(GameCommand::BossStop);
                     app.workspace.boss_leave_confirm[index] = false;
                     app.workspace.boss_leave_target[index] = None;
                 }
@@ -441,7 +441,7 @@ fn draw_boss_status_card(
                                 ),
                                 egui::Button::new(tr("Confirm leave")),
                             ).clicked() {
-                                action = Some(GameCommand::BossLeave);
+                                *action = Some(GameCommand::BossLeave);
                                 app.workspace.boss_leave_confirm[index] = false;
                                 app.workspace.boss_leave_target[index] = None;
                             }
