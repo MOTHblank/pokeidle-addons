@@ -178,6 +178,54 @@ impl Config {
         Ok(accounts)
     }
 
+    pub fn twitch_favorites_path() -> Result<PathBuf, String> {
+        Ok(data_root()?.join("twitch-favorites.json"))
+    }
+
+    /// Favorites are public channel names; Twitch tokens remain in the OS vault.
+    pub fn load_twitch_favorites() -> Result<[Vec<String>; 4], String> {
+        let mut saved: [Vec<String>;4] = std::array::from_fn(|_| Vec::new());
+        let path = Self::twitch_favorites_path()?;
+        if !path.exists() { return Ok(saved); }
+        let raw = std::fs::read_to_string(path)
+            .map_err(|_| "Could not read Twitch favorites".to_owned())?;
+        let data: Value = serde_json::from_str(&raw)
+            .map_err(|_| "Invalid Twitch favorites".to_owned())?;
+        if let Some(accounts) = data.get("accounts").and_then(Value::as_array) {
+            for item in accounts {
+                let Some(slot) = item.get("slot").and_then(Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n < 4) else {continue};
+                let Some(channels) = item.get("favorites").and_then(Value::as_array) else {continue};
+                for channel in channels.iter().take(128) {
+                    let Some(login) = channel.as_str().and_then(moth_twitch::normalize_login) else {continue};
+                    if !saved[slot].contains(&login) {saved[slot].push(login);}
+                }
+            }
+        }
+        Ok(saved)
+    }
+
+    pub fn save_twitch_favorites(favorites: &[Vec<String>; 4]) -> Result<(), String> {
+        for list in favorites {
+            if list.len() > 128 || list.iter().any(|channel|
+                moth_twitch::normalize_login(channel).as_deref() != Some(channel.as_str()))
+            {
+                return Err("Invalid Twitch favorites".into());
+            }
+        }
+        let path = Self::twitch_favorites_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|_| "Could not prepare Twitch favorites directory".to_owned())?;
+        }
+        let data = json!({"version":1,"accounts": favorites.iter().enumerate()
+            .map(|(slot, list)|json!({"slot":slot,"favorites":list})).collect::<Vec<_>>()});
+        let raw = serde_json::to_string_pretty(&data)
+            .map_err(|_| "Could not encode Twitch favorites".to_owned())?;
+        save_config_atomic(&path, &raw, "Twitch favorites")
+    }
+
     /// Public Kick channel choices only. API tokens are never stored here.
     pub fn kick_channels_path() -> Result<PathBuf, String> {
         Ok(data_root()?.join("kick-channels.json"))
