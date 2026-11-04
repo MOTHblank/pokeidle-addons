@@ -81,7 +81,6 @@ impl ControllerApp {
                 let detected = Config::for_profile(profile)
                     .and_then(|config| firefox::find_profile_process(&config));
                 let existing_firefox = matches!(detected.as_ref(), Ok(Some(_)));
-                let mut twitch_auto_detected = false;
                 let mut browser_required = false;
                 // A cache preflight panic must never strand the UI in
                 // "starting" state. A panic or transient transport failure is
@@ -96,67 +95,25 @@ impl ControllerApp {
                             {
                                 Ok(saved) => saved,
                                 Err(error) => {
-                                    browser_required = !error.starts_with("Cached login canceled:");
+                                    browser_required =
+                                        !error.starts_with("Cached login canceled:");
                                     return Err(error);
                                 }
                             };
-                            let Some(mut bootstrap) = saved else {
+                            let Some(bootstrap) = saved else {
                                 browser_required = true;
                                 return Ok(None);
                             };
 
-                            // Existing users may have Twitch already signed in
-                            // inside this profile while PokéIdle starts entirely
-                            // from its encrypted native cache. Probe that local
-                            // profile once, headlessly, before starting native
-                            // gameplay so transition to the miner is automatic.
-                            if crate::native_auth::twitch_profile_probe_needed(&bootstrap) {
-                                match Config::for_profile(profile)
-                                    .and_then(|config|
-                                        firefox::detect_existing_twitch_login(&config))
-                                {
-                                    Ok(token) => {
-                                        twitch_auto_detected = token.is_some();
-                                        let (updated, warning) =
-                                            crate::native_auth::cache_twitch_profile_probe(
-                                                profile,&bootstrap,token.as_deref(),
-                                                &generation_state,generation);
-                                        bootstrap = updated;
-                                        if let Some(warning) = warning {
-                                            logging::warn(&format!(
-                                                "{} Twitch login migration cache warning: {warning}",
-                                                profile.name()
-                                            ));
-                                        }
-                                        if twitch_auto_detected {
-                                            logging::info(&format!(
-                                                "{} existing Twitch login detected automatically",
-                                                profile.name()
-                                            ));
-                                        } else {
-                                            logging::info(&format!(
-                                                "{} Twitch login migration checked; no existing login found",
-                                                profile.name()
-                                            ));
-                                        }
-                                    }
-                                    Err(error) => {
-                                        // Twitch is optional. A failed migration
-                                        // probe must never block PokéIdle.
-                                        logging::warn(&format!(
-                                            "{} automatic Twitch login detection unavailable: {error}",
-                                            profile.name()
-                                        ));
-                                    }
-                                }
-                            }
-
-                            // Only an explicit HTTP authentication rejection
-                            // proves that Firefox must refresh the saved login.
+                            // Twitch migration is handled inside the native
+                            // session from its dedicated protected vault and
+                            // the Firefox cookie DB. It never determines whether
+                            // PokéIdle itself needs browser authentication.
                             match NativeSession::start_verified(profile, bootstrap) {
                                 Ok(native) => Ok(Some(native)),
                                 Err(error) => {
-                                    browser_required = crate::native_background::authentication_rejected(&error);
+                                    browser_required =
+                                        crate::native_background::authentication_rejected(&error);
                                     Err(error)
                                 }
                             }
@@ -173,8 +130,7 @@ impl ControllerApp {
                     other=>other,
                 };
                 let _ = tx.send(CachedNativeEvent {
-                    index, generation, existing_firefox, twitch_auto_detected,
-                    browser_required, result
+                    index, generation, existing_firefox, browser_required, result
                 });
             });
         if let Err(error) = started {
@@ -532,19 +488,6 @@ impl ControllerApp {
         let account_name = self.account_name(profile);
         self.refresh_processes();
 
-        // Twitch login is optional. Never stop a working PokéIdle native
-        // connection merely to open the shared Firefox profile for Twitch.
-        // Ask the user to stop the account explicitly first.
-        if matches!(action, ProfileAction::TwitchMiner)
-            && (self.runtimes[index].game.native.is_some()
-                || self.runtimes[index].session.cached_native_busy)
-        {
-            self.set_status(format!(
-                "{account_name}: Twitch sign-in requires this account to be stopped first. PokéIdle was left running."
-            ), true);
-            return;
-        }
-
         // A native handoff still owns the profile until its cleanup finishes.
         // stop_one intentionally cancels it asynchronously, so do not launch
         // another Firefox against the same locked profile during that window.
@@ -583,17 +526,11 @@ impl ControllerApp {
                 config.url.as_str(),
                 " opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
             ),
-            ProfileAction::TwitchMiner => (
-                "Twitch",
-                "https://www.twitch.tv/",
-                " opened Firefox without remote debugging for optional Twitch miner sign-in. After signing in, close that window and launch this account normally to start the miner.",
-            ),
             ProfileAction::Folder => return,
         };
 
         let launched = match action {
             ProfileAction::GoogleSignIn => firefox::launch_unmonitored(&config, url),
-            ProfileAction::TwitchMiner => firefox::launch_twitch_login(&config),
             ProfileAction::Folder => return,
         };
 
@@ -606,11 +543,7 @@ impl ControllerApp {
                 self.runtimes[index].game.browser_only = true;
                 self.runtimes[index].game.headless = false;
                 // Google/PokéIdle sign-in may change the game credentials.
-                // Twitch sign-in cannot invalidate an otherwise valid cached
-                // PokéIdle login: keep the next Start on the fast native path.
-                if matches!(action, ProfileAction::GoogleSignIn) {
-                    self.runtimes[index].session.require_browser_login = true;
-                }
+                self.runtimes[index].session.require_browser_login = true;
                 logging::info(&format!(
                     "{} Firefox spawned for {} sign-in without remote debugging (PID {})",
                     account_name, service, pid
@@ -629,7 +562,7 @@ impl ControllerApp {
 
     pub(super) fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
         let result = match action {
-            ProfileAction::GoogleSignIn | ProfileAction::TwitchMiner => {
+            ProfileAction::GoogleSignIn => {
                 self.open_unmonitored_sign_in(profile, action);
                 return;
             }

@@ -168,6 +168,24 @@ impl ControllerApp {
             game.set_twitch_favorites(self.workspace.twitch_favorites[index].clone());
         }
     }
+    fn forget_twitch_account(&mut self,index:usize) {
+        let Some(profile)=GameProfile::from_index(index) else{return};
+        if let Err(error)=crate::native_twitch_login::clear_browser_session(profile) {
+            self.set_status(error,true);
+            return;
+        }
+        if let Err(error)=crate::native_auth::clear_twitch_token(profile) {
+            self.set_status(error,true);
+            return;
+        }
+        if let Some(game)=self.runtimes[index].game.native.as_ref() {
+            game.forget_twitch_login();
+        }
+        crate::native_twitch_login::reset(profile);
+        self.runtimes[index].twitch.login_done_seen=false;
+        self.set_status(label(pt_br(),"Twitch login removed","Login Twitch removido"),false);
+    }
+
 }
 
 pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
@@ -199,6 +217,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
         let index = app.workspace.twitch_selected_account.min(3);
         let profile = GameProfile::from_index(index).expect("valid Twitch account");
+        let login_status=crate::native_twitch_login::status(profile);
         let (has_game, snapshot, game_state) = {
             let game = app.runtimes[index].game.native.as_ref();
             (game.is_some(),
@@ -264,14 +283,14 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(label(br, "Twitch connection", "Conexão Twitch"))
                 .size(13.0).strong().color(TEXT));
             ui.label(RichText::new(if connected {
-                label(br, "Authenticated in this session. The miner uses HLS media activity, watch telemetry, and authenticated channel-points events without a Twitch browser tab.",
-                    "Autenticado nesta sessão. O minerador usa atividade HLS, telemetria de visualização e eventos autenticados de pontos sem aba da Twitch.")
+                label(br, "Authenticated. Twitch credentials are stored separately from PokéIdle; the miner runs without keeping a Twitch browser tab open.",
+                    "Autenticado. As credenciais da Twitch são salvas separadamente do PokéIdle; o minerador funciona sem manter uma aba da Twitch aberta.")
             } else if has_game {
-                label(br, "Existing Twitch login in this account's Firefox profile is detected automatically on startup. Use the button only to add or refresh the login, then restart the account.",
-                    "Um login Twitch já existente no perfil Firefox desta conta é detectado automaticamente ao iniciar. Use o botão apenas para adicionar ou renovar o login e depois reinicie a conta.")
+                label(br, "Moth checks this account's Firefox profile directly for an existing Twitch login. A new Firefox sign-in is imported and applied to the running miner automatically; no PokéIdle restart is needed.",
+                    "O Moth verifica diretamente o perfil Firefox desta conta em busca de um login Twitch existente. Um novo login pelo Firefox é importado e aplicado ao minerador em execução automaticamente; não é necessário reiniciar o PokéIdle.")
             } else {
-                label(br, "Start PokéIdle normally. Moth will automatically check this account's existing Firefox profile for a Twitch login before asking you to sign in again.",
-                    "Inicie o PokéIdle normalmente. O Moth verificará automaticamente se este perfil Firefox já possui login da Twitch antes de pedir um novo login.")
+                label(br, "Existing Twitch login is imported directly from this account's Firefox profile and stored in Moth's protected credential vault. Start PokéIdle afterward to receive the official streamer roster.",
+                    "Um login Twitch existente é importado diretamente do perfil Firefox desta conta e salvo no cofre protegido do Moth. Depois, inicie o PokéIdle para receber a lista oficial de streamers.")
             }).size(11.0).color(MUTED));
             if let Some(state)=snapshot.as_ref() {
                 let pubsub_text=if state.pubsub_connected {
@@ -288,9 +307,38 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }
             }
             ui.add_space(5.0);
-            if ui.button(label(br, "Sign in to Twitch with Firefox",
-                "Entrar na Twitch pelo Firefox")).clicked() {
-                app.profile_action(profile, ProfileAction::TwitchMiner);
+            ui.horizontal_wrapped(|ui| {
+                let busy=matches!(login_status,crate::native_twitch_login::LoginStatus::Running);
+                if busy {
+                    ui.label(RichText::new(label(br,
+                        "Complete sign-in in Firefox…","Conclua o login no Firefox…"))
+                        .size(11.0).color(WARN));
+                    if ui.small_button(label(br,"Cancel","Cancelar")).clicked() {
+                        crate::native_twitch_login::cancel(profile);
+                    }
+                } else if ui.button(label(br,
+                    if snapshot.is_some() {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
+                    if snapshot.is_some() {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
+                )).clicked() {
+                    // A cached Firefox cookie can complete before the next UI
+                    // pump observes LoginStatus::Running. Mark this user action
+                    // as a fresh generation immediately so Done is never
+                    // mistaken for the previous login completion.
+                    app.runtimes[index].twitch.login_done_seen=false;
+                    if let Err(error)=crate::native_twitch_login::start(profile) {
+                        app.set_status(error,true);
+                    }
+                }
+                if (snapshot.is_some() ||
+                    matches!(login_status,crate::native_twitch_login::LoginStatus::Done)) &&
+                    !busy && ui.small_button(label(br,"Forget login","Esquecer login")).clicked()
+                {
+                    app.forget_twitch_account(index);
+                }
+            });
+            if let crate::native_twitch_login::LoginStatus::Error(error)=&login_status {
+                ui.label(RichText::new(error).size(10.0)
+                    .color(if error=="Twitch login cancelled"{MUTED}else{WARN}));
             }
             if let Some(game_state) = game_state.as_ref() {
                 let linked = game_state.twitch_linked.unwrap_or(false);

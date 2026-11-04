@@ -945,7 +945,6 @@ struct CachedNativeEvent {
     index: usize,
     generation: u64,
     existing_firefox: bool,
-    twitch_auto_detected: bool,
     /// True only when the protected cache is missing/unreadable or PokéIdle
     /// explicitly rejected the saved authorization. Transient network/TLS/
     /// welcome failures must not open Firefox.
@@ -1009,7 +1008,6 @@ enum AccountsSection { Profiles, Twitch, Kick }
 #[derive(Clone, Copy)]
 enum ProfileAction {
     GoogleSignIn,
-    TwitchMiner,
     Folder,
 }
 

@@ -181,6 +181,48 @@ impl ControllerApp {
                 }
             }
         }
+        // Twitch login mirrors Kick: the background Firefox watcher stores
+        // the credential, closes its own temporary browser, then this central
+        // pump applies the new token to a live native account without restart.
+        for index in 0..self.runtimes.len() {
+            let Some(profile)=GameProfile::from_index(index) else { continue; };
+            let done=matches!(
+                crate::native_twitch_login::status(profile),
+                crate::native_twitch_login::LoginStatus::Done
+            );
+            if done && !self.runtimes[index].twitch.login_done_seen {
+                self.runtimes[index].twitch.login_done_seen=true;
+                let account_name=self.account_name(profile);
+                let token=crate::native_twitch_login::take_completed_token(profile);
+                if let (Some(game),Some(token))=(
+                    self.runtimes[index].game.native.as_ref(),token.as_deref()
+                ) {
+                    match game.refresh_twitch_token(token) {
+                        Ok(())=>{
+                            game.set_twitch_favorites(
+                                self.workspace.twitch_favorites[index].clone());
+                            self.set_status(format!(
+                                "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
+                            ),false)
+                        },
+                        Err(error)=>self.set_status(format!(
+                            "{account_name}: Twitch login saved but miner refresh failed: {error}"
+                        ),true),
+                    }
+                } else if token.is_some() {
+                    self.set_status(format!(
+                        "{account_name}: Twitch login imported; it will start with this account"
+                    ),false);
+                } else {
+                    self.set_status(format!(
+                        "{account_name}: Twitch login finished but no credential was returned"
+                    ),true);
+                }
+            } else if !done {
+                self.runtimes[index].twitch.login_done_seen=false;
+            }
+        }
+
         while let Ok(event) = self.firefox_stopped_rx.try_recv() {
             self.finish_firefox_stop(
                 event.index, event.generation, event.ownership, event.result
@@ -480,15 +522,9 @@ impl ControllerApp {
                     self.adopt_native_session(event.index, session);
                     self.runtimes[event.index].capture.capture_draft=None;
                     self.runtimes[event.index].automation.automation_draft=AutomationDraft::default();
-                    self.set_status(if event.twitch_auto_detected {
-                        format!(
-                            "{}: PokéIdle connected · existing Twitch login detected automatically",
-                            self.account_name(profile))
-                    } else {
-                        format!(
-                            "{}: PokéIdle connected with your saved login",
-                            self.account_name(profile))
-                    }, false);
+                    self.set_status(format!(
+                        "{}: PokéIdle connected with your saved login",
+                        self.account_name(profile)), false);
                 },
                 Ok(None) => {
                     self.runtimes[event.index].session.require_browser_login = true;
