@@ -24,6 +24,14 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
   A coleta acontece **somente** com a página de Diagnósticos selecionada e
   a janela em foco. Ao trocar de página ou perder o foco, todo o estado de
   coleta é descartado; sem worker de coleta, timer próprio ou escrita automática.
+  A opção **Inspecionar CPU das threads** fica **desligada por padrão**.
+  Quando ativada, consulta as threads do processo a cada 15 segundos, mostra
+  até oito threads com maior uso de CPU e seus identificadores, usando duas
+  amostras para estimar a taxa por núcleo. Não cria workers adicionais.
+  A variação de RAM é calculada desde a abertura do painel. As consultas de
+  filas e Kick só leem os campos necessários, sem copiar snapshots inteiros,
+  e não bloqueiam workers: se os dados estiverem ocupados, a leitura é
+  sinalizada como parcial.
   As métricas de CPU e RAM são do processo Moth, sem o Firefox. Filas são
   contagens de trabalho pendente, não CPU por recurso; a taxa de rede inclui
   apenas dados HLS Kick já contabilizados.
