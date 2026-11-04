@@ -181,6 +181,7 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Diagnostics" => "Diagnósticos",
         "Performance diagnostics" => "Diagnóstico de desempenho",
         "Developer capture" => "Captura de diagnóstico do desenvolvedor",
+        "Export includes manually entered marker labels. Review them before sharing a report." => "A exportação inclui as descrições dos marcadores digitadas manualmente. Revise-as antes de compartilhar o relatório.",
         "Start an explicit 1-second recording to capture CPU, RAM and thread activity while switching pages, using other applications or minimizing to the tray. It continues until stopped, with a bounded one-hour timeline." => "Inicie uma gravação explícita a cada 1 segundo para medir CPU, RAM e atividade das threads enquanto muda de página, usa outros aplicativos ou minimiza para a bandeja. A gravação continua até ser interrompida, com histórico limitado a uma hora.",
         "Start performance recording" => "Iniciar gravação de desempenho",
         "Recording active" => "Gravação ativa",
