@@ -43,7 +43,7 @@ pub struct MinerConfig {
 impl Default for MinerConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(20),
+            poll_interval: Duration::from_secs(60),
             claim_bonuses: true,
         }
     }
@@ -180,5 +180,10 @@ mod tests {
         assert!(Credentials::token_only("token").is_ok());
         assert!(Credentials::new("valid_name", "bad token").is_err());
         assert!(Credentials::new("Bad-Name", "token").is_err());
+    }
+
+    #[test]
+    fn default_poll_interval_is_at_least_one_minute() {
+        assert!(MinerConfig::default().poll_interval >= Duration::from_secs(60));
     }
 }
