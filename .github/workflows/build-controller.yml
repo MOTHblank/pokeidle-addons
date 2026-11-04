@@ -134,9 +134,8 @@ jobs:
           RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $versionado = "moth-controller-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
-          Copy-Item 'controller/target/release/moth-controller.exe' "dist/$versionado"
-          Copy-Item 'controller/target/release/moth-controller.exe' 'dist/Moth-Controller-Portable-windows-x86_64.exe'
+          $portable = "Moth-Controller-Portable-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
+          Copy-Item 'controller/target/release/moth-controller.exe' "dist/$portable"
 
           # The installer should carry the exact same application icon as the
           # executable and tray icon, without checking a generated binary into Git.
@@ -287,8 +286,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           set -euo pipefail
-          test -s "dist/moth-controller-v$RELEASE_VERSION-windows-x86_64.exe"
-          test -s "dist/Moth-Controller-Portable-windows-x86_64.exe"
+          test -s "dist/Moth-Controller-Portable-v$RELEASE_VERSION-windows-x86_64.exe"
           test -s "dist/Moth-Controller-Setup-v$RELEASE_VERSION.exe"
           test -s "dist/moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
           (cd dist && for checksum in *.sha256; do sed -i 's/\r$//' "$checksum"; done && sha256sum -c ./*.sha256)
