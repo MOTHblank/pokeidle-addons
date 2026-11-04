@@ -129,6 +129,7 @@ struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
     last_watch: Option<Instant>,
+    last_claim_id: Option<String>,
 }
 
 fn notify(wake: &PhaseWake) {
@@ -302,21 +303,24 @@ fn poll_channels(
                     if let (Some(channel_id), Some(claim_id)) =
                         (channel.channel_id.as_deref(), context.available_claim_id.as_deref())
                     {
-                        match gql.claim_bonus(channel_id, claim_id) {
-                            Ok(()) => {
-                                if let Ok(mut current) = snapshot.lock() {
-                                    current.bonuses_claimed =
-                                        current.bonuses_claimed.saturating_add(1);
+                        if channel.last_claim_id.as_deref() != Some(claim_id) {
+                            match gql.claim_bonus(channel_id, claim_id) {
+                                Ok(()) => {
+                                    channel.last_claim_id = Some(claim_id.to_owned());
+                                    if let Ok(mut current) = snapshot.lock() {
+                                        current.bonuses_claimed =
+                                            current.bonuses_claimed.saturating_add(1);
+                                    }
+                                    push_event(
+                                        events,
+                                        MinerEvent::BonusClaimed { channel: login.clone() },
+                                    );
                                 }
-                                push_event(
-                                    events,
-                                    MinerEvent::BonusClaimed { channel: login.clone() },
-                                );
-                            }
-                            Err(error) => {
-                                auth_failed |= error.is_auth();
-                                if first_error.is_none() {
-                                    first_error = Some(error);
+                                Err(error) => {
+                                    auth_failed |= error.is_auth();
+                                    if first_error.is_none() {
+                                        first_error = Some(error);
+                                    }
                                 }
                             }
                         }
