@@ -1086,22 +1086,22 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         if hunt_intel.view.bonuses.vip_known {
                             if let Some(action) = pvp.next(pref, vip, vip_auto,
                                 hunt_intel.view.trainer_level, Instant::now()) {
-                            match action {
-                                PvpAction::SetVipAuto(wanted) => {
-                                    if let Err(error) = automation_writer.queue(
-                                        "pvpAutoFila".into(), Value::Bool(wanted)) {
-                                        crate::logging::warn(&format!(
-                                            "Could not update VIP Auto PvP preference: {error}"));
+                                match action {
+                                    PvpAction::SetVipAuto(wanted) => {
+                                        if let Err(error) = automation_writer.queue(
+                                            "pvpAutoFila".into(), Value::Bool(wanted)) {
+                                            crate::logging::warn(&format!(
+                                                "Could not update VIP Auto PvP preference: {error}"));
+                                        }
                                     }
+                                    other => if let Some(wire) = other.wire() {
+                                        if socket.send(Message::Text(wire.to_string().into())).is_err() {
+                                            pvp.send_failed(other);
+                                            send_failed = true;
+                                        }
+                                    },
                                 }
-                                other => if let Some(wire) = other.wire() {
-                                    if socket.send(Message::Text(wire.to_string().into())).is_err() {
-                                        pvp.send_failed(other);
-                                        send_failed = true;
-                                    }
-                                },
                             }
-                        }
                         }
                         last_pvp_tick = Instant::now();
                     }
