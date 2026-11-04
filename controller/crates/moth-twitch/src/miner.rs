@@ -1065,7 +1065,14 @@ mod priority_tests {
         assert_eq!(channel.watch_reward_count,2);
         assert_eq!(channel.streak_confirmed,Some(true));
         assert_eq!(channel.balance,Some(120));
-        assert_eq!(snapshot.lock().unwrap().points_gained,20);
+        assert_eq!(channel.points_gained,20);
+        let current=snapshot.lock().unwrap();
+        assert_eq!(current.points_gained,20);
+        assert_eq!(
+            current.streamers.iter().find(|streamer|streamer.login=="alpha")
+                .map(|streamer|streamer.points_gained),
+            Some(20)
+        );
     }
 
     #[test]
