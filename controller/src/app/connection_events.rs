@@ -378,7 +378,9 @@ impl ControllerApp {
             logging::info(&format!(
                 "{} native game welcome confirmed; closing Firefox",
                 self.account_name(profile)));
-            let worker = std::thread::spawn(move || {
+            let worker = std::thread::Builder::new()
+                .name(format!("moth-browser-close-{}", profile.name()))
+                .spawn(move || {
                 let mut result = if let Some(child) = child.as_mut() {
                     firefox::stop_child(child, monitor.as_ref())
                 } else {
@@ -396,7 +398,8 @@ impl ControllerApp {
                     native, cache_warning: event.cache_warning,
                     child, orphaned_pid, monitor, result
                 });
-            });
+            })
+            .expect("could not start native browser close worker");
             track_firefox_shutdown(worker);
         }
         // Browser shutdown is asynchronous: the UI never blocks for BiDi
