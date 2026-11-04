@@ -57,11 +57,14 @@ fn ensure_boss_combat_reference(app: &mut ControllerApp) {
         !app.hunt_reference_busy {
         app.hunt_reference_busy = true;
         let tx = app.hunt_reference_tx.clone();
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(native_atlas::load)
-                .unwrap_or_else(|_| Err(tr("Pokémon data unavailable").into()));
-            let _ = tx.send(result);
-        });
+        std::thread::Builder::new()
+            .name("moth-boss-reference-load".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(native_atlas::load)
+                    .unwrap_or_else(|_| Err(tr("Pokémon data unavailable").into()));
+                let _ = tx.send(result);
+            })
+            .expect("could not start Boss Farm reference loader");
     }
 }
 
