@@ -130,6 +130,45 @@ pub fn launch_twitch_login_bidi(config:&Config)->Result<Child,String> {
     command.spawn().map_err(format_spawn_error)
 }
 
+/// Open a Twitch channel in this account's ordinary Firefox profile.
+///
+/// This deliberately uses Firefox's normal profile routing rather than
+/// --no-remote, BiDi, Marionette, or a debugging port. Modern Firefox resolves
+/// --profile before handing a command to an existing instance, so repeated
+/// opens reuse this same account profile when it is already running and keep
+/// different Moth account profiles isolated from one another.
+pub fn open_twitch_stream(config: &Config, login: &str) -> Result<(), String> {
+    migrate_legacy_profile(config)?;
+    if !config.profile_dir.is_dir() {
+        return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
+    }
+
+    let mut command = twitch_stream_command(config, login)?;
+    logging::info(&format!(
+        "{}: opening Twitch channel in account Firefox profile",
+        config.profile.label()
+    ));
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(format_spawn_error)
+}
+
+fn twitch_stream_command(config: &Config, login: &str) -> Result<Command, String> {
+    let login = moth_twitch::normalize_login(login)
+        .ok_or_else(|| "Invalid Twitch channel".to_owned())?;
+    let mut command = Command::new(&config.firefox_executable);
+    command
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-tab")
+        .arg(format!("https://www.twitch.tv/{login}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    Ok(command)
+}
+
 fn twitch_login_command(config: &Config) -> Command {
     let mut command = Command::new(&config.firefox_executable);
     command
@@ -734,6 +773,29 @@ mod unmonitored_login_tests {
             arg.contains("marionette") ||
             arg.contains("headless")
         }));
+    }
+
+    #[test]
+    fn twitch_stream_uses_account_profile_without_automation_flags() {
+        let config = config();
+        let command = twitch_stream_command(&config, "Some_Channel").unwrap();
+        let args: Vec<_> = command.get_args()
+            .map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--profile".to_owned()));
+        assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
+        assert!(args.contains(&"--new-tab".to_owned()));
+        assert!(args.contains(&"https://www.twitch.tv/some_channel".to_owned()));
+        assert!(!args.iter().any(|arg| {
+            arg == "--no-remote" ||
+            arg.contains("remote-debugging") ||
+            arg.contains("marionette") ||
+            arg.contains("headless")
+        }));
+    }
+
+    #[test]
+    fn twitch_stream_refuses_invalid_channel_names() {
+        assert!(twitch_stream_command(&config(), "not/a/channel").is_err());
     }
 
 
