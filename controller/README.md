@@ -21,9 +21,24 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
   de CPU; **Reiniciar medições** preserva o estado de pausa. O botão
   **Exportar relatório** grava um JSON compacto com números e índices de perfis,
   sem nomes de contas, URLs ou credenciais, somente quando acionado.
-  A coleta acontece **somente** com a página de Diagnósticos selecionada e
-  a janela em foco. Ao trocar de página ou perder o foco, todo o estado de
-  coleta é descartado; sem worker de coleta, timer próprio ou escrita automática.
+  O **painel ao vivo** coleta somente enquanto Diagnósticos está selecionado
+  e a janela está em foco; ao sair, suas medições são descartadas. O painel
+  ao vivo não mantém nenhum worker ou timer próprio fora dessa tela.
+  Para investigação aprofundada, clique em **Iniciar gravação de desempenho**:
+  isso cria explicitamente um único worker de coleta, independente da UI,
+  com CPU/RAM amostradas a cada segundo e CPU por thread a cada dois segundos.
+  A gravação continua ao mudar de página, perder o foco ou minimizar para a
+  bandeja, até clicar em **Parar e manter captura**. Seu histórico é limitado a
+  3.600 amostras (cerca de 1h), com séries temporais de CPU/RAM, picos por
+  thread, duração da UI por página (média/P95/máximo), transições de tela
+  e marcadores manuais para correlacionar lentidões. O ícone REC na barra
+  lateral indica gravação ativa. O usuário pode exportar o relatório JSON
+  **explicitamente**, ou descartar a captura; não há gravação automática em
+  disco. Rótulos de marcadores digitados manualmente são incluídos na
+  exportação e devem ser revisados antes do compartilhamento. Somente as
+  ações do desenvolvedor criam e encerram esse worker.
+  Na execução normal, sem uma gravação iniciada, **não há custo contínuo de
+  diagnóstico para usuários comuns**.
   A opção **Inspecionar CPU das threads** fica **desligada por padrão**.
   Quando ativada, consulta as threads do processo a cada 15 segundos, mostra
   até oito threads com maior uso de CPU e seus identificadores, usando duas

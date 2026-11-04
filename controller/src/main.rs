@@ -33,6 +33,7 @@ mod native_twitch;
 mod native_tls;
 mod logging;
 mod diagnostics;
+mod diagnostics_recording;
 mod diagnostics_threads;
 mod update;
 

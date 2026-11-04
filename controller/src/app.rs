@@ -59,6 +59,7 @@ use automation_widgets::{detail_stat_line, resource_chip, automation_badge, bonu
 use runtime_panel::{draw_runtime_section, draw_credits};
 use diagnostics_panel::draw_diagnostics_panel;
 use crate::diagnostics::{DiagnosticsSampler, should_sample, SAMPLE_INTERVAL};
+use crate::diagnostics_recording::RecordingSession;
 use accounts_panel::draw_accounts_panel;
 use status_widgets::{status_chip, status_badge, runtime_chip, runtime_row, section_label, sidebar_button, compact_text};
 use kick_panel::{multikick_link, open_kick_channels_in_regular_browser};
@@ -1089,6 +1090,8 @@ pub struct ControllerApp {
     events: VecDeque<UiEvent>,
     // Exists only while the Diagnostics tab is actively viewed in foreground.
     diagnostics: Option<DiagnosticsSampler>,
+    // Created only by Start recording; remains active across tabs/focus/tray.
+    recording: Option<RecordingSession>,
     account_setup_checked_at: Option<Instant>,
     update_status: SharedUpdateStatus,
     #[cfg(windows)]
@@ -1187,6 +1190,7 @@ impl ControllerApp {
             status_error: false,
             events: VecDeque::new(),
             diagnostics: None,
+            recording: None,
             account_setup_checked_at: None,
             update_status,
             #[cfg(windows)]
@@ -1262,6 +1266,9 @@ impl ControllerApp {
 
 impl Drop for ControllerApp {
     fn drop(&mut self) {
+        // A capture may have been started and the window then hidden.
+        // Wake its dedicated worker immediately; never block shutdown.
+        if let Some(recording) = self.recording.as_mut() { recording.stop(); }
         #[cfg(windows)]
         if let Some(tray) = self.tray.as_mut() {
             tray.shutdown();
@@ -1305,6 +1312,8 @@ impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // The clock is not even queried outside active diagnostics. Starting
         // here includes process refresh, connection work and all UI panels.
+        let recording_frame_start = self.recording.as_ref()
+            .is_some_and(RecordingSession::is_running).then(Instant::now);
         let diagnostics_frame_start = (self.workspace.panel_tab == PanelTab::Diagnostics
             && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
             && {
@@ -1495,6 +1504,18 @@ impl eframe::App for ControllerApp {
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
         if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
             sampler.record_frame(start.elapsed(), diagnostics_preflight, diagnostics_panel_elapsed);
+        }
+        if let (Some(start), Some(recording)) = (recording_frame_start, self.recording.as_mut()) {
+            let page = match self.workspace.panel_tab {
+                PanelTab::Overview => "Overview",
+                PanelTab::Hunts => "Hunt Atlas",
+                PanelTab::Boss => "Boss Manager",
+                PanelTab::Accounts => "Accounts",
+                PanelTab::Automation => "Automation",
+                PanelTab::Diagnostics => "Diagnostics",
+                PanelTab::Options => "Options",
+            };
+            recording.note_ui_pass(page, start.elapsed());
         }
         // Decide *after* UI controls have been processed: clicking Pause must
         // not arm a new diagnostics-specific repaint timer.

@@ -230,7 +230,7 @@ fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         }
     });
     ui.label(RichText::new(tr(
-        "Diagnostics only samples while its screen is visible and focused."
+        "Live measurements stop off-page; explicit recordings continue until stopped."
     )).size(10.0).color(DIM));
     ui.label(RichText::new(tr(
         "Changes take effect after a successful save and are restored on the next launch."
@@ -313,7 +313,14 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.open_logs();
             }
 
-            if sidebar_button(ui, tr("Diagnostics"),
+            // The persistent recording indicator is a constant-time Option
+            // check; it does not create or query any diagnostics machinery.
+            let recording = app.recording.as_ref()
+                .is_some_and(|session| session.is_running());
+            // Do not allocate or format anything for ordinary users.
+            let recording_label = recording.then(|| format!("● {} · REC", tr("Diagnostics")));
+            let diagnostics_name = recording_label.as_deref().unwrap_or(tr("Diagnostics"));
+            if sidebar_button(ui, diagnostics_name,
                 app.workspace.panel_tab == PanelTab::Diagnostics).clicked() {
                 app.workspace.panel_tab = PanelTab::Diagnostics;
             }
