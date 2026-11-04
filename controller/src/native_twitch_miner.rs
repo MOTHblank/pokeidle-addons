@@ -6,6 +6,7 @@
 use moth_twitch::{Credentials, Miner, MinerConfig, MinerControl, MinerSnapshot};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
 struct TwitchControlState {
@@ -80,6 +81,7 @@ pub struct TwitchMinerSession {
     miner: Mutex<Option<Miner>>,
     control: TwitchMinerControl,
     phase_wake: Mutex<Option<PhaseWake>>,
+    closed: AtomicBool,
 }
 
 impl TwitchMinerSession {
@@ -89,6 +91,7 @@ impl TwitchMinerSession {
             miner: Mutex::new(None),
             control,
             phase_wake: Mutex::new(None),
+            closed: AtomicBool::new(false),
         };
         if let Some(token) = token.map(str::trim).filter(|token| !token.is_empty()) {
             if let Err(error) = session.replace_token(token, None) {
@@ -105,6 +108,9 @@ impl TwitchMinerSession {
         token: &str,
         wake: Option<PhaseWake>,
     ) -> Result<(), String> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err("Twitch miner session is stopped".into());
+        }
         if let Some(wake)=wake {
             if let Ok(mut current)=self.phase_wake.lock() {
                 *current=Some(wake);
@@ -118,8 +124,16 @@ impl TwitchMinerSession {
             miner.set_phase_waker(wake);
         }
         let new_control = miner.control();
+        if self.closed.load(Ordering::Acquire) {
+            miner.stop();
+            return Err("Twitch miner session is stopped".into());
+        }
         let mut slot = self.miner.lock()
             .map_err(|_| "Twitch miner state unavailable".to_owned())?;
+        if self.closed.load(Ordering::Acquire) {
+            miner.stop();
+            return Err("Twitch miner session is stopped".into());
+        }
         if let Some(previous) = slot.take() {
             previous.stop();
         }
@@ -161,6 +175,7 @@ impl TwitchMinerSession {
     }
 
     pub fn stop(&self) {
+        self.closed.store(true,Ordering::Release);
         self.clear_login();
     }
 }
