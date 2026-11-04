@@ -3,6 +3,10 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Stop diagnostics" => "Parar diagnóstico",
+        "Stop the active developer diagnostics recording and keep its capture" =>
+            "Parar a gravação ativa de diagnóstico de desenvolvimento e manter a captura",
+        "Diagnostics recording stopped" => "Gravação de diagnóstico encerrada",
         "Moth can check GitHub and download verified updates without opening a browser." =>
             "O Moth pode verificar o GitHub e baixar atualizações verificadas sem abrir o navegador.",
         "Open update options" => "Abrir opções de atualização",
