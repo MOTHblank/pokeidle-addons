@@ -3,6 +3,8 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Phase" => "Fase",
+        "Loot totals" => "Totais de loot",
         "Auto farm" => "Farm automático",
         "Stop & return" => "Parar e retornar",
         "Leave arena" => "Sair da arena",
