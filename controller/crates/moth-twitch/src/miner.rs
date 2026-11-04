@@ -224,8 +224,8 @@ fn watch_backed_off(channel:&ChannelCache,now:Instant)->bool {
         now.saturating_duration_since(attempt)<Duration::from_secs(seconds))
 }
 
-/// Hold two candidate broadcasts long enough for Twitch to issue a streak
-/// milestone (up to 20 minutes), then rotate. Do not fill temporary gaps
+/// Hold two candidate broadcasts through the reference miner's streak
+/// priority window (7 minutes normally, 20 after 10 hours), then rotate. Do not fill temporary gaps
 /// between two telemetry POSTs with extra streams: two slots means two streams.
 fn refresh_watch_slots(
     slots:&mut Vec<WatchSlot>, live:&[String],
@@ -618,7 +618,7 @@ fn poll_channels(
             Duration::from_secs(180)
         };
         let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
-        if !due || checked_this_tick>=8 {
+        if !due || checked_this_tick>=4 {
             update_streamer(snapshot,login,channel,None);
             continue;
         }
@@ -719,7 +719,7 @@ fn poll_channels(
         let Some(channel)=cache.get_mut(login) else {continue};
         let Some(id)=channel.channel_id.as_deref() else {continue};
         if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
-            at.elapsed() >= Duration::from_secs(180)) {
+            at.elapsed() >= Duration::from_secs(120)) {
             metadata_checks+=1;
             channel.stream_checked=Some(Instant::now());
             match gql.stream_info(login) {
@@ -754,7 +754,7 @@ fn poll_channels(
         }
         if streak_checks<4 && channel.broadcast_id.is_some()
             && channel.streak_checked.is_none_or(|at|
-                at.elapsed() >= Duration::from_secs(180)) {
+                at.elapsed() >= Duration::from_secs(120)) {
             streak_checks+=1;
             channel.streak_checked=Some(Instant::now());
             match gql.streak(id) {
@@ -795,7 +795,7 @@ fn poll_channels(
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(&slot.login) else {continue};
         if channel.last_watch_attempt.is_some_and(|at|
-            at.elapsed()<Duration::from_secs(55)) {continue;}
+            at.elapsed()<Duration::from_secs(15)) {continue;}
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
         channel.last_watch_attempt=Some(Instant::now());
         match watch.send_minute_watched(
@@ -942,7 +942,7 @@ mod priority_tests {
             });
         }
         let mut slots=Vec::new();
-        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start,STREAK_PRIORITY_BASE);
         refresh_watch_slots(&mut slots,&live,&mut cache,&[],
             start+STREAK_PRIORITY_BASE+Duration::from_secs(1),STREAK_PRIORITY_BASE);
         assert!(slots.iter().any(|slot|slot.login=="gamma"));
@@ -981,6 +981,7 @@ fn update_streamer(
             state.streak_length=cache.streak_length;
             state.streak_checked=cache.streak_checked;
             state.streak_watch_attempts=cache.watch_attempts;
+            state.streak_priority_exhausted=cache.streak_priority_exhausted;
             state.last_update = cache.last_points_checked;
             state.error = error.or_else(||cache.last_error.clone());
         }
@@ -994,6 +995,7 @@ fn update_streamer(
             streak_length:cache.streak_length,
             streak_checked:cache.streak_checked,
             streak_watch_attempts:cache.watch_attempts,
+            streak_priority_exhausted:cache.streak_priority_exhausted,
             live:false,
             watching:false,
             last_update: cache.last_points_checked,
