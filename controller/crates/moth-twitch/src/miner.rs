@@ -64,7 +64,8 @@ pub struct Miner {
 
 impl Miner {
     pub fn start(credentials: Credentials, config: MinerConfig) -> Result<Self, String> {
-        let gql = TwitchGql::new(credentials.clone())?;
+        let worker_name = credentials.username.as_deref().unwrap_or("account").to_owned();
+        let gql = TwitchGql::new(credentials)?;
         let snapshot = Arc::new(Mutex::new(MinerSnapshot::default()));
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let desired = Arc::new(Mutex::new(Vec::new()));
@@ -79,7 +80,6 @@ impl Miner {
         let worker_expected_login = Arc::clone(&expected_login);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
-        let worker_name = credentials.username.as_deref().unwrap_or("account").to_owned();
         thread::Builder::new()
             .name(format!("moth-twitch-{worker_name}"))
             .spawn(move || {
