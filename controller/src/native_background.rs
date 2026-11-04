@@ -307,9 +307,8 @@ impl NativeSession {
         let initial = open_session(&credentials)?;
 
         // Twitch authentication has its own protected vault, like Kick.
-        // Existing installations are migrated without a browser launch:
-        // prefer the dedicated vault, then the current Firefox cookie DB,
-        // and only then an older bootstrap token captured before this split.
+        // Existing installations are migrated without launching another
+        // browser: prefer the dedicated vault, then Firefox's cookie database.
         let loaded_twitch = crate::native_auth::load_twitch_token(profile);
         let mut twitch_token = match loaded_twitch {
             Ok(token) => token,
@@ -321,59 +320,50 @@ impl NativeSession {
             }
         };
         let mut safe_to_scrub_legacy = twitch_token.is_some();
-        let mut profile_busy=false;
+        let mut import_failed=false;
         if twitch_token.is_none() {
             match crate::native_twitch_login::import_existing(profile) {
-                Ok(crate::native_twitch_login::ExistingLogin::Imported(token)) => {
+                Ok(Some(token)) => {
                     twitch_token=Some(token);
                     safe_to_scrub_legacy=true;
                 }
-                Ok(crate::native_twitch_login::ExistingLogin::NotFound) => {
-                    // Firefox's persisted cookie state is authoritative. Do
-                    // not resurrect an older embedded token after logout.
+                Ok(None) => {
+                    // Firefox's current cookie state is authoritative. Do not
+                    // resurrect an older embedded token after logout.
                     safe_to_scrub_legacy=true;
                 }
-                Ok(crate::native_twitch_login::ExistingLogin::ProfileBusy) =>
-                    profile_busy=true,
-                Err(error) => crate::logging::warn(&format!(
-                    "{} automatic Twitch login import unavailable: {error}",
-                    profile.name()
-                )),
+                Err(error) => {
+                    import_failed=true;
+                    crate::logging::warn(&format!(
+                        "{} automatic Twitch login import unavailable: {error}",
+                        profile.name()
+                    ));
+                }
             }
         }
-        // During a Firefox -> native PokéIdle handoff the profile is still
-        // open, so SQLite import is intentionally skipped. The in-memory
-        // bootstrap cookie is fresh and is the migration source in that case.
-        if twitch_token.is_none() && profile_busy {
+
+        // Legacy bootstrap credentials are a last-resort transition fallback
+        // only when direct cookie import itself failed. New browser handoffs no
+        // longer carry Twitch credentials at all.
+        if twitch_token.is_none() && import_failed {
             let legacy = bootstrap.get("twitch")
                 .and_then(|value| value.get("token"))
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|token| !token.is_empty())
                 .map(str::to_owned);
-            match legacy {
-                Some(token) => {
-                    match crate::native_auth::save_twitch_token(profile, &token) {
-                        Ok(()) => safe_to_scrub_legacy=true,
-                        Err(error) => {
-                            crate::logging::warn(&format!(
-                                "{} could not migrate Twitch login to protected storage: {error}",
-                                profile.name()
-                            ));
-                            // Keep using the fresh in-memory token this session,
-                            // but retain the legacy cache for a future retry.
-                            safe_to_scrub_legacy=false;
-                        }
-                    }
-                    twitch_token = Some(token);
+            if let Some(token)=legacy {
+                match crate::native_auth::save_twitch_token(profile,&token) {
+                    Ok(()) => safe_to_scrub_legacy=true,
+                    Err(error) => crate::logging::warn(&format!(
+                        "{} could not migrate legacy Twitch login to protected storage: {error}",
+                        profile.name()
+                    )),
                 }
-                None => {
-                    // The active browser handoff itself confirms no Twitch
-                    // cookie, so old embedded data can be removed safely.
-                    safe_to_scrub_legacy=true;
-                }
+                twitch_token=Some(token);
             }
         }
+
         if safe_to_scrub_legacy {
             if let Err(error)=crate::native_auth::scrub_legacy_twitch_from_game_cache(profile) {
                 crate::logging::warn(&format!(
