@@ -1240,6 +1240,8 @@ pub fn wait_for_twitch_auth_token(
     let started=Instant::now();
     let mut session:Option<BrowserSession>=None;
     let mut last_error=None;
+    let mut connected_once=false;
+    let mut reconnect_failures=0u8;
 
     while started.elapsed()<timeout {
         if cancelled.load(Ordering::Relaxed) {
@@ -1249,9 +1251,21 @@ pub fn wait_for_twitch_auth_token(
 
         if session.is_none() {
             match open_session(port) {
-                Ok(opened)=>session=Some(opened),
+                Ok(opened)=>{
+                    connected_once=true;
+                    reconnect_failures=0;
+                    session=Some(opened);
+                }
                 Err(error)=>{
                     last_error=Some(error);
+                    if connected_once {
+                        reconnect_failures=reconnect_failures.saturating_add(1);
+                        if reconnect_failures>=3 {
+                            return Err(
+                                "Alternative Twitch Firefox window closed before a new auth token was detected".into()
+                            );
+                        }
+                    }
                     thread::sleep(Duration::from_millis(350));
                     continue;
                 }
