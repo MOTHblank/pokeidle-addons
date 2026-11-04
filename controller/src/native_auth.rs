@@ -180,8 +180,12 @@ mod capture_handoff_tests {
         assert!(!twitch_profile_probe_needed(&json!({
             "bootstrap":{"hello":"new"},"twitchProbeVersion":1,"twitch":null
         })));
+        assert!(twitch_profile_probe_needed(&json!({
+            "bootstrap":{"hello":"token"},"twitch":{"token":"possibly-stale"}
+        })));
         assert!(!twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"token"},"twitch":{"token":"already-present"}
+            "bootstrap":{"hello":"refreshed"},"twitchProbeVersion":1,
+            "twitch":{"token":"current"}
         })));
     }
 
@@ -280,18 +284,12 @@ pub fn load_for_auth(profile:GameProfile,
 
 const TWITCH_PROFILE_PROBE_VERSION: u64 = 1;
 
-/// Old encrypted PokéIdle bootstraps predate Twitch-cookie import. If they
-/// already contain a Twitch token there is nothing to migrate; otherwise one
-/// local Firefox probe checks the existing profile exactly once.
+/// Old encrypted PokéIdle bootstraps predate automatic Twitch profile
+/// detection. Probe every pre-marker cache exactly once, even if it contains
+/// an older token, so Firefox can refresh a stale Twitch login transparently.
 pub fn twitch_profile_probe_needed(cached: &Value) -> bool {
-    let probed = cached.get("twitchProbeVersion").and_then(Value::as_u64)
-        .unwrap_or(0) >= TWITCH_PROFILE_PROBE_VERSION;
-    let has_token = cached.get("twitch")
-        .and_then(|value| value.get("token"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|token| !token.is_empty());
-    !probed && !has_token
+    cached.get("twitchProbeVersion").and_then(Value::as_u64)
+        .unwrap_or(0) < TWITCH_PROFILE_PROBE_VERSION
 }
 
 fn with_twitch_profile_probe(cached: &Value, token: Option<&str>) -> Value {
