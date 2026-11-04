@@ -417,14 +417,24 @@ fn draw_boss_status_card(
     
             ui.add_space(8.0);
             let compact_actions = ui.available_width() < 340.0;
-            let can_leave = live && view.arena.is_some();
+            let stopping = app.workspace.boss_stop_pending[index].is_some()
+                || view.phase.starts_with("Stopping");
+            let leaving = app.workspace.boss_leave_pending[index].is_some()
+                || view.phase.starts_with("Leaving");
+            let can_leave = live && view.arena.is_some() && !leaving;
             ui.horizontal_wrapped(|ui| {
                 let stop_label = if compact_actions {
                     tr("Stop & return")
                 } else {
                     tr("Stop repetition and return")
                 };
-                if ui.add_enabled(
+                if stopping {
+                    ui.add_enabled(false, egui::Button::new(tr("Stopping…"))
+                        .fill(WARN.linear_multiply(0.14))
+                        .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+                    ui.label(RichText::new(tr("Waiting for server confirmation…"))
+                        .size(10.0).color(WARN));
+                } else if ui.add_enabled(
                     live && view.can_stop,
                     egui::Button::new(stop_label),
                 ).on_hover_text(tr("Stop repetition and return")).clicked() {
@@ -437,7 +447,13 @@ fn draw_boss_status_card(
                 } else {
                     tr("Leave boss encounter")
                 };
-                if ui.add_enabled(
+                if leaving {
+                    ui.add_enabled(false, egui::Button::new(tr("Leaving…"))
+                        .fill(WARN.linear_multiply(0.14))
+                        .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+                    ui.label(RichText::new(tr("Returning to the saved hunt…"))
+                        .size(10.0).color(WARN));
+                } else if ui.add_enabled(
                     can_leave,
                     egui::Button::new(
                         RichText::new(leave_label).color(if can_leave { WARN } else { DIM }),
@@ -927,12 +943,39 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     GameCommand::BossLeave => tr("Boss leave queued"),
                     _ => tr("Boss command queued"),
                 };
+                let pending = command.clone();
                 let result = app.runtimes[index].game.native.as_ref()
                     .expect("native still present")
                     .send_command(command);
                 match result {
-                    Ok(()) => app.set_status(notice, false),
-                    Err(error) => app.set_status(error, true),
+                    Ok(()) => {
+                        match pending {
+                            GameCommand::BossStart { key, repeat } => {
+                                app.workspace.boss_start_pending[index] =
+                                    Some((key, repeat, Instant::now()));
+                            }
+                            GameCommand::BossStop => {
+                                app.workspace.boss_stop_pending[index] = Some(Instant::now());
+                            }
+                            GameCommand::BossLeave => {
+                                app.workspace.boss_leave_pending[index] = Some(Instant::now());
+                            }
+                            _ => {}
+                        }
+                        app.set_status(notice, false);
+                    }
+                    Err(error) => {
+                        match pending {
+                            GameCommand::BossStart { .. } =>
+                                app.workspace.boss_start_pending[index] = None,
+                            GameCommand::BossStop =>
+                                app.workspace.boss_stop_pending[index] = None,
+                            GameCommand::BossLeave =>
+                                app.workspace.boss_leave_pending[index] = None,
+                            _ => {}
+                        }
+                        app.set_status(error, true);
+                    }
                 }
             }
         });
