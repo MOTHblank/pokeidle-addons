@@ -106,11 +106,14 @@ fn draw_hunt_atlas_panel_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
         !app.hunt_reference_busy {
         app.hunt_reference_busy = true;
         let tx = app.hunt_reference_tx.clone();
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(native_atlas::load)
-                .unwrap_or_else(|_| Err(tr("Pokémon data unavailable").into()));
-            let _ = tx.send(result);
-        });
+        std::thread::Builder::new()
+            .name("moth-hunt-reference-load".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(native_atlas::load)
+                    .unwrap_or_else(|_| Err(tr("Pokémon data unavailable").into()));
+                let _ = tx.send(result);
+            })
+            .expect("could not start Hunt Atlas reference loader");
     }
     draw_atlas_view_controls(app,ui);
     draw_atlas_aoe_checkbox(app,ui);

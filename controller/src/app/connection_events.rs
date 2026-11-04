@@ -136,18 +136,21 @@ impl ControllerApp {
                     let updater=native.capture_settings_updater();
                     // Keep restock_dirty set until a successful, current
                     // acknowledgement of this exact selection arrives.
-                    std::thread::spawn(move || {
-                        let result=std::panic::catch_unwind(
-                            std::panic::AssertUnwindSafe(||
-                                crate::native_auth::persist_and_apply_capture_settings(
-                                    profile,&next,&generation_state,generation,&updater)))
-                            .unwrap_or_else(|_|
-                                Err("Encrypted restock save panicked".into()));
-                        let _=tx.send(CaptureSavedEvent {
-                            index,generation,request_id,config:next,
-                            origin:CaptureSaveOrigin::Restock,result
-                        });
-                    });
+                    std::thread::Builder::new()
+                        .name(format!("moth-capture-save-{}",profile.name()))
+                        .spawn(move || {
+                            let result=std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(||
+                                    crate::native_auth::persist_and_apply_capture_settings(
+                                        profile,&next,&generation_state,generation,&updater)))
+                                .unwrap_or_else(|_|
+                                    Err("Encrypted restock save panicked".into()));
+                            let _=tx.send(CaptureSavedEvent {
+                                index,generation,request_id,config:next,
+                                origin:CaptureSaveOrigin::Restock,result
+                            });
+                        })
+                        .expect("could not start restock capture-save worker");
                 }
             }
         }
@@ -376,8 +379,10 @@ impl ControllerApp {
             logging::info(&format!(
                 "{} native game welcome confirmed; closing Firefox",
                 self.account_name(profile)));
-            let worker = std::thread::spawn(move || {
-                let mut result = if let Some(child) = child.as_mut() {
+            let worker = std::thread::Builder::new()
+                .name(format!("moth-browser-close-{}", profile.name()))
+                .spawn(move || {
+                    let mut result = if let Some(child) = child.as_mut() {
                     firefox::stop_child(child, monitor.as_ref())
                 } else {
                     Ok(())
@@ -394,7 +399,8 @@ impl ControllerApp {
                     native, cache_warning: event.cache_warning,
                     child, orphaned_pid, monitor, result
                 });
-            });
+            })
+            .expect("could not start native browser close worker");
             track_firefox_shutdown(worker);
         }
         // Browser shutdown is asynchronous: the UI never blocks for BiDi

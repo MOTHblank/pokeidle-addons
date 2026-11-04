@@ -500,7 +500,8 @@ impl NativeSession {
                 "{} could not start Twitch credential worker: {error}",profile.name()));
         }
 
-        let worker = thread::Builder::new().name("moth-native-game".to_owned())
+        let worker = thread::Builder::new()
+            .name(format!("moth-native-game-{}", profile.name()))
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
@@ -1315,14 +1316,17 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             at.elapsed() >= Duration::from_secs(300)) {
                             last_metadata_attempt = Some(Instant::now());
                             let sender = metadata_tx.clone();
-                            thread::spawn(move || {
-                                let result = std::panic::catch_unwind(
-                                    crate::native_items::load
-                                ).unwrap_or_else(|_|Err(
-                                    "Public item metadata loader panicked".into()
-                                ));
-                                let _ = sender.send(result);
-                            });
+                            thread::Builder::new()
+                                .name("moth-item-metadata".into())
+                                .spawn(move || {
+                                    let result = std::panic::catch_unwind(
+                                        crate::native_items::load
+                                    ).unwrap_or_else(|_|Err(
+                                        "Public item metadata loader panicked".into()
+                                    ));
+                                    let _ = sender.send(result);
+                                })
+                                .expect("could not start item metadata worker");
                         }
                     }
                     // Read market rules only when the editor publishes a new revision.

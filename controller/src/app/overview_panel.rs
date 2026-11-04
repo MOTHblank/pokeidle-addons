@@ -142,11 +142,14 @@ pub(super) fn request_item_catalog(app:&mut ControllerApp) {
         !app.inventory_catalog_busy {
         app.inventory_catalog_busy=true;
         let tx=app.inventory_catalog_tx.clone();
-        std::thread::spawn(move || {
-            let result=std::panic::catch_unwind(native_items::load)
-                .unwrap_or_else(|_|Err("Item catalog loader panicked".into()));
-            let _=tx.send(result);
-        });
+        std::thread::Builder::new()
+            .name("moth-inventory-catalog-load".into())
+            .spawn(move || {
+                let result=std::panic::catch_unwind(native_items::load)
+                    .unwrap_or_else(|_|Err("Item catalog loader panicked".into()));
+                let _=tx.send(result);
+            })
+            .expect("could not start inventory catalog loader");
     }
 }
 /// Offline pages should offer one useful next action instead of leaving an

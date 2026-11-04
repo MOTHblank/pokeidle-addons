@@ -721,28 +721,34 @@ mod platform {
             .ok_or_else(||"Desktop keyring output unavailable".to_owned())?;
         let stderr=child.stderr.take()
             .ok_or_else(||"Desktop keyring diagnostics unavailable".to_owned())?;
-        let stdout_reader=std::thread::spawn(move ||{
+        let stdout_reader=std::thread::Builder::new()
+            .name("moth-keyring-stdout".into())
+            .spawn(move ||{
             let mut bytes=Vec::new();
             let mut stream=stdout.take((MAX_BOOTSTRAP_BYTES+5) as u64);
             let _=stream.read_to_end(&mut bytes);
             bytes
-        });
-        let stderr_reader=std::thread::spawn(move ||{
+        }).expect("could not start keyring stdout reader");
+        let stderr_reader=std::thread::Builder::new()
+            .name("moth-keyring-stderr".into())
+            .spawn(move ||{
             let mut bytes=Vec::new();
             let mut stream=stderr.take(4096);
             let _=stream.read_to_end(&mut bytes);
             bytes
-        });
+        }).expect("could not start keyring stderr reader");
         let input_writer=input.map(|data|{
             let writer=child.stdin.take();
             let data=data.to_vec();
-            std::thread::spawn(move ||{
+            std::thread::Builder::new()
+                .name("moth-keyring-stdin".into())
+                .spawn(move ||{
                 let Some(mut writer)=writer else {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::BrokenPipe,"keyring stdin unavailable"));
                 };
                 writer.write_all(&data)
-            })
+            }).expect("could not start keyring stdin writer")
         });
         let started=Instant::now();
         let status=loop {

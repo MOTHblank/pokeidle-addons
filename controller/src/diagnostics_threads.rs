@@ -1,8 +1,15 @@
 //! Optional, on-demand CPU inspection of controller threads.
 //!
 //! Invoked only from the focused Diagnostics page, when its detailed thread
-//! inspection checkbox is enabled and the 15-second interval is due. There is
-//! no background thread, persistent OS handle, or global sampling counter.
+//! inspection checkbox is enabled and the interval is due. Each expensive OS
+//! enumeration runs on a short-lived named worker; there is no persistent poller
+//! or retained OS handle when diagnostics is inactive.
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+static REGISTERED_NAMES: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+
 #[derive(Clone, Debug)]
 pub(crate) struct ThreadCounter {
     pub(crate) id: u64,
@@ -10,10 +17,92 @@ pub(crate) struct ThreadCounter {
     pub(crate) cpu_ns: u128,
 }
 
+#[derive(Clone, Debug)]
 pub(crate) struct ThreadSnapshot {
     pub(crate) count: u32,
     pub(crate) threads: Vec<ThreadCounter>,
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct ThreadProbeResult {
+    pub(crate) captured_at: Instant,
+    pub(crate) elapsed: Duration,
+    pub(crate) snapshot: Option<ThreadSnapshot>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ThreadProbe {
+    result: Arc<Mutex<Option<ThreadProbeResult>>>,
+}
+
+impl ThreadProbe {
+    pub(crate) fn start() -> Self {
+        let result = Arc::new(Mutex::new(None));
+        let worker_result = Arc::clone(&result);
+        let started = Instant::now();
+        let spawn = std::thread::Builder::new()
+            .name("moth-diagnostics-thread-probe".into())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let snapshot = inspect();
+                let completed = ThreadProbeResult {
+                    captured_at: Instant::now(),
+                    elapsed: started.elapsed(),
+                    snapshot,
+                };
+                if let Ok(mut slot) = worker_result.lock() {
+                    *slot = Some(completed);
+                }
+            });
+        if spawn.is_err() {
+            if let Ok(mut slot) = result.lock() {
+                *slot = Some(ThreadProbeResult {
+                    captured_at: Instant::now(),
+                    elapsed: started.elapsed(),
+                    snapshot: None,
+                });
+            }
+        }
+        Self { result }
+    }
+
+    pub(crate) fn try_take(&self) -> Option<ThreadProbeResult> {
+        self.result.lock().ok()?.take()
+    }
+}
+
+pub(crate) fn register_current(name: &str) {
+    if let Some(id) = current_os_thread_id() {
+        let names = REGISTERED_NAMES.get_or_init(|| Mutex::new(HashMap::new()));
+        if let Ok(mut names) = names.lock() {
+            names.insert(id, display_name(name, id));
+        }
+    }
+}
+
+fn registered_name(id: u64) -> Option<String> {
+    REGISTERED_NAMES.get()?.lock().ok()?.get(&id).cloned()
+}
+
+#[cfg(windows)]
+fn current_os_thread_id() -> Option<u64> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetCurrentThreadId() -> u32; }
+    Some(u64::from(unsafe { GetCurrentThreadId() }))
+}
+
+#[cfg(target_os = "linux")]
+fn current_os_thread_id() -> Option<u64> {
+    std::fs::read_link("/proc/thread-self")
+        .ok()?
+        .file_name()?
+        .to_str()?
+        .parse::<u64>()
+        .ok()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn current_os_thread_id() -> Option<u64> { None }
 
 /// Limit untrusted OS thread descriptions before placing them in the UI.
 fn display_name(name: &str, id: u64) -> String {
@@ -47,7 +136,8 @@ pub(crate) fn inspect() -> Option<ThreadSnapshot> {
         // The comm field can contain whitespace and parentheses. The final
         // ") " precedes state (field 3); utime is field 14.
         let Some((comm_prefix, fields)) = stat.rsplit_once(") ") else { continue; };
-        let name = comm_prefix.split_once('(').map(|(_, name)| name).unwrap_or("");
+        let os_name = comm_prefix.split_once('(').map(|(_, name)| name).unwrap_or("");
+        let name = registered_name(tid).unwrap_or_else(|| display_name(os_name, tid));
         let mut fields = fields.split_whitespace();
         let Some(user_ticks) = fields.nth(11).and_then(|v| v.parse::<u128>().ok()) else {
             continue;
@@ -57,7 +147,7 @@ pub(crate) fn inspect() -> Option<ThreadSnapshot> {
         };
         let cpu_ns = user_ticks.saturating_add(system_ticks)
             .saturating_mul(Duration::from_secs(1).as_nanos()) / hz as u128;
-        threads.push(ThreadCounter { id: tid, name: display_name(name, tid), cpu_ns });
+        threads.push(ThreadCounter { id: tid, name, cpu_ns });
     }
     Some(ThreadSnapshot { count, threads })
 }
@@ -120,7 +210,8 @@ pub(crate) fn inspect() -> Option<ThreadSnapshot> {
                     &mut created, &mut exited, &mut kernel, &mut user) } != 0
                 {
                     let mut description: *mut u16 = ptr::null_mut();
-                    let name = if unsafe { GetThreadDescription(thread, &mut description) } == 0
+                    let id = u64::from(entry.thread_id);
+                    let described = if unsafe { GetThreadDescription(thread, &mut description) } == 0
                         && !description.is_null()
                     {
                         let mut len = 0usize;
@@ -130,10 +221,13 @@ pub(crate) fn inspect() -> Option<ThreadSnapshot> {
                         let utf16 = unsafe { std::slice::from_raw_parts(description, len) };
                         let label = String::from_utf16_lossy(utf16);
                         unsafe { LocalFree(description.cast()); }
-                        display_name(&label, u64::from(entry.thread_id))
+                        let label = label.trim().to_owned();
+                        (!label.is_empty()).then_some(display_name(&label, id))
                     } else {
-                        format!("Thread {}", entry.thread_id)
+                        None
                     };
+                    let name = registered_name(id).or(described)
+                        .unwrap_or_else(|| format!("Thread {}", entry.thread_id));
                     threads.push(ThreadCounter {
                         id: u64::from(entry.thread_id),
                         name,
