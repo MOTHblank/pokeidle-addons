@@ -65,6 +65,16 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
             "Somente as últimas 500 vitórias são preservadas por conta.",
         "Boss farming queued" => "Farm de boss enviado à fila",
         "Boss fight queued" => "Batalha de boss enviada à fila",
+        "Boss farming requested" => "Farm de boss solicitado",
+        "Boss fight requested" => "Batalha de boss solicitada",
+        "Switching to boss; waiting for the same travel opening as Hunt Atlas." =>
+            "Trocando para o boss; aguardando a mesma janela de troca do Hunt Atlas.",
+        "Switching to boss when the Hunt Atlas travel gate opens" =>
+            "Trocando para o boss quando a janela do Hunt Atlas abrir",
+        "Switching from the current hunt to boss farm" =>
+            "Trocando da hunt atual para o farm de boss",
+        "Switching from the current hunt to the boss" =>
+            "Trocando da hunt atual para o boss",
         "Boss stop queued" => "Parada do boss enviada à fila",
         "Boss leave queued" => "Saída do boss enviada à fila",
         "Choose boss" => "Escolher boss",
