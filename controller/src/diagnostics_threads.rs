@@ -226,7 +226,7 @@ pub(crate) fn inspect() -> Option<ThreadSnapshot> {
                     } else {
                         None
                     };
-                    let name = described.or_else(|| registered_name(id))
+                    let name = registered_name(id).or(described)
                         .unwrap_or_else(|| format!("Thread {}", entry.thread_id));
                     threads.push(ThreadCounter {
                         id: u64::from(entry.thread_id),
