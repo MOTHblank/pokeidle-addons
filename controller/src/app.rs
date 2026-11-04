@@ -1328,8 +1328,12 @@ impl ControllerApp {
                 alerts::maybe_notify_kind(alerts::AlertKind::Auth,
                     self.preferences, &mut self.last_alert);
             }
+            // A dropped native session can leave no process handles at all.
+            // Keep observing a previously-online account until the user
+            // explicitly Stops it or it recovers.
             let still_active = !game.stopping && (game.native.is_some()
-                || game.child.is_some() || game.orphaned_pid.is_some());
+                || game.child.is_some() || game.orphaned_pid.is_some()
+                || was_online || self.disconnection_alerts[index].pending());
             if self.disconnection_alerts[index].observe(
                 was_online, phase.as_deref(), still_active, now) {
                 alerts::maybe_notify_kind(alerts::AlertKind::Disconnect,
