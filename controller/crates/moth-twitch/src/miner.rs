@@ -194,6 +194,8 @@ struct ChannelCache {
     last_claim_id: Option<String>,
     broadcast_id: Option<String>,
     stream_started: Option<String>,
+    live: Option<bool>,
+    last_live_checked: Option<Instant>,
     stream_checked: Option<Instant>,
     streak_checked: Option<Instant>,
     streak_confirmed: Option<bool>,
@@ -222,6 +224,30 @@ fn watch_backed_off(channel:&ChannelCache,now:Instant)->bool {
     let seconds=(steps*5*60).min(30*60);
     channel.last_watch_attempt.is_some_and(|attempt|
         now.saturating_duration_since(attempt)<Duration::from_secs(seconds))
+}
+
+fn effective_live_channels(
+    channels:&[String], live_hint:&[String], cache:&HashMap<String,ChannelCache>,
+)->Vec<String> {
+    channels.iter().filter(|login| {
+        cache.get(*login).and_then(|channel|channel.live)
+            .unwrap_or_else(||live_hint.binary_search(*login).is_ok())
+    }).cloned().collect()
+}
+
+fn clear_stream_state(channel:&mut ChannelCache) {
+    channel.broadcast_id=None;
+    channel.stream_started=None;
+    channel.stream_checked=None;
+    channel.streak_confirmed=None;
+    channel.streak_checked=None;
+    channel.watch_attempts=0;
+    channel.watch_reward_count=0;
+    channel.watch_failures=0;
+    channel.last_watch_attempt=None;
+    channel.streak_priority_exhausted=false;
+    channel.last_watch=None;
+    channel.last_media_activity=None;
 }
 
 /// Hold two candidate broadcasts through the reference miner's streak
@@ -586,7 +612,7 @@ fn poll_channels(
     viewer: &ViewerIdentity,
     config: &MinerConfig,
     channels: &[String],
-    live: &[String],
+    live_hint: &[String],
     favorites: &[String],
     cache: &mut HashMap<String, ChannelCache>,
     watch_slots: &mut Vec<WatchSlot>,
@@ -598,33 +624,35 @@ fn poll_channels(
 ) -> bool {
     let mut first_error: Option<GqlError> = None;
     let mut auth_failed = false;
-    // Balance checks are paced separately from the two watch slots.
+    // Balance checks are paced separately from the two watch slots. PokéIdle's
+    // live roster is only a startup hint; Twitch becomes authoritative as soon
+    // as a channel receives a direct live-status result.
+    let live_now=effective_live_channels(channels,live_hint,cache);
     let mut ordered=channels.iter().collect::<Vec<_>>();
     ordered.sort_by(|a,b| {
-        let live_a=live.binary_search(a).is_ok();
-        let live_b=live.binary_search(b).is_ok();
+        let live_a=live_now.binary_search(a).is_ok();
+        let live_b=live_now.binary_search(b).is_ok();
         live_b.cmp(&live_a)
             .then_with(||cache.get(*a).and_then(|c|c.last_points_attempt)
                 .cmp(&cache.get(*b).and_then(|c|c.last_points_attempt)))
             .then_with(||a.cmp(b))
     });
     let mut checked_this_tick=0usize;
+    let mut id_checks=0usize;
     for login in ordered {
         if stop.load(Ordering::Acquire) {return false;}
         let channel = cache.entry(login.clone()).or_default();
-        let interval=if live.binary_search(login).is_ok() {
+        let interval=if live_now.binary_search(login).is_ok() {
             Duration::from_secs(45)
         } else {
             Duration::from_secs(180)
         };
-        let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
-        if !due || checked_this_tick>=4 {
-            update_streamer(snapshot,login,channel,None);
-            continue;
-        }
-        checked_this_tick+=1;
-        channel.last_points_attempt=Some(Instant::now());
         if channel.channel_id.is_none() {
+            if id_checks>=8 {
+                update_streamer(snapshot,login,channel,None);
+                continue;
+            }
+            id_checks+=1;
             match gql.lookup_channel_id(login) {
                 Ok(id) => channel.channel_id = Some(id),
                 Err(error) => {
@@ -638,6 +666,13 @@ fn poll_channels(
                 }
             }
         }
+        let due=channel.last_points_attempt.is_none_or(|at|at.elapsed()>=interval);
+        if !due || checked_this_tick>=4 {
+            update_streamer(snapshot,login,channel,None);
+            continue;
+        }
+        checked_this_tick+=1;
+        channel.last_points_attempt=Some(Instant::now());
 
         match gql.points_context(login) {
             Ok(context) => {
@@ -708,16 +743,57 @@ fn poll_channels(
     let active=cache.values().filter(|channel|channel.last_points_checked
         .is_some_and(|at|at.elapsed()<Duration::from_secs(300))
         && channel.balance.is_some()).count();
+
+    // Mirror the reference miner's lightweight WithIsStreamLiveQuery instead
+    // of trusting PokéIdle's legacy estado.twitch.lives roster. The latter can
+    // legitimately be absent/empty now that Twitch rewards are redemption-based.
+    let mut live_checks=0usize;
+    for login in channels {
+        if stop.load(Ordering::Acquire) {return false;}
+        let Some(channel)=cache.get_mut(login) else {continue};
+        let Some(channel_id)=channel.channel_id.clone() else {continue};
+        let interval=if channel.live==Some(true) {
+            Duration::from_secs(30)
+        } else {
+            Duration::from_secs(90)
+        };
+        if live_checks>=8 || channel.last_live_checked
+            .is_some_and(|at|at.elapsed()<interval) {
+            continue;
+        }
+        live_checks+=1;
+        channel.last_live_checked=Some(Instant::now());
+        match gql.is_stream_live(&channel_id) {
+            Ok(Some(live_stream)) => {
+                channel.live=Some(true);
+                if channel.stream_started.is_none() {
+                    channel.stream_started=live_stream.started_at;
+                }
+                channel.last_error=None;
+            }
+            Ok(None) => {
+                channel.live=Some(false);
+                clear_stream_state(channel);
+            }
+            Err(error) => {
+                auth_failed |= error.is_auth();
+                channel.last_error=Some(error.user_message());
+                if first_error.is_none() {first_error=Some(error);}
+            }
+        }
+        update_streamer(snapshot,login,channel,None);
+    }
+    let live=effective_live_channels(channels,live_hint,cache);
     // Inspect every live official stream on a bounded cadence. A fresh
     // broadcast always resets prior streak evidence and watch attempts.
     // Limit metadata/reward-list work per tick to prevent large rosters from
     // delaying minute-watched credit and point claims.
     let mut metadata_checks=0usize;
     let mut streak_checks=0usize;
-    for login in live {
+    for login in &live {
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(login) else {continue};
-        let Some(id)=channel.channel_id.as_deref() else {continue};
+        let Some(id)=channel.channel_id.clone() else {continue};
         if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
             at.elapsed() >= Duration::from_secs(120)) {
             metadata_checks+=1;
@@ -731,19 +807,15 @@ fn poll_channels(
                         channel.streak_checked=None;
                         channel.watch_attempts=0;
                         channel.watch_reward_count=0;
+                        channel.watch_failures=0;
+                        channel.last_watch_attempt=None;
                         channel.streak_priority_exhausted=false;
                         channel.last_watch=None;
                         channel.last_media_activity=None;
                     }
                 }
                 Ok(None) => {
-                    channel.broadcast_id=None;
-                    channel.stream_started=None;
-                    channel.streak_confirmed=None;
-                    channel.streak_checked=None;
-                    channel.watch_attempts=0;
-                    channel.watch_reward_count=0;
-                    channel.streak_priority_exhausted=false;
+                    clear_stream_state(channel);
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
@@ -757,7 +829,7 @@ fn poll_channels(
                 at.elapsed() >= Duration::from_secs(120)) {
             streak_checks+=1;
             channel.streak_checked=Some(Instant::now());
-            match gql.streak(id) {
+            match gql.streak(&id) {
                 Ok(milestone) => {
                     channel.streak_length=milestone.length;
                     let detected=match (
@@ -789,7 +861,7 @@ fn poll_channels(
     // fresh temporary watch sessions while selected streams are between
     // their minute-watched requests.
     refresh_watch_slots(
-        watch_slots,live,cache,favorites,Instant::now(),streak_limit
+        watch_slots,&live,cache,favorites,Instant::now(),streak_limit
     );
     for slot in watch_slots.iter() {
         if stop.load(Ordering::Acquire) {return false;}
@@ -1029,6 +1101,17 @@ mod priority_tests {
         }
         assert_eq!(watch_priority(&"star".into(),&"other".into(),&cache,
             &["star".into()]),std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn twitch_live_result_overrides_legacy_live_hint() {
+        let channels=vec!["live".into(),"offline".into(),"unknown".into()];
+        let hints=vec!["offline".into(),"unknown".into()];
+        let mut cache=HashMap::new();
+        cache.insert("live".into(),ChannelCache {live:Some(true),..Default::default()});
+        cache.insert("offline".into(),ChannelCache {live:Some(false),..Default::default()});
+        assert_eq!(effective_live_channels(&channels,&hints,&cache),
+            vec!["live".to_owned(),"unknown".to_owned()]);
     }
 }
 

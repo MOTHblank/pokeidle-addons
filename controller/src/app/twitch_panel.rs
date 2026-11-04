@@ -241,12 +241,10 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             let confirmed=eligible.filter(|channel|channel.streak_confirmed==Some(true)).count();
             (confirmed,live)
         }).unwrap_or((0,0));
-        let mut live_names=game_state.as_ref()
-            .and_then(|state|state.twitch_official_live.clone())
-            .unwrap_or_else(||snapshot.as_ref().map(|state|
-                state.streamers.iter().filter(|channel|channel.live)
-                    .map(|channel|channel.login.clone()).collect::<Vec<_>>()
-            ).unwrap_or_default());
+        let mut live_names=snapshot.as_ref().map(|state|
+            state.streamers.iter().filter(|channel|channel.live)
+                .map(|channel|channel.login.clone()).collect::<Vec<_>>()
+        ).unwrap_or_default();
         live_names.sort_unstable();
         live_names.dedup();
         let mut mining_names=snapshot.as_ref().map(|state|
@@ -446,13 +444,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     channels.insert(streamer.login.clone(),streamer.clone());
                 }
             }
-            if let Some(state)=game_state.as_ref() {
-                if let Some(live)=state.twitch_official_live.as_ref() {
-                    for channel in channels.values_mut() {
-                        channel.live=live.binary_search(&channel.login).is_ok();
-                    }
-                }
-            }
+            // Live/offline state comes from moth-twitch's direct Twitch checks.
+            // PokéIdle's legacy live roster is no longer authoritative.
             if channels.is_empty() {
                 ui.label(RichText::new(label(br,
                     "No official streamer catalog yet. Connect PokéIdle to discover channels.",
