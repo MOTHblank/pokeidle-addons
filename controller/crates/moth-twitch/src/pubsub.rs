@@ -1,5 +1,4 @@
-use crate::client::random_string;
-use rand::{rngs::OsRng, Rng};
+use crate::client::{random_string,random_u64_inclusive};
 use serde_json::{json, Value};
 use std::io::ErrorKind;
 use std::net::TcpStream;
@@ -60,8 +59,7 @@ pub(crate) fn spawn(
 }
 
 fn random_ping_interval()->Duration {
-    let mut rng=OsRng;
-    Duration::from_secs(rng.gen_range(25..=30))
+    Duration::from_secs(random_u64_inclusive(25,30))
 }
 
 fn configure_timeout(socket: &mut WebSocket<MaybeTlsStream<TcpStream>>) {
