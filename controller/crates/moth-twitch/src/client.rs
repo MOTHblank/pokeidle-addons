@@ -1,5 +1,3 @@
-use rand::{rngs::OsRng, Rng};
-
 pub const REFERENCE_CLIENT_ID: &str = "ue6666qo983tsx6so1t0vnawi233wa";
 pub const DEFAULT_CLIENT_VERSION: &str = "ef928475-9403-42f2-8a34-55784bd08e16";
 pub const ANDROID_TV_USER_AGENT: &str =
@@ -11,18 +9,30 @@ pub const DEVICE_FLOW_SCOPES: &str =
 
 pub fn random_string(length: usize) -> String {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let mut rng = OsRng;
-    (0..length)
-        .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
-        .collect()
+    let mut bytes=vec![0u8;length];
+    if getrandom::fill(&mut bytes).is_err() {
+        // Device/session identifiers are not secrets. Preserve a usable
+        // fallback only for platforms where OS randomness is unavailable.
+        let seed=std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+        for (index,byte) in bytes.iter_mut().enumerate() {
+            *byte=(seed.rotate_left((index%128) as u32) as u8)
+                .wrapping_add(index as u8);
+        }
+    }
+    bytes.into_iter().map(|byte|CHARSET[byte as usize%CHARSET.len()] as char).collect()
 }
 
 pub fn random_hex(byte_length: usize) -> String {
     use std::fmt::Write as _;
-    let mut rng = OsRng;
-    let mut output = String::with_capacity(byte_length.saturating_mul(2));
-    for _ in 0..byte_length {
-        let _ = write!(output, "{:02x}", rng.gen_range(0..=u8::MAX));
+    let mut bytes=vec![0u8;byte_length];
+    if getrandom::fill(&mut bytes).is_err() {
+        let fallback=random_string(byte_length);
+        bytes.copy_from_slice(fallback.as_bytes());
+    }
+    let mut output=String::with_capacity(byte_length.saturating_mul(2));
+    for byte in bytes {
+        let _=write!(output,"{byte:02x}");
     }
     output
 }
