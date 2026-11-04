@@ -425,12 +425,12 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 )
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
-                                        filter,
+                                        &mut *filter,
                                         String::new(),
                                         tr("All bosses"),
                                     );
                                     for (key, name) in &boss_names {
-                                        ui.selectable_value(filter, key.clone(), name);
+                                        ui.selectable_value(&mut *filter, key.clone(), name);
                                     }
                                 });
                         });
