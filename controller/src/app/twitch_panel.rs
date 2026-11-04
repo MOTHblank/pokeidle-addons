@@ -267,11 +267,11 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 label(br, "Authenticated in this session. The miner uses HLS media activity, watch telemetry, and authenticated channel-points events without a Twitch browser tab.",
                     "Autenticado nesta sessão. O minerador usa atividade HLS, telemetria de visualização e eventos autenticados de pontos sem aba da Twitch.")
             } else if has_game {
-                label(br, "Twitch is optional. Sign in using this account's isolated Firefox profile, then restart the account to import the session.",
-                    "A Twitch é opcional. Entre pelo perfil isolado do Firefox desta conta e reinicie a conta para importar a sessão.")
+                label(br, "Existing Twitch login in this account's Firefox profile is detected automatically on startup. Use the button only to add or refresh the login, then restart the account.",
+                    "Um login Twitch já existente no perfil Firefox desta conta é detectado automaticamente ao iniciar. Use o botão apenas para adicionar ou renovar o login e depois reinicie a conta.")
             } else {
-                label(br, "Start PokéIdle to use its official Twitch channel list. Sign in to Twitch separately if you want to mine points.",
-                    "Inicie o PokéIdle para usar a lista de canais oficiais da Twitch. Entre na Twitch separadamente para minerar pontos.")
+                label(br, "Start PokéIdle normally. Moth will automatically check this account's existing Firefox profile for a Twitch login before asking you to sign in again.",
+                    "Inicie o PokéIdle normalmente. O Moth verificará automaticamente se este perfil Firefox já possui login da Twitch antes de pedir um novo login.")
             }).size(11.0).color(MUTED));
             if let Some(state)=snapshot.as_ref() {
                 let pubsub_text=if state.pubsub_connected {
