@@ -60,8 +60,9 @@ impl Miner {
         let worker_desired = Arc::clone(&desired);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
+        let worker_name = credentials.username.as_deref().unwrap_or("account").to_owned();
         thread::Builder::new()
-            .name(format!("moth-twitch-{}", credentials.username))
+            .name(format!("moth-twitch-{worker_name}"))
             .spawn(move || {
                 run(
                     gql,
