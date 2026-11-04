@@ -195,9 +195,13 @@ impl ControllerApp {
                 let account_name=self.account_name(profile);
                 if let Some(game)=self.runtimes[index].game.native.as_ref() {
                     match game.refresh_twitch_login() {
-                        Ok(true)=>self.set_status(format!(
-                            "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
-                        ),false),
+                        Ok(true)=>{
+                            game.set_twitch_favorites(
+                                self.workspace.twitch_favorites[index].clone());
+                            self.set_status(format!(
+                                "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
+                            ),false)
+                        },
                         Ok(false)=>self.set_status(format!(
                             "{account_name}: Twitch login finished but no saved credential was found"
                         ),true),
