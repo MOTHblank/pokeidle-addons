@@ -699,6 +699,55 @@ mod priority_tests {
             &cache,&favorites),std::cmp::Ordering::Less);
     }
     #[test]
+    fn holds_two_streams_until_one_streak_is_confirmed() {
+        let start=Instant::now();
+        let live=vec!["alpha".to_owned(),"beta".to_owned(),"gamma".to_owned()];
+        let mut cache=HashMap::new();
+        for name in &live {
+            cache.insert(name.clone(),ChannelCache {
+                broadcast_id:Some(format!("{name}-broadcast")),
+                ..Default::default()
+            });
+        }
+        let mut slots=Vec::new();
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        assert_eq!(slots.len(),2);
+        let initial=slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>();
+        assert_eq!(initial,vec!["alpha","beta"]);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],
+            start+Duration::from_secs(90));
+        assert_eq!(slots.iter().map(|s|s.login.clone()).collect::<Vec<_>>(),
+            initial,"a polling cycle must not rotate unfinished streaks");
+        cache.get_mut("alpha").unwrap().streak_confirmed=Some(true);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],
+            start+Duration::from_secs(180));
+        assert_eq!(slots.len(),2);
+        assert!(slots.iter().any(|slot|slot.login=="beta"));
+        assert!(slots.iter().any(|slot|slot.login=="gamma"));
+        assert!(!slots.iter().any(|slot|slot.login=="alpha"));
+    }
+
+    #[test]
+    fn stale_streak_window_releases_slot_without_claiming_success() {
+        let start=Instant::now();
+        let live=vec!["alpha".to_owned(),"beta".to_owned(),"gamma".to_owned()];
+        let mut cache=HashMap::new();
+        for name in &live {
+            cache.insert(name.clone(),ChannelCache {
+                broadcast_id:Some(format!("{name}-broadcast")),
+                ..Default::default()
+            });
+        }
+        let mut slots=Vec::new();
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],start);
+        refresh_watch_slots(&mut slots,&live,&mut cache,&[],
+            start+Duration::from_secs(20*60+1));
+        assert!(slots.iter().any(|slot|slot.login=="gamma"));
+        assert_eq!(cache.get("alpha").unwrap().streak_confirmed,None);
+        assert_eq!(cache.get("alpha").unwrap().watch_attempts,20);
+    }
+
+    #[test]
     fn completed_streaks_follow_favorite_order() {
         let mut cache=HashMap::new();
         for name in ["star","other"] {
