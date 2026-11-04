@@ -46,6 +46,9 @@ pub(super) fn resource_chip(ui: &mut egui::Ui, text: &str) {
 }
 
 pub(super) fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good: bool) -> egui::Response {
+    let max_chars = if ui.available_width() < 240.0 { 16 }
+        else if ui.available_width() < 340.0 { 24 }
+        else { 54 };
     egui::Frame::new()
         .fill(if good { GOOD.linear_multiply(0.08) } else { PANEL_ALT })
         .stroke(Stroke::new(1.0, if good { GOOD.linear_multiply(0.28) } else { BORDER }))
@@ -60,7 +63,7 @@ pub(super) fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good
                         .color(if good { GOOD } else { MUTED }),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT))
+                ui.label(RichText::new(compact_text(tr(value), max_chars)).size(9.0).color(TEXT))
                     .on_hover_text(tr(value));
             });
         }).response
