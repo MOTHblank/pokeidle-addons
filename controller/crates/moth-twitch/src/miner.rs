@@ -241,7 +241,7 @@ fn run(
 
         if let Some(viewer) = identity.as_ref() {
             let expected = expected_login.lock().ok().and_then(|login| login.clone());
-            if let Some(expected)=expected.as_deref().filter(|expected| *expected != viewer.login) {
+            if let Some(expected)=expected.as_deref().filter(|expected| *expected != viewer.login.as_str()) {
                 if let Ok(mut current)=snapshot.lock() {
                     current.active=0;
                 }
