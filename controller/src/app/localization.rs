@@ -35,6 +35,9 @@ fn localize_status_pt(message: String) -> String {
         ("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.", "Este perfil Firefox do PokéIdle ainda está aberto. Conclua a transição nativa do jogo e tente o login Twitch novamente."),
         ("Could not observe the Twitch Firefox login window", "Não foi possível acompanhar a janela de login Twitch no Firefox"),
         ("Twitch login was imported, but its temporary Firefox window could not close: ", "O login Twitch foi importado, mas a janela temporária do Firefox não pôde ser fechada: "),
+        ("Alternative Twitch login timed out before Firefox exposed a new auth token", "Login Twitch alternativo expirou antes que o Firefox fornecesse um novo token de autenticação"),
+        ("Alternative Twitch login was imported, but its Firefox window could not close: ", "O login Twitch alternativo foi importado, mas a janela do Firefox não pôde ser fechada: "),
+        ("This account's Firefox profile is already open. Close it before using alternative Twitch sign-in.", "O perfil Firefox desta conta já está aberto. Feche-o antes de usar o login Twitch alternativo."),
         ("Twitch login not detected. Sign in using Firefox; Moth will import automatically.", "Login Twitch não detectado. Entre pelo Firefox; o Moth importará automaticamente."),
         ("Close Firefox for this account before forgetting the Twitch login.", "Feche o Firefox desta conta antes de esquecer o login Twitch."),
         (": please sign in to continue", ": faça login para continuar"),
@@ -1001,6 +1004,7 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Twitch miner" => "Minerador Twitch",
         "Optional sign-in" => "Login opcional",
         "Twitch miner sign-in (optional)" => "Login do minerador Twitch (opcional)",
+        "Twitch alternative sign-in (BiDi)" => "Login Twitch alternativo (BiDi)",
         "Twitch mining is optional and never blocks PokéIdle startup." =>
             "A mineração Twitch é opcional e nunca bloqueia a inicialização do PokéIdle.",
         "Twitch mining is optional and never blocks PokéIdle startup. Existing Firefox login is imported automatically; a new Twitch login is detected and its temporary Firefox window closes automatically." =>
