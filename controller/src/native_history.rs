@@ -272,6 +272,11 @@ impl HistoryDay {
             _ => false
         }
     }
+
+    #[cfg(test)]
+    fn to_value(&self) -> Value {
+        serde_json::to_value(self).expect("HistoryDay must serialize in tests")
+    }
 }
 /// Model estimate captured when Hunt Atlas was actually open and authenticated.
 #[derive(Clone,Debug,serde::Serialize)]
@@ -308,6 +313,11 @@ impl HistoryForecast {
             .any(|n|!n.is_finite()||*n<0.0){return None}
         Some(Self{day,hour,hunt,trainer_xp_h,pokemon_xp_h,kills_h,
             calibrated:raw.get("calibrated").and_then(Value::as_bool).unwrap_or(false)})
+    }
+
+    #[cfg(test)]
+    fn to_value(&self) -> Value {
+        serde_json::to_value(self).expect("HistoryForecast must serialize in tests")
     }
 }
 // Borrow the derived history instead of cloning every row into serde_json::Value.
@@ -375,6 +385,12 @@ impl HistorySnapshot {
     }
     pub fn totals(&self) -> HistoryDay {
         self.lifetime.clone()
+    }
+
+    #[cfg(test)]
+    fn to_value(&self, nick: &str) -> Value {
+        let encoded=serialize_history(self,nick).expect("HistorySnapshot must serialize in tests");
+        serde_json::from_str(&encoded).expect("HistorySnapshot test JSON must parse")
     }
 }
 impl HistoryDay {
