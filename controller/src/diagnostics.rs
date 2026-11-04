@@ -10,6 +10,10 @@ pub(crate) const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_HISTORY: usize = 60;
 const THREAD_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
 const MAX_UI_HISTORY: usize = 120;
+const RECORDING_SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+const RECORDING_THREAD_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_RECORDING_HISTORY: usize = 3_600;
+const MAX_RECORDING_UI_HISTORY: usize = 2_000;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PerformanceSample {
@@ -67,6 +71,12 @@ pub(crate) struct ThreadHotspot {
     pub(crate) cpu_percent: f64,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ThreadCpuSample {
+    pub(crate) at: Instant,
+    pub(crate) hottest: Vec<ThreadHotspot>,
+}
+
 #[derive(Clone, Copy)]
 struct ProcessCounters {
     cpu_ns: u128,
@@ -75,8 +85,10 @@ struct ProcessCounters {
     threads: Option<u32>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct DiagnosticsSampler {
+    /// Only set by the explicit recording command. No recorder exists at startup.
+    pub(crate) recording: bool,
     last_read: Option<Instant>,
     last_thread_read: Option<Instant>,
     last_thread_count: Option<u32>,
@@ -85,6 +97,7 @@ pub(crate) struct DiagnosticsSampler {
     previous_thread_cpu: HashMap<u64, u128>,
     pub(crate) inspect_threads: bool,
     pub(crate) hot_threads: Vec<ThreadHotspot>,
+    pub(crate) thread_history: VecDeque<ThreadCpuSample>,
     pub(crate) threads_unavailable: bool,
     pub(crate) resident_baseline: Option<u64>,
     pub(crate) current: Option<PerformanceSample>,
@@ -145,7 +158,22 @@ impl DiagnosticsSampler {
         // Reset is a data action; it must never silently resume sampling.
         let paused = self.paused;
         let inspect_threads = self.inspect_threads;
-        *self = Self { paused, inspect_threads, ..Self::default() };
+        let recording = self.recording;
+        *self = Self { paused, inspect_threads, recording, ..Self::default() };
+    }
+
+    /// Detailed collection is deliberately more expensive and exists only
+    /// inside a user-created RecordingSession, never for ordinary users.
+    pub(crate) fn for_recording() -> Self {
+        Self { recording: true, inspect_threads: true, ..Self::default() }
+    }
+
+    fn sample_interval(&self) -> Duration {
+        if self.recording { RECORDING_SAMPLE_INTERVAL } else { SAMPLE_INTERVAL }
+    }
+
+    fn thread_interval(&self) -> Duration {
+        if self.recording { RECORDING_THREAD_INTERVAL } else { THREAD_SAMPLE_INTERVAL }
     }
 
     pub(crate) fn set_thread_inspection(&mut self, enabled: bool) {
@@ -184,18 +212,24 @@ impl DiagnosticsSampler {
     }
 
     fn trim_history(&mut self) {
-        while self.history.len() > MAX_HISTORY { self.history.pop_front(); }
+        let limit = if self.recording { MAX_RECORDING_HISTORY } else { MAX_HISTORY };
+        while self.history.len() > limit { self.history.pop_front(); }
     }
 
     /// Returns true only on a due tick. Never polls while paused.
     pub(crate) fn sample_if_due(&mut self) -> bool {
         if self.paused { return false; }
         let now = Instant::now();
-        if self.last_read.is_some_and(|at| now.saturating_duration_since(at) < SAMPLE_INTERVAL) {
+        if self.last_read.is_some_and(|at| now.saturating_duration_since(at) < self.sample_interval()) {
             return false;
         }
         self.last_read = Some(now);
-        let include_threads = thread_sample_due(self.last_thread_read, now);
+        let include_threads = if self.recording {
+            self.last_thread_read.is_none_or(|at|
+                now.saturating_duration_since(at) >= self.thread_interval())
+        } else {
+            thread_sample_due(self.last_thread_read, now)
+        };
         let probe_start = Instant::now();
         // The detailed thread snapshot includes the thread count, so avoid
         // enumerating the same OS threads twice on the same tick.
@@ -210,6 +244,14 @@ impl DiagnosticsSampler {
                         self.hot_threads = self.previous_thread_read.map(|prior| {
                             calculate_hotspots(&self.previous_thread_cpu, prior, &snapshot.threads, now)
                         }).unwrap_or_default();
+                        if self.recording && !self.hot_threads.is_empty() {
+                            self.thread_history.push_back(ThreadCpuSample {
+                                at: now, hottest: self.hot_threads.clone(),
+                            });
+                            while self.thread_history.len() > MAX_RECORDING_HISTORY / 2 {
+                                self.thread_history.pop_front();
+                            }
+                        }
                         self.previous_thread_cpu = snapshot.threads.iter()
                             .map(|thread| (thread.id, thread.cpu_ns)).collect();
                         self.previous_thread_read = Some(now);
@@ -267,25 +309,35 @@ impl DiagnosticsSampler {
         self.slowest_frame_ms = self.slowest_frame_ms.max(ms);
         self.recorded_frames = self.recorded_frames.saturating_add(1);
         self.ui_frames.push_back(ms);
-        while self.ui_frames.len() > MAX_UI_HISTORY { self.ui_frames.pop_front(); }
+        let limit = if self.recording { MAX_RECORDING_UI_HISTORY } else { MAX_UI_HISTORY };
+        while self.ui_frames.len() > limit { self.ui_frames.pop_front(); }
         self.last_preflight_ms = preflight.map(|t| t.as_secs_f64() * 1000.0);
         self.last_panel_ms = panel.map(|t| t.as_secs_f64() * 1000.0);
     }
 
     /// Report creation is an explicit user action, never an automatic save.
     /// Account names, credentials, network URLs and game state are excluded.
-    fn report_json(&self) -> serde_json::Value {
+    pub(crate) fn report_json(&self) -> serde_json::Value {
         let now = Instant::now();
         serde_json::json!({
             "schema": "moth-controller-diagnostics-v1",
             "version": env!("CARGO_PKG_VERSION"),
-            "sampling_interval_ms": SAMPLE_INTERVAL.as_millis(),
+            "sampling_interval_ms": self.sample_interval().as_millis(),
+            "recording": self.recording,
+            "thread_sampling_interval_ms": self.thread_interval().as_millis(),
             "cpu_units": "percent_of_one_logical_cpu",
             "memory_baseline_bytes": self.resident_baseline,
             "detailed_thread_inspection": self.inspect_threads,
             "thread_cpu_hotspots": self.hot_threads.iter().map(|thread| serde_json::json!({
                 "thread_id": thread.id,
                 "cpu_percent": thread.cpu_percent,
+            })).collect::<Vec<_>>(),
+            "thread_cpu_timeline": self.thread_history.iter().map(|point| serde_json::json!({
+                "age_ms": now.saturating_duration_since(point.at).as_millis(),
+                "top": point.hottest.iter().map(|thread| serde_json::json!({
+                    "thread_id": thread.id,
+                    "cpu_percent": thread.cpu_percent,
+                })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "process_samples": self.history.iter().map(|point| serde_json::json!({
                 "age_ms": point.at.map(|at| now.saturating_duration_since(at).as_millis()),
@@ -656,6 +708,27 @@ mod tests {
         assert!(sampler.inspect_threads);
         assert!(sampler.previous_thread_cpu.is_empty());
         assert!(sampler.hot_threads.is_empty());
+    }
+
+    #[test]
+    fn background_recorder_is_explicit_and_retains_a_longer_bounded_trace() {
+        let ordinary = DiagnosticsSampler::default();
+        assert!(!ordinary.recording);
+        assert!(!ordinary.inspect_threads);
+        assert_eq!(ordinary.sample_interval(), Duration::from_secs(2));
+        let mut capture = DiagnosticsSampler::for_recording();
+        assert!(capture.recording);
+        assert!(capture.inspect_threads);
+        assert_eq!(capture.sample_interval(), Duration::from_secs(1));
+        assert_eq!(capture.thread_interval(), Duration::from_secs(2));
+        for _ in 0..MAX_RECORDING_HISTORY + 20 {
+            capture.history.push_back(PerformanceSample::default());
+            capture.trim_history();
+        }
+        assert_eq!(capture.history.len(), MAX_RECORDING_HISTORY);
+        capture.reset();
+        assert!(capture.recording);
+        assert!(capture.inspect_threads);
     }
 
     #[test]
