@@ -136,18 +136,20 @@ impl ControllerApp {
                     let updater=native.capture_settings_updater();
                     // Keep restock_dirty set until a successful, current
                     // acknowledgement of this exact selection arrives.
-                    std::thread::spawn(move || {
-                        let result=std::panic::catch_unwind(
-                            std::panic::AssertUnwindSafe(||
-                                crate::native_auth::persist_and_apply_capture_settings(
-                                    profile,&next,&generation_state,generation,&updater)))
-                            .unwrap_or_else(|_|
-                                Err("Encrypted restock save panicked".into()));
-                        let _=tx.send(CaptureSavedEvent {
-                            index,generation,request_id,config:next,
-                            origin:CaptureSaveOrigin::Restock,result
+                    let _=std::thread::Builder::new()
+                        .name(format!("moth-capture-save-{}",profile.name()))
+                        .spawn(move || {
+                            let result=std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(||
+                                    crate::native_auth::persist_and_apply_capture_settings(
+                                        profile,&next,&generation_state,generation,&updater)))
+                                .unwrap_or_else(|_|
+                                    Err("Encrypted restock save panicked".into()));
+                            let _=tx.send(CaptureSavedEvent {
+                                index,generation,request_id,config:next,
+                                origin:CaptureSaveOrigin::Restock,result
+                            });
                         });
-                    });
                 }
             }
         }
