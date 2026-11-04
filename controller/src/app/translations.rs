@@ -197,8 +197,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss command queued" => "Comando de boss enviado à fila",
         "Wait for a safe combat opening. If travel stays blocked for one minute, give up once and continue to the Pokémon Center." =>
             "Aguarde uma abertura segura no combate. Se a viagem continuar bloqueada por um minuto, desista uma vez e continue até o Centro Pokémon.",
-        "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, give up once to reach the Pokémon Center and continue the requested destination." =>
-            "O combate continua bloqueando a viagem. O Moth continuará verificando a cada ciclo e, após um minuto, desistirá uma vez para chegar ao Centro Pokémon e continuar até o destino solicitado.",
+        "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, attempt Give Up. Moth continues only after Center confirmation and limits unconfirmed retries." =>
+            "O combate continua bloqueando a viagem. Após um minuto, o Moth tentará desistir e só continuará quando o Centro Pokémon for confirmado. Tentativas sem confirmação são limitadas.",
         "Traveling to Pokémon Center" => "Indo ao Centro Pokémon",
         "Waiting for a safe boss switch opening" => "Aguardando abertura segura para trocar para o boss",
         "Boss request cancelled before entry" => "Solicitação de boss cancelada antes da entrada",
