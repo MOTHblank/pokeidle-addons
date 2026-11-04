@@ -1,6 +1,7 @@
 //! Server-native boss farming, safe hunt round trips and a bounded loot journal.
-//! Boss repetition/healing is entirely owned by PokéIdle; we only send the
-//! selected boss key once after a confirmed trip to the Pokémon Center.
+//! Boss repetition/healing is entirely owned by PokéIdle. Boss entry itself
+//! is routed through the same destination navigator Hunt Atlas uses, so hunt,
+//! Center and boss switches share one server-timed travel path.
 use crate::config::{data_root, GameProfile};
 use crate::native_gameplay::GameCommand;
 use crate::native_hunt_navigation::HuntNavigator;
@@ -372,7 +373,7 @@ impl BossManager {
         }
     }
     pub fn start(&mut self, key: &str, repeat: bool, hunt: &HuntView,
-                 navigator: &mut HuntNavigator, _now: Instant) -> Result<(), String> {
+                 navigator: &mut HuntNavigator, now: Instant) -> Result<(), String> {
         if self.trip.is_some() { return Err("A boss trip is already in progress".into()); }
         if self.view.auto || self.view.arena.is_some() {
             return Err("A boss encounter or server repetition is already active".into());
@@ -408,11 +409,11 @@ impl BossManager {
         });
         self.view.original_hunt = original;
         self.view.warning = None;
-        self.view.phase = "Waiting for a safe boss switch opening".into();
-        // Boss entry is a destination change, not a Center trip. Replace any
-        // older pending navigation and wait on the exact same server gate used
-        // by Hunt Atlas before sending the boss command.
-        navigator.cancel();
+        self.view.phase = "Switching to boss when the Hunt Atlas travel gate opens".into();
+        // This is now a real HuntNavigator destination. It gets the same
+        // server gate, retry cadence, cancellation and blocked-travel signal
+        // as a Hunt Atlas hunt change.
+        navigator.boss(key.to_owned(), repeat, now);
         Ok(())
     }
     pub fn stop(&mut self, navigator: &mut HuntNavigator,
@@ -425,14 +426,16 @@ impl BossManager {
         let trip = self.trip.as_mut()?;
         trip.ended = true;
         if trip.stage == Stage::Starting {
-            // No boss command has been dispatched while this stage is active;
-            // cancelling is therefore immediate and cannot consume an entry.
+            // The HuntNavigator has not emitted the boss destination yet.
             navigator.cancel();
             self.trip = None;
             self.view.original_hunt = None;
             self.view.phase = "Boss request cancelled before entry".into();
             return None;
         }
+        // A Start that is waiting for confirmation may still be queued for a
+        // Hunt Atlas-style retry. Stop must retire that destination first.
+        navigator.cancel();
         if !trip.repeat { return None; }
         trip.stop_pending = true;
         trip.stop_requested_at = Some(now);
@@ -441,6 +444,9 @@ impl BossManager {
     }
     pub fn leave(&mut self, navigator: &mut HuntNavigator) -> Vec<GameCommand> {
         let mut commands = Vec::new();
+        // Leaving/cancelling owns the destination now; never allow a pending
+        // boss retry to race the exit command.
+        navigator.cancel();
         if let Some(trip) = self.trip.as_mut() {
             if trip.stage == Stage::Starting {
                 navigator.cancel();
@@ -494,13 +500,20 @@ impl BossManager {
             self.view.arena = boss.get("arena").and_then(|arena| arena.get("key"))
                 .and_then(Value::as_str).map(str::to_owned);
             if let Some(trip) = self.trip.as_mut() {
-                if trip.stage == Stage::Running && trip.repeat {
-                    if self.view.auto { trip.confirmed = true; }
-                    // A fresh authoritative boss state after Stop is enough
-                    // to settle the request, even if Start was never acked.
-                    if !self.view.auto && (trip.confirmed || trip.stop_pending) {
-                        trip.ended = true;
-                        trip.stop_pending = false;
+                if trip.stage == Stage::Running {
+                    if trip.repeat {
+                        if self.view.auto &&
+                            self.view.auto_key.as_deref() == Some(trip.key.as_str()) {
+                            trip.confirmed = true;
+                        }
+                        // A fresh authoritative boss state after Stop is enough
+                        // to settle the request, even if Start was never acked.
+                        if !self.view.auto && (trip.confirmed || trip.stop_pending) {
+                            trip.ended = true;
+                            trip.stop_pending = false;
+                        }
+                    } else if self.view.arena.as_deref() == Some(trip.key.as_str()) {
+                        trip.confirmed = true;
                     }
                 }
             }
@@ -543,7 +556,12 @@ impl BossManager {
                         }
                     }
                     Some("bossEntrou") => {
-                        if let Some(trip) = self.trip.as_mut() { trip.confirmed = true; }
+                        if let Some(trip) = self.trip.as_mut() {
+                            if event.get("key").and_then(Value::as_str)
+                                .map_or(true, |key| key == trip.key) {
+                                trip.confirmed = true;
+                            }
+                        }
                     }
                     Some("bossAuto") => {
                         if let Some(active) = event.get("ativo").and_then(Value::as_bool) {
@@ -564,48 +582,89 @@ impl BossManager {
             }
         }
     }
-    /// One dispatched boss command per request. No client-side boss retry loop.
-    /// Entry waits on HuntNavigator's exact Hunt Atlas switch gate; returning
-    /// to the saved hunt remains owned by the navigator.
+    /// Boss entry is a HuntNavigator destination. Until the server confirms
+    /// the requested arena/repetition, the same navigator keeps retrying at
+    /// the exact cadence used by Hunt Atlas hunt changes.
     pub fn next_action(&mut self, hunt: &HuntView,
                        navigator: &mut HuntNavigator, now: Instant) -> Option<GameCommand> {
-        let trip = self.trip.as_mut()?;
-        if trip.recovering { return None; }
-        if trip.resume_stop {
+        if self.trip.as_ref()?.recovering { return None; }
+
+        if self.trip.as_ref().is_some_and(|trip| trip.resume_stop) {
+            let trip = self.trip.as_mut().expect("trip still present");
             trip.resume_stop = false;
             // Fresh command, only after the new authenticated welcome confirms
             // the server is still repeating the same boss we were stopping.
             return Some(GameCommand::BossAuto { active:false, key:trip.key.clone() });
         }
-        if trip.stage == Stage::Starting && navigator.switch_open(hunt, now) {
-            // Inventory can change while waiting for the same safe opening
-            // Hunt Atlas uses for a hunt change. Recheck against the latest
-            // server snapshot, never the initial click-time balance.
-            let allowed = self.view.catalog.iter().find(|boss| boss.key == trip.key)
-                .is_some_and(|boss| hunt.trainer_level.unwrap_or(0) >= boss.min_level &&
-                    hunt.items.get(&boss.token_id).copied().unwrap_or(0) >= boss.tokens_per_entry);
-            if !allowed {
+
+        if let Some(key) = self.trip.as_ref()
+            .filter(|trip| trip.confirmed)
+            .map(|trip| trip.key.clone()) {
+            navigator.confirm_boss(&key);
+        }
+
+        let awaiting_entry = self.trip.as_ref().is_some_and(|trip|
+            matches!(trip.stage, Stage::Starting | Stage::Running) &&
+            !trip.confirmed && !trip.ended && !trip.stop_pending);
+        if awaiting_entry {
+            let command = navigator.next_action(hunt, now)?;
+            let (key, repeat) = match &command {
+                GameCommand::BossEnter(key) => (key.as_str(), false),
+                GameCommand::BossAuto { active: true, key } => (key.as_str(), true),
+                _ => {
+                    navigator.cancel();
+                    self.view.warning = Some(
+                        "Boss destination was replaced by another navigation request".into());
+                    self.view.phase = "Boss entry cancelled".into();
+                    self.trip = None;
+                    self.view.original_hunt = None;
+                    return None;
+                }
+            };
+            let matches_trip = self.trip.as_ref().is_some_and(|trip|
+                trip.key == key && trip.repeat == repeat);
+            if !matches_trip {
                 navigator.cancel();
                 self.view.warning = Some(
-                    "Boss tokens or requirements changed before entry; request cancelled".into());
+                    "Boss destination no longer matches the active request".into());
                 self.view.phase = "Boss entry cancelled".into();
                 self.trip = None;
                 self.view.original_hunt = None;
                 return None;
             }
-            trip.stage = Stage::Running;
-            trip.dispatched_at = Some(now);
-            self.view.phase = if trip.repeat {
-                "Server farming requested".into()
-            } else {
-                "Boss battle requested".into()
-            };
-            return Some(if trip.repeat {
-                GameCommand::BossAuto { active: true, key: trip.key.clone() }
-            } else {
-                GameCommand::BossEnter(trip.key.clone())
-            });
+
+            let first_dispatch = self.trip.as_ref()
+                .is_some_and(|trip| trip.dispatched_at.is_none());
+            if first_dispatch {
+                // Recheck only before the first actual send. Once accepted,
+                // the token can disappear from inventory before the entry
+                // event arrives, and that must not cancel a valid request.
+                let allowed = self.view.catalog.iter().find(|boss| boss.key == key)
+                    .is_some_and(|boss| hunt.trainer_level.unwrap_or(0) >= boss.min_level &&
+                        hunt.items.get(&boss.token_id).copied().unwrap_or(0) >= boss.tokens_per_entry);
+                if !allowed {
+                    navigator.cancel();
+                    self.view.warning = Some(
+                        "Boss tokens or requirements changed before entry; request cancelled".into());
+                    self.view.phase = "Boss entry cancelled".into();
+                    self.trip = None;
+                    self.view.original_hunt = None;
+                    return None;
+                }
+                if let Some(trip) = self.trip.as_mut() {
+                    trip.stage = Stage::Running;
+                    trip.dispatched_at = Some(now);
+                    self.view.phase = if trip.repeat {
+                        "Switching from the current hunt to boss farm".into()
+                    } else {
+                        "Switching from the current hunt to the boss".into()
+                    };
+                }
+            }
+            return Some(command);
         }
+
+        let trip = self.trip.as_mut()?;
         if trip.stage == Stage::Running && trip.stop_pending &&
             trip.stop_requested_at.is_some_and(|at|
                 now.saturating_duration_since(at) >= Duration::from_secs(20)) &&
@@ -616,17 +675,6 @@ impl BossManager {
             self.view.warning = Some(
                 "Boss Stop was not acknowledged; server currently reports no active boss".into()
             );
-        }
-        if trip.stage == Stage::Running && !trip.confirmed && !trip.ended &&
-            trip.dispatched_at.is_some_and(|at|
-                now.saturating_duration_since(at) >= Duration::from_secs(20)) &&
-            !self.view.auto && self.view.arena.is_none() && hunt.in_center {
-            // The server may have rejected the command or the receipt may be
-            // missing. Never resend a costly entry; return safely instead.
-            trip.ended = true;
-            self.view.warning = Some(
-                "Boss start was not confirmed by server; returning to saved hunt".into());
-            self.view.phase = "Boss start unconfirmed".into();
         }
         if trip.stage == Stage::Running && trip.ended && !trip.stop_pending &&
             !self.view.auto && hunt.in_center && self.view.arena.is_none() {
@@ -1073,7 +1121,7 @@ mod tests {
         assert!(navigator.next_action(&view, now).is_none());
     }
     #[test]
-    fn no_server_ack_does_not_leave_trip_stuck_forever() {
+    fn unconfirmed_boss_start_retries_like_hunt_atlas() {
         let mut manager = manager();
         let mut navigator = HuntNavigator::default();
         let now = Instant::now();
@@ -1083,11 +1131,16 @@ mod tests {
         assert!(matches!(manager.next_action(&view, &mut navigator, now),
             Some(GameCommand::BossAuto {active:true,..})));
         assert!(manager.next_action(&view, &mut navigator,
-            now + Duration::from_secs(19)).is_none());
+            now + Duration::from_millis(100)).is_none(),
+            "the shared navigator must respect the Hunt Atlas retry cadence");
+        assert!(matches!(manager.next_action(&view, &mut navigator,
+            now + Duration::from_millis(350)),
+            Some(GameCommand::BossAuto {active:true,..})));
+        assert!(matches!(manager.next_action(&view, &mut navigator,
+            now + Duration::from_secs(20)),
+            Some(GameCommand::BossAuto {active:true,..})),
+            "an unconfirmed boss destination keeps retrying just like a hunt change");
         assert!(manager.active());
-        manager.next_action(&view, &mut navigator, now + Duration::from_secs(20));
-        assert!(!manager.active(), "start from center finishes safely without any ack");
-        assert!(manager.view.warning.as_deref().unwrap_or("").contains("not confirmed"));
     }
     #[test]
     fn cancel_before_boss_dispatch_does_not_leave_a_trip_running() {

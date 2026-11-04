@@ -297,6 +297,8 @@ fn draw_boss_details(
                     tr("Game disconnected. Boss controls will become available after reconnection.").to_owned()
                 } else if !view.state_known {
                     tr("Waiting for authoritative server boss state.").to_owned()
+                } else if view.busy && !view.auto && view.arena.is_none() {
+                    tr("Switching to boss; waiting for the same travel opening as Hunt Atlas.").to_owned()
                 } else if view.busy || view.auto || view.arena.is_some() {
                     tr("Finish the current boss run before starting another.").to_owned()
                 } else if level.is_none() {
@@ -807,8 +809,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
             if let Some(command) = action.take() {
                 let notice = match &command {
-                    GameCommand::BossStart { repeat: true, .. } => tr("Boss farming queued"),
-                    GameCommand::BossStart { repeat: false, .. } => tr("Boss fight queued"),
+                    GameCommand::BossStart { repeat: true, .. } => tr("Boss farming requested"),
+                    GameCommand::BossStart { repeat: false, .. } => tr("Boss fight requested"),
                     GameCommand::BossStop => tr("Boss stop queued"),
                     GameCommand::BossLeave => tr("Boss leave queued"),
                     _ => tr("Boss command queued"),

@@ -1186,23 +1186,27 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     if boss_manager.view.phase != boss_phase {
                         boss_manager.publish(&boss);
                     }
-                    // 60 ms worker wake, rather than a one-shot select followed
-                    // by a 20-second timeout, catches narrow 3-second openings.
-                    if let Some(command) = navigator.next_action(&hunt_intel.view, Instant::now()) {
-                        let mut allowed = true;
-                        if let GameCommand::Hunt(slug) = &command {
-                            if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
-                                crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
-                                navigator.cancel();
-                                hunt_intel.cancel_hunt_intent();
-                                allowed = false;
+                    // 60 ms worker wake catches the same narrow travel
+                    // openings for hunts, Center and bosses. Boss destinations
+                    // are consumed by BossManager above so its token validation
+                    // and lifecycle remain authoritative.
+                    if !navigator.boss_pending() {
+                        if let Some(command) = navigator.next_action(&hunt_intel.view, Instant::now()) {
+                            let mut allowed = true;
+                            if let GameCommand::Hunt(slug) = &command {
+                                if let Err(error) = hunt_intel.request_hunt(slug, Instant::now()) {
+                                    crate::logging::warn(&format!("Native hunt selection rejected: {error}"));
+                                    navigator.cancel();
+                                    hunt_intel.cancel_hunt_intent();
+                                    allowed = false;
+                                }
                             }
-                        }
-                        if allowed && socket.send(Message::Text(command.wire().to_string().into())).is_err() {
-                            if matches!(command, GameCommand::Hunt(_)) {
-                                hunt_intel.command_failed("Hunt selection transport failed");
+                            if allowed && socket.send(Message::Text(command.wire().to_string().into())).is_err() {
+                                if matches!(command, GameCommand::Hunt(_)) {
+                                    hunt_intel.command_failed("Hunt selection transport failed");
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                     // Give Up is NEVER issued by navigation; prolonged combat
