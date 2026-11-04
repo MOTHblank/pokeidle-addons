@@ -15,7 +15,7 @@ Acompanhe suas caçadas, configure automações e mantenha as sessões funcionan
 - **Hunt Atlas:** compare caçadas, estimativas de experiência, chances de captura e níveis de Outland.
 - **Automações:** configure captura automática, reposição de Poké Bolas, poções e revives, além de regras de compra no mercado.
 - **Contas:** organize até quatro perfis e acompanhe suas sessões do PokéIdle.
-- **Twitch:** minerador Rust nativo opcional para os canais oficiais ao vivo informados pelo PokéIdle, com crédito de tempo assistido e coleta de bônus periódicos de pontos; não abre chats nem mantém IRC. Os bônus do jogo (XP, Capture Boost e Secret Lure) continuam dependendo do resgate de recompensas de pontos do canal.
+- **Twitch:** minerador Rust nativo opcional com catálogo completo de streamers oficiais, saldo por canal, favoritos por conta e monitoramento de sequência diária confirmado pelo RewardList da Twitch. Usa no máximo duas vagas fixas de visualização e coleta bônus periódicos de pontos; não abre chats nem mantém IRC. Os bônus do jogo (XP, Capture Boost e Secret Lure) continuam dependendo de resgates específicos de pontos do canal.
 - **Kick:** sessões nativas independentes por conta, com tráfego HLS de baixo bitrate, presença via WebSocket da Kick e leitura do saldo real de pontos (ganho mostrado apenas quando confirmado por aumento de saldo).
 
 ## Como começar
