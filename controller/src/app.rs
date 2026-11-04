@@ -1558,7 +1558,7 @@ impl eframe::App for ControllerApp {
                         RichText::new(tr(match self.workspace.panel_tab {
                             PanelTab::Overview => "Overview",
                             PanelTab::Hunts => "Hunt Atlas",
-                            PanelTab::Boss => "Boss Manager",
+                            PanelTab::Boss => "Boss Farm",
                             PanelTab::Accounts => "Accounts",
                             PanelTab::Automation => "Automation",
                             PanelTab::Diagnostics => "Diagnostics",
@@ -1684,7 +1684,7 @@ impl eframe::App for ControllerApp {
             let page = match self.workspace.panel_tab {
                 PanelTab::Overview => "Overview",
                 PanelTab::Hunts => "Hunt Atlas",
-                PanelTab::Boss => "Boss Manager",
+                PanelTab::Boss => "Boss Farm",
                 PanelTab::Accounts => "Accounts",
                 PanelTab::Automation => "Automation",
                 PanelTab::Diagnostics => "Diagnostics",
