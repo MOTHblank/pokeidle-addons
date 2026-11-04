@@ -190,25 +190,46 @@ fn notifications(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 fn updates(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let mut next = app.preferences;
-    card(ui, "Application updates", "New releases are checked on GitHub without installing anything.", |ui| {
-        ui.checkbox(&mut next.check_updates_on_start, tr("Check for new versions on startup"));
-    });
+    card(ui, "Application updates",
+        "Moth can check GitHub and download verified updates without opening a browser.", |ui| {
+            ui.checkbox(&mut next.check_updates_on_start, tr("Check for new versions on startup"));
+        });
     if next != app.preferences { app.save_app_preferences(next); }
 
     ui.add_space(11.0);
-    let (latest, checking, failure) = match app.update_status.lock() {
-        Ok(status) => (status.latest_version.clone(), status.checking, status.last_error.clone()),
-        Err(_) => (None, false, Some("Update status unavailable".into())),
-    };
+    let (latest, notes_url, checking, downloading, staged_version, failure) =
+        match app.update_status.lock() {
+            Ok(status) => (
+                status.latest_version.clone(),
+                status.release_notes_url.clone(),
+                status.checking,
+                status.downloading,
+                status.staged_version.clone(),
+                status.last_error.clone(),
+            ),
+            Err(_) => (None, None, false, false, None, Some("Update status unavailable".into())),
+        };
+
     ui.label(format!("{}: v{}", tr("Installed version"), env!("CARGO_PKG_VERSION")));
-    if let Some(latest) = latest {
+    if let Some(latest) = latest.as_ref() {
         ui.label(format!("{}: {}", tr("Latest release"), latest));
     }
     if let Some(error) = failure {
         ui.label(RichText::new(error).size(10.0).color(WARN));
     }
+
+    let newer = latest.as_deref()
+        .is_some_and(|version| update::is_newer_version(version, env!("CARGO_PKG_VERSION")));
+    if staged_version.is_none() && latest.is_some() && !newer {
+        ui.label(RichText::new(tr("Moth Controller is up to date.")).size(10.0).color(GOOD));
+    }
+    if let Some(version) = staged_version.as_ref() {
+        ui.label(RichText::new(format!("{}: {version}", tr("Ready to install")))
+            .size(11.0).strong().color(GOOD));
+    }
+
     ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(!checking, egui::Button::new(
+        if ui.add_enabled(!checking && !downloading, egui::Button::new(
             tr(if checking { "Checking for updates..." } else { "Check now" }))).clicked() {
             match update::check_now(&app.update_status) {
                 Ok(_) => app.set_status(tr("Update check started"), false),
@@ -216,9 +237,62 @@ fn updates(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
             ui.ctx().request_repaint();
         }
-        ui.hyperlink_to(tr("Release notes"), update::RELEASES_URL);
+        let notes = notes_url.as_deref().unwrap_or(update::RELEASES_URL);
+        ui.hyperlink_to(tr("Release notes"), notes);
+
+        #[cfg(windows)]
+        if newer && staged_version.is_none() {
+            if ui.add_enabled(!checking && !downloading,
+                egui::Button::new(tr(if downloading {
+                    "Downloading update..."
+                } else {
+                    "Download update"
+                }))).clicked() {
+                match update::download_update(&app.update_status) {
+                    Ok(_) => app.set_status(tr("Update download started"), false),
+                    Err(error) => app.set_status(error, true),
+                }
+                ui.ctx().request_repaint();
+            }
+        }
     });
-    description(ui, "Update checks never download or install an application automatically.");
+
+    #[cfg(windows)]
+    if staged_version.is_some() {
+        ui.add_space(10.0);
+        let active = app.accounts_have_live_work();
+        if ui.add_enabled(!active,
+            egui::Button::new(tr("Restart and install update"))).clicked() {
+            match update::request_restart_and_install(&app.update_status) {
+                Ok(_) => {
+                    app.set_status(tr("Restarting to install update"), false);
+                    // Force a real application exit even when close-to-tray is enabled.
+                    app.tray_exit_requested.store(true, Ordering::Release);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(error) => app.set_status(error, true),
+            }
+        }
+        if active {
+            description(ui,
+                "Update is ready. Stop all active accounts before restarting to install it.");
+        } else {
+            description(ui,
+                "The verified update replaces only the application executable, then reopens Moth.");
+        }
+    } else if newer {
+        description(ui,
+            "Downloading never interrupts active accounts. Installation only starts after you choose to restart.");
+    } else {
+        description(ui,
+            "Automatic checks do not download or install anything unless you choose to.");
+    }
+
+    #[cfg(not(windows))]
+    if newer {
+        description(ui,
+            "In-app installation is currently available on Windows; use Release notes to download the Linux package.");
+    }
 }
 
 fn open_data_folder() -> Result<(), String> {
