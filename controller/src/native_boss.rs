@@ -1211,6 +1211,31 @@ mod tests {
     }
 
     #[test]
+    fn blocked_boss_trip_gives_up_after_one_minute_then_enters_from_center() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let at = Instant::now();
+        let mut view = hunt();
+        nav.observe(&json!({"t":"estado","estado":{
+            "servidorAgora":1000000,
+            "centroLivreEm":1100000,
+            "trocaHuntLivreEm":1000000
+        }}), &view, at);
+        manager.start("bronze", true, &view, &mut nav, at).unwrap();
+        assert!(manager.next_action(&view, &mut nav,
+            at + Duration::from_secs(59)).is_none());
+        assert!(matches!(manager.next_action(&view, &mut nav,
+            at + Duration::from_secs(60)), Some(GameCommand::GiveUp)));
+
+        view.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}),
+            &view, at + Duration::from_secs(61));
+        assert!(matches!(manager.next_action(&view, &mut nav,
+            at + Duration::from_secs(61)),
+            Some(GameCommand::BossAuto {active:true,..})));
+    }
+
+    #[test]
     fn canceled_pending_boss_request_never_emits_a_start() {
         let mut manager = manager();
         let mut nav = HuntNavigator::default();
