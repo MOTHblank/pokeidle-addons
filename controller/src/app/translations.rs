@@ -5,6 +5,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
         "Moth can check GitHub and download verified updates without opening a browser." =>
             "O Moth pode verificar o GitHub e baixar atualizações verificadas sem abrir o navegador.",
+        "Open update options" => "Abrir opções de atualização",
         "Moth Controller is up to date." => "O Moth Controller está atualizado.",
         "Ready to install" => "Pronta para instalar",
         "Downloading update..." => "Baixando atualização...",
