@@ -3,7 +3,7 @@
 //! There is no worker, timer, global counter, or OS query until the Diagnostics
 //! page is both selected and focused. The UI drops this entire state as soon as
 //! the user leaves the page or hides/unfocuses the window.
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 pub(crate) const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -57,6 +57,14 @@ pub(crate) struct OperationalSample {
     pub(crate) kick_hls: Option<crate::native_kick_pool::PoolUsage>,
 }
 
+/// Calculated from two on-demand per-thread OS CPU snapshots.
+#[derive(Clone, Debug)]
+pub(crate) struct ThreadHotspot {
+    pub(crate) id: u64,
+    pub(crate) name: String,
+    pub(crate) cpu_percent: f64,
+}
+
 #[derive(Clone, Copy)]
 struct ProcessCounters {
     cpu_ns: u128,
@@ -71,6 +79,12 @@ pub(crate) struct DiagnosticsSampler {
     last_thread_read: Option<Instant>,
     last_thread_count: Option<u32>,
     previous: Option<(Instant, ProcessCounters)>,
+    previous_thread_read: Option<Instant>,
+    previous_thread_cpu: HashMap<u64, u128>,
+    pub(crate) inspect_threads: bool,
+    pub(crate) hot_threads: Vec<ThreadHotspot>,
+    pub(crate) threads_unavailable: bool,
+    pub(crate) resident_baseline: Option<u64>,
     pub(crate) current: Option<PerformanceSample>,
     pub(crate) history: VecDeque<PerformanceSample>,
     pub(crate) network: Option<HlsNetworkSample>,
@@ -102,11 +116,46 @@ fn thread_sample_due(last: Option<Instant>, now: Instant) -> bool {
     last.is_none_or(|at| now.saturating_duration_since(at) >= THREAD_SAMPLE_INTERVAL)
 }
 
+fn calculate_hotspots(
+    previous: &HashMap<u64, u128>,
+    previous_at: Instant,
+    current: &[crate::diagnostics_threads::ThreadCounter],
+    now: Instant,
+) -> Vec<ThreadHotspot> {
+    let elapsed = now.saturating_duration_since(previous_at);
+    let mut hot: Vec<_> = current.iter().filter_map(|thread| {
+        let previous_ns = *previous.get(&thread.id)?;
+        let cpu_percent = cpu_usage_percent(previous_ns, thread.cpu_ns, elapsed)?;
+        if !cpu_percent.is_finite() { return None; }
+        Some(ThreadHotspot {
+            id: thread.id,
+            name: thread.name.clone(),
+            cpu_percent,
+        })
+    }).collect();
+    hot.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent).then_with(|| a.id.cmp(&b.id)));
+    hot.truncate(8);
+    hot
+}
+
 impl DiagnosticsSampler {
     pub(crate) fn reset(&mut self) {
         // Reset is a data action; it must never silently resume sampling.
         let paused = self.paused;
-        *self = Self { paused, ..Self::default() };
+        let inspect_threads = self.inspect_threads;
+        *self = Self { paused, inspect_threads, ..Self::default() };
+    }
+
+    pub(crate) fn set_thread_inspection(&mut self, enabled: bool) {
+        if self.inspect_threads == enabled { return; }
+        self.inspect_threads = enabled;
+        // A newly enabled inspector must establish its own CPU baseline.
+        self.last_thread_read = None;
+        self.last_thread_count = None;
+        self.previous_thread_read = None;
+        self.previous_thread_cpu.clear();
+        self.hot_threads.clear();
+        self.threads_unavailable = false;
     }
 
     pub(crate) fn set_paused(&mut self, paused: bool) {
@@ -114,6 +163,11 @@ impl DiagnosticsSampler {
             // Time spent paused must not enter a CPU delta. Keep earlier
             // history and insert a visible gap on the time-based graphs.
             self.previous = None;
+            self.previous_thread_read = None;
+            self.previous_thread_cpu.clear();
+            self.hot_threads.clear();
+            self.last_thread_read = None;
+            self.last_thread_count = None;
             self.last_read = None;
             self.current = None;
             self.network = None;
@@ -141,9 +195,36 @@ impl DiagnosticsSampler {
         self.last_read = Some(now);
         let include_threads = thread_sample_due(self.last_thread_read, now);
         let probe_start = Instant::now();
-        let counters = read_process_counters(include_threads);
+        // The detailed thread snapshot includes the thread count, so avoid
+        // enumerating the same OS threads twice on the same tick.
+        let counters = read_process_counters(include_threads && !self.inspect_threads);
+        if include_threads {
+            self.last_thread_read = Some(now);
+            if self.inspect_threads {
+                match crate::diagnostics_threads::inspect() {
+                    Some(snapshot) => {
+                        self.last_thread_count = Some(snapshot.count);
+                        self.threads_unavailable = false;
+                        self.hot_threads = self.previous_thread_read.map(|prior| {
+                            calculate_hotspots(&self.previous_thread_cpu, prior, &snapshot.threads, now)
+                        }).unwrap_or_default();
+                        self.previous_thread_cpu = snapshot.threads.iter()
+                            .map(|thread| (thread.id, thread.cpu_ns)).collect();
+                        self.previous_thread_read = Some(now);
+                    }
+                    None => {
+                        self.last_thread_count = None;
+                        self.previous_thread_read = None;
+                        self.previous_thread_cpu.clear();
+                        self.hot_threads.clear();
+                        self.threads_unavailable = true;
+                    }
+                }
+            } else {
+                self.last_thread_count = counters.as_ref().and_then(|stats| stats.threads);
+            }
+        }
         self.last_process_probe_ms = Some(probe_start.elapsed().as_secs_f64() * 1000.0);
-        if include_threads { self.last_thread_read = Some(now); }
 
         let Some(counters) = counters else {
             self.previous = None;
@@ -154,7 +235,6 @@ impl DiagnosticsSampler {
             self.trim_history();
             return true;
         };
-        if include_threads { self.last_thread_count = counters.threads; }
         let cpu_percent = self.previous
             .and_then(|(previous_at, previous)| cpu_usage_percent(
                 previous.cpu_ns, counters.cpu_ns, now.saturating_duration_since(previous_at)
@@ -166,6 +246,9 @@ impl DiagnosticsSampler {
             peak_bytes: counters.peak_bytes,
             threads: self.last_thread_count,
         };
+        if let Some(rss) = counters.resident_bytes {
+            self.resident_baseline.get_or_insert(rss);
+        }
         self.previous = Some((now, counters));
         self.current = Some(point);
         self.history.push_back(point);
@@ -196,6 +279,12 @@ impl DiagnosticsSampler {
             "version": env!("CARGO_PKG_VERSION"),
             "sampling_interval_ms": SAMPLE_INTERVAL.as_millis(),
             "cpu_units": "percent_of_one_logical_cpu",
+            "memory_baseline_bytes": self.resident_baseline,
+            "detailed_thread_inspection": self.inspect_threads,
+            "thread_cpu_hotspots": self.hot_threads.iter().map(|thread| serde_json::json!({
+                "thread_id": thread.id,
+                "cpu_percent": thread.cpu_percent,
+            })).collect::<Vec<_>>(),
             "process_samples": self.history.iter().map(|point| serde_json::json!({
                 "age_ms": point.at.map(|at| now.saturating_duration_since(at).as_millis()),
                 "cpu_percent": point.cpu_percent,
