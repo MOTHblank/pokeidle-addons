@@ -3,6 +3,16 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Choose boss" => "Escolher boss",
+        "Victories" => "Vitórias",
+        "Finish the current boss run before starting another." =>
+            "Conclua a sequência de boss atual antes de iniciar outra.",
+        "Trainer level is not available yet." =>
+            "O nível do treinador ainda não está disponível.",
+        "Trainer level is below the boss requirement." =>
+            "O nível do treinador está abaixo do exigido pelo boss.",
+        "Not enough boss entry tokens." =>
+            "Tokens de entrada insuficientes para este boss.",
         "Boss loot could not be saved; retrying" =>
             "Não foi possível salvar o loot do boss; tentando novamente",
         "Game disconnected. Boss controls will become available after reconnection." => "Jogo desconectado. Os controles de boss voltarão após reconectar.",
