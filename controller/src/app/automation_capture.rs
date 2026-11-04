@@ -103,15 +103,17 @@ pub(super) fn draw_native_automation(app: &mut ControllerApp, ui: &mut egui::Ui,
                             .name(format!("moth-capture-save-{}",profile.name()))
                             .spawn(move || {
                                 let result=std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(||
+                                    std::panic::AssertUnwindSafe(||
                                         crate::native_auth::persist_and_apply_capture_settings(
-                                        profile,&next,&generation_state,generation,&updater)))
-                                .unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
+                                            profile,&next,&generation_state,generation,&updater)))
+                                    .unwrap_or_else(|_|Err(
+                                        "Encrypted native settings save panicked".into()));
                                 let _=tx.send(CaptureSavedEvent{
                                     index,generation,request_id,config:next,
                                     origin:CaptureSaveOrigin::Toggle,result
                                 });
-                            }).expect("could not start capture settings save worker");
+                            })
+                            .expect("could not start capture settings save worker");
                     }
                 }
                 if runtime.capture.capture_save_busy {
@@ -322,14 +324,16 @@ fn draw_native_capture_config(app:&mut ControllerApp,ui:&mut egui::Ui,index:usiz
                         .spawn(move || {
                             let result=std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(||
-                                crate::native_auth::persist_and_apply_capture_settings(
-                                    profile,&to_save,&generation_state,generation,&updater))
-                            ).unwrap_or_else(|_|Err("Encrypted native settings save panicked".into()));
+                                    crate::native_auth::persist_and_apply_capture_settings(
+                                        profile,&to_save,&generation_state,generation,&updater))
+                            ).unwrap_or_else(|_|Err(
+                                "Encrypted native settings save panicked".into()));
                             let _=tx.send(CaptureSavedEvent{
                                 index,generation,request_id,config:to_save,
                                 origin:CaptureSaveOrigin::Editor,result
                             });
-                        }).expect("could not start capture settings save worker");
+                        })
+                        .expect("could not start capture settings save worker");
                 }
             }
             if ui.small_button(tr("Discard")).clicked() {
