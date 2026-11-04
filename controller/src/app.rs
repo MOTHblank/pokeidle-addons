@@ -33,6 +33,7 @@ mod automation_capture;
 mod automation_restock;
 mod automation_widgets;
 mod runtime_panel;
+mod diagnostics_panel;
 mod accounts_panel;
 mod status_widgets;
 mod account_state;
@@ -56,6 +57,8 @@ use automation_capture::{auto_catch_setting_label, draw_native_automation};
 use automation_restock::{restock_fields_equal, draw_overview_restock};
 use automation_widgets::{detail_stat_line, resource_chip, automation_badge, bonus_chip};
 use runtime_panel::{draw_runtime_section, draw_credits};
+use diagnostics_panel::draw_diagnostics_panel;
+use crate::diagnostics::{DiagnosticsSampler, should_sample, SAMPLE_INTERVAL};
 use accounts_panel::draw_accounts_panel;
 use status_widgets::{status_chip, status_badge, runtime_chip, runtime_row, section_label, sidebar_button, compact_text};
 use kick_panel::{multikick_link, open_kick_channels_in_regular_browser};
@@ -975,7 +978,7 @@ enum AfterStop {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PanelTab { Overview, Hunts, Boss, Accounts, Automation, Options }
+enum PanelTab { Overview, Hunts, Boss, Accounts, Automation, Diagnostics, Options }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AccountsSection { Profiles, Kick }
@@ -1084,6 +1087,8 @@ pub struct ControllerApp {
     status: String,
     status_error: bool,
     events: VecDeque<UiEvent>,
+    // Exists only while the Diagnostics tab is actively viewed in foreground.
+    diagnostics: Option<DiagnosticsSampler>,
     account_setup_checked_at: Option<Instant>,
     update_status: SharedUpdateStatus,
     #[cfg(windows)]
@@ -1181,6 +1186,7 @@ impl ControllerApp {
             status: "Ready · launch only the profiles you need".to_string(),
             status_error: false,
             events: VecDeque::new(),
+            diagnostics: None,
             account_setup_checked_at: None,
             update_status,
             #[cfg(windows)]
@@ -1328,11 +1334,32 @@ impl eframe::App for ControllerApp {
         let multi_account_overview = self.workspace.panel_tab == PanelTab::Overview
             && self.workspace.selected_details.is_none()
             && self.accounts.iter().filter(|account| account.enabled).take(2).count() == 2;
-        ui.ctx().request_repaint_after(ui_repaint_interval(
-            background, auth_in_progress, native_detail, multi_account_overview,
-        ));
-
         draw_sidebar(self, ui);
+
+        // Diagnostics is strictly opt-in. Ignore background-refresh settings:
+        // an unfocused or tray-hidden window must never keep sampling.
+        #[cfg(windows)]
+        let tray_hidden = self.tray_hidden.load(Ordering::Relaxed);
+        #[cfg(not(windows))]
+        let tray_hidden = false;
+        let focused = ui.ctx().input(|input| input.viewport().focused);
+        let diagnostics_active = should_sample(
+            self.workspace.panel_tab == PanelTab::Diagnostics,
+            !controller_is_background(tray_hidden, focused),
+        );
+        if !diagnostics_active {
+            // This frees the short history and CPU baseline immediately.
+            self.diagnostics = None;
+        }
+        let diagnostics_running = diagnostics_active &&
+            self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused);
+        let frame_start = diagnostics_running.then(Instant::now);
+        ui.ctx().request_repaint_after(if diagnostics_running {
+            SAMPLE_INTERVAL
+        } else {
+            ui_repaint_interval(background, auth_in_progress, native_detail,
+                multi_account_overview)
+        });
 
         egui::Panel::top("header")
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(20, 13)))
@@ -1348,6 +1375,7 @@ impl eframe::App for ControllerApp {
                             PanelTab::Boss => "Boss Manager",
                             PanelTab::Accounts => "Accounts",
                             PanelTab::Automation => "Automation",
+                            PanelTab::Diagnostics => "Diagnostics",
                             PanelTab::Options => "Options",
                         }))
                             .font(FontId::proportional(23.0))
@@ -1425,6 +1453,7 @@ impl eframe::App for ControllerApp {
                     PanelTab::Boss => draw_boss_panel(self, ui),
                     PanelTab::Accounts => draw_accounts_panel(self, ui),
                     PanelTab::Automation => draw_automation_panel(self, ui),
+                    PanelTab::Diagnostics => draw_diagnostics_panel(self, ui, diagnostics_active),
                     PanelTab::Options => draw_options_panel(self, ui),
                 }
             });
@@ -1459,6 +1488,9 @@ impl eframe::App for ControllerApp {
         // Apply the persisted preference immediately to all Firefox monitors.
         // Neither native game nor Twitch connections are throttled.
         self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
+        if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
+            sampler.record_frame(start.elapsed());
+        }
     }
 }
 
