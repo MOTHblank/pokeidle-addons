@@ -67,6 +67,14 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss fight queued" => "Batalha de boss enviada à fila",
         "Boss farming requested" => "Farm de boss solicitado",
         "Boss fight requested" => "Batalha de boss solicitada",
+        "Returning to Pokémon Center before boss entry" =>
+            "Retornando ao Centro Pokémon antes de entrar no boss",
+        "At Pokémon Center; entering boss" =>
+            "No Centro Pokémon; entrando no boss",
+        "Starting boss farm from Pokémon Center" =>
+            "Iniciando farm de boss a partir do Centro Pokémon",
+        "Starting boss fight from Pokémon Center" =>
+            "Iniciando batalha de boss a partir do Centro Pokémon",
         "Switching to boss; waiting for the same travel opening as Hunt Atlas." =>
             "Trocando para o boss; aguardando a mesma janela de troca do Hunt Atlas.",
         "Switching to boss when the Hunt Atlas travel gate opens" =>
@@ -129,8 +137,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Server-native Boss Farm" => "Farm de Boss (servidor)",
         "Start this account to manage server-native boss farming" =>
             "Inicie esta conta para gerenciar o farm de bosses no servidor",
-        "Boss entry waits for the same safe switch opening used by Hunt Atlas, then changes directly from the current hunt. Server repetition heals and spends entry tokens; Moth restores your original hunt when the run ends." =>
-            "A entrada no boss aguarda a mesma abertura segura usada pelo Hunt Atlas e troca diretamente da hunt atual. A repetição do servidor cura a equipe e consome os tokens; o Moth restaura a hunt original quando a sequência termina.",
+        "Boss entry uses Hunt Atlas navigation to return to the Pokémon Center first, then starts the selected boss. If travel stays blocked for one minute, the pending request authorizes one Give Up. Moth restores your original hunt when the run ends." =>
+            "A entrada no boss usa a navegação do Hunt Atlas para voltar primeiro ao Centro Pokémon e então iniciar o boss escolhido. Se a viagem ficar bloqueada por um minuto, a solicitação pendente autoriza uma desistência. O Moth restaura a hunt original quando a sequência termina.",
         "Waiting for the server's playable boss catalog." =>
             "Aguardando o catálogo de bosses jogáveis do servidor.",
         "No playable boss arenas are currently advertised by the server." =>
@@ -156,6 +164,10 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Bosses fight at the level of your strongest eligible team Pokémon, never below their own unlock level. Trainer level still controls which bosses are unlocked; entry tokens and drop tiers are unchanged." =>
             "Os bosses lutam no nível do Pokémon elegível mais forte da sua equipe, nunca abaixo do próprio nível de liberação. O nível do treinador continua definindo quais bosses estão liberados; tokens de entrada e faixas de drop não mudaram.",
         "Boss status" => "Status do boss",
+        "Boss battle history" => "Histórico de batalhas de boss",
+        "Current fight" => "Batalha atual",
+        "Boss fight active" => "Batalha de boss ativa",
+        "Boss farm active" => "Farm de boss ativo",
         "Return destination" => "Hunt de retorno",
         "Server repeating" => "Repetição no servidor",
         "Stop repetition and return" => "Parar repetição e retornar",
@@ -172,6 +184,10 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Showing the latest 60 victories (up to 500 are retained per account)." =>
             "Exibindo as últimas 60 vitórias (até 500 são preservadas por conta).",
         "Boss command queued" => "Comando de boss enviado à fila",
+        "Wait for a safe combat opening. If travel stays blocked for one minute, give up once and continue to the Pokémon Center." =>
+            "Aguarde uma abertura segura no combate. Se a viagem continuar bloqueada por um minuto, desista uma vez e continue até o Centro Pokémon.",
+        "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, give up once to reach the Pokémon Center and continue the requested destination." =>
+            "O combate continua bloqueando a viagem. O Moth continuará verificando a cada ciclo e, após um minuto, desistirá uma vez para chegar ao Centro Pokémon e continuar até o destino solicitado.",
         "Traveling to Pokémon Center" => "Indo ao Centro Pokémon",
         "Waiting for a safe boss switch opening" => "Aguardando abertura segura para trocar para o boss",
         "Boss request cancelled before entry" => "Solicitação de boss cancelada antes da entrada",

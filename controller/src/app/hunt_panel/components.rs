@@ -198,7 +198,7 @@ pub(super) fn draw_atlas_navigation_actions(
     ui.horizontal_wrapped(|ui|{
         if ui.add_enabled(live && !view.in_center && !view.pending_center,
             egui::Button::new(tr("Pokémon Center"))
-        ).on_hover_text(tr("Wait for a safe combat opening, then travel to the Pokémon Center without giving up."))
+        ).on_hover_text(tr("Wait for a safe combat opening. If travel stays blocked for one minute, give up once and continue to the Pokémon Center."))
             .clicked(){
             match native.send_command(GameCommand::Center){
                 Ok(())=>*error=None,

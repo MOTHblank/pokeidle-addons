@@ -1,5 +1,6 @@
 //! Per-account travel commands wait for server-confirmed switch openings.
-//! No automatic surrender, healing, or other destructive navigation.
+//! A destination request that stays blocked for one full minute is explicit
+//! consent to surrender once, reach the Pokémon Center, and continue.
 use crate::native_gameplay::GameCommand;
 use crate::native_hunts::HuntView;
 use serde_json::Value;
@@ -7,10 +8,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SELECT_RETRY: Duration = Duration::from_millis(350);
 const STUCK_FOR: Duration = Duration::from_secs(14);
+const FORCE_GIVE_UP_AFTER: Duration = Duration::from_secs(60);
 
-/// A warning, not permission to surrender. The decision belongs to the player.
 pub const BLOCKED_NOTICE: &str =
-    "Combat keeps blocking travel. This opponent may be too strong to leave without giving up. Keep waiting for an opening, or choose Pokémon Center (Give Up) manually. Give Up KOs your Pokémon and may cost XP.";
+    "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, give up once to reach the Pokémon Center and continue the requested destination.";
 
 #[derive(Default)]
 struct SwitchGate {
@@ -97,6 +98,7 @@ pub struct HuntNavigator {
     target: Option<Destination>,
     started: Option<Instant>,
     last_select: Option<Instant>,
+    give_up_sent: bool,
 }
 impl HuntNavigator {
     pub fn select(&mut self, slug: String, now: Instant) {
@@ -105,6 +107,7 @@ impl HuntNavigator {
         self.target = Some(destination);
         self.started = Some(now);
         self.last_select = None;
+        self.give_up_sent = false;
     }
     /// Boss entry is a destination change just like Hunt Atlas. Keeping it
     /// inside this navigator gives it the same gate, retry cadence and blocked
@@ -115,6 +118,7 @@ impl HuntNavigator {
         self.target = Some(destination);
         self.started = Some(now);
         self.last_select = None;
+        self.give_up_sent = false;
     }
     pub fn boss_pending(&self) -> bool {
         matches!(self.target.as_ref(), Some(Destination::Boss { .. }))
@@ -130,6 +134,7 @@ impl HuntNavigator {
         self.target = Some(Destination::Center);
         self.started = Some(now);
         self.last_select = None;
+        self.give_up_sent = false;
     }
     pub fn center_pending(&self) -> bool {
         self.target == Some(Destination::Center)
@@ -142,6 +147,7 @@ impl HuntNavigator {
         self.target = None;
         self.started = None;
         self.last_select = None;
+        self.give_up_sent = false;
     }
     pub fn observe(&mut self, frame: &Value, view: &HuntView, now: Instant) {
         self.gate.observe(frame, now);
@@ -155,15 +161,15 @@ impl HuntNavigator {
         if arrived { self.cancel(); }
     }
     /// The same server-confirmed opening used by Hunt Atlas destination
-    /// changes. Boss entry borrows this gate instead of detouring through
-    /// the Pokémon Center.
+    /// changes. Boss travel uses it for the Center leg, then boss entry is
+    /// immediate from the confirmed Center state.
     pub fn switch_open(&self, view: &HuntView, now: Instant) -> bool {
         if view.in_center || view.hunt_slug.is_none() { return true; }
         let (entry, combat) = self.gate.remaining(now);
         entry == 0 && combat == 0
     }
-    /// Warn only if attacks are continuously preventing travel after the
-    /// entry lock is already clear. Never turn this warning into Give Up.
+    /// Warn if attacks continuously prevent travel after the entry lock clears.
+    /// The separate one-minute threshold below authorizes a single Give Up.
     pub fn blocked(&self, view: &HuntView, now: Instant) -> bool {
         if self.target.is_none() || view.in_center ||
             !self.started.is_some_and(|at|
@@ -197,7 +203,15 @@ impl HuntNavigator {
             Destination::Center => {}
         }
 
-        if !self.switch_open(view, now) { return None; }
+        let switch_open = self.switch_open(view, now);
+        if !view.in_center && !switch_open && !self.give_up_sent &&
+            self.started.is_some_and(|at|
+                now.saturating_duration_since(at) >= FORCE_GIVE_UP_AFTER) {
+            self.give_up_sent = true;
+            self.last_select = Some(now);
+            return Some(GameCommand::GiveUp);
+        }
+        if !switch_open { return None; }
         if self.last_select.is_some_and(|sent|
             now.saturating_duration_since(sent) < SELECT_RETRY) {
             return None;
@@ -337,7 +351,7 @@ mod tests {
         assert_eq!(kind(nav.next_action(&state, at + Duration::from_secs(1))), "center");
     }
     #[test]
-    fn permanently_blocked_combat_never_surrenders_or_heals() {
+    fn one_minute_blocked_travel_gives_up_once_then_continues() {
         let at = Instant::now();
         let mut nav = HuntNavigator::default();
         let state = view();
@@ -351,7 +365,16 @@ mod tests {
             assert!(nav.blocked(&state, now));
             assert_eq!(kind(nav.next_action(&state, now)), "none");
         }
-        assert_eq!(kind(nav.next_action(&state, at+Duration::from_secs(120))), "hunt");
+        let at_minute = at + Duration::from_secs(60);
+        nav.observe(&json!({"t":"batalha","ev":[{"k":"ataque"}]}), &state, at_minute);
+        assert_eq!(kind(nav.next_action(&state, at_minute)), "giveup");
+        assert_eq!(kind(nav.next_action(&state, at_minute + Duration::from_millis(350))), "none",
+            "surrender is sent once while waiting for the Center confirmation");
+        let mut center = state.clone();
+        center.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}),
+            &center, at_minute + Duration::from_secs(1));
+        assert_eq!(kind(nav.next_action(&center, at_minute + Duration::from_secs(1))), "hunt");
     }
     #[test]
     fn center_and_hunt_requests_replace_each_other() {
