@@ -44,6 +44,12 @@ mod alerts;
 mod single_instance;
 
 fn main() {
+    // The downloaded replacement binary doubles as a tiny updater helper.
+    // Handle that mode before touching single-instance state, TLS or user data.
+    if update::maybe_run_update_helper() {
+        return;
+    }
+
     // A second launch only signals the original window. Do this before
     // initializing TLS, opening accounts or scheduling any background work.
     let instance = match single_instance::acquire() {
