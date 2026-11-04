@@ -726,25 +726,32 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 );
             }
             ui.add_space(10.0);
-            // Keep the two panels beside each other even in a narrow window:
-            // pan horizontally instead of crushing buttons and history rows.
+            // Keep status and history beside each other without letting the
+            // horizontal scroller consume the rest of the page vertically.
+            // Measure the row before entering the horizontal ScrollArea:
+            // available_width() inside a horizontal scroller is intentionally
+            // unbounded and must not be used to size these two columns.
+            let summary_width = ui.available_width().max(720.0);
             egui::ScrollArea::horizontal()
                 .id_salt(("boss-summary-horizontal", index))
-                .auto_shrink([false, false])
+                .max_height(260.0)
+                .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width().max(700.0));
+                    ui.set_width(summary_width);
                     ui.columns(2, |cols| {
                         egui::ScrollArea::vertical()
                             .id_salt(("boss-status-top", index))
-                            .max_height(300.0)
-                            .auto_shrink([false, false])
+                            .max_height(240.0)
+                            .auto_shrink([false, true])
                             .show(&mut cols[0], |ui| {
-                                draw_boss_status_card(app, ui, index, &view, &hunt, live, &mut action);
+                                draw_boss_status_card(
+                                    app, ui, index, &view, &hunt, live, &mut action,
+                                );
                             });
                         egui::ScrollArea::vertical()
                             .id_salt(("boss-history-top", index))
-                            .max_height(300.0)
-                            .auto_shrink([false, false])
+                            .max_height(240.0)
+                            .auto_shrink([false, true])
                             .show(&mut cols[1], |ui| {
                                 draw_boss_history_card(app, ui, index, &view, now);
                             });
