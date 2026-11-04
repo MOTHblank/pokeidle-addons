@@ -191,6 +191,7 @@ pub fn load() -> Result<Reference, String> {
     }
     finalize_capture_stages(&mut reference);
     merge_upstream_megas(&mut reference);
+    apply_upstream_movesets(&mut reference);
     Ok(reference)
 }
 /// A creature's player-market listing must never become NPC/capture rarity.
@@ -334,11 +335,9 @@ pub fn finalize_capture_stages(reference:&mut Reference){
         }
     }
 }
-/// Tiny baked upstream metadata for Mega / second-Mega species. The combat
-/// reference uses the exact game types and bases. The full move catalog is
-/// unavailable as a static upstream JSON, so retain the base species moves
-/// and include the upstream Mega signature (600 power / 30-second cooldown).
-/// Game-reported combat measurements still calibrate active-hunt throughput.
+/// Supplement public creature JSON with the latest Mega types and base stats.
+/// The full 1.398.1 spreadsheet movesets are applied afterward, not synthesized
+/// from the base species or a retired 30-second Mega signature.
 fn merge_upstream_megas(reference:&mut Reference){
     for row in include_str!("../assets/visual/upstream-megas.tsv").lines(){
         if row.starts_with('#')||row.is_empty(){continue}
@@ -356,15 +355,40 @@ fn merge_upstream_megas(reference:&mut Reference){
         if stats.len()!=6||columns[3].is_empty(){continue}
         let types=[columns[3],columns[4]].iter().filter(|s|!s.is_empty())
             .map(|s|(*s).to_owned()).collect::<Vec<_>>();
-        let mut moves=base.moves;
-        moves.push(ReferenceMove{
-            move_type:columns[3].to_owned(),
-            special:stats[3]>stats[1],
-            power:600.0,cooldown:30_000.0,min_level:1,
-        });
         reference.species.insert(id,ReferenceSpecies{
-            name:columns[2].to_owned(),types,base:stats,moves,
+            name:columns[2].to_owned(),types,base:stats,moves:base.moves,
         });
+    }
+}
+/// Spreadsheet move overrides from upstream shared/golpes-planilhas.mjs,
+/// v1.398.1. The static creature JSON has not been regenerated for every
+/// balance pass. The table includes normal species, named Outland variants
+/// and all 94 Megas; every move here is unlocked at level 1. No made-up
+/// Mega signature attack or legacy cooldown is inserted.
+fn apply_upstream_movesets(reference:&mut Reference) {
+    let mut by_id:BTreeMap<u64,Vec<ReferenceMove>>=BTreeMap::new();
+    for line in include_str!("../assets/visual/upstream-movesets-v1398.tsv").lines() {
+        if line.starts_with('#')||line.is_empty(){continue}
+        let fields=line.split('\t').collect::<Vec<_>>();
+        if fields.len()!=5 {continue}
+        let (Ok(id),Ok(power),Ok(cooldown))=(
+            fields[0].parse::<u64>(),
+            fields[3].parse::<f64>(),
+            fields[4].parse::<f64>()
+        )else{continue};
+        if !matches!(fields[2],"P"|"S") || fields[1].is_empty()
+            ||!power.is_finite()||power<15.0
+            ||!cooldown.is_finite()||cooldown<=0.0 {continue}
+        by_id.entry(id).or_default().push(ReferenceMove{
+            move_type:fields[1].to_owned(),
+            special:fields[2]=="S",
+            power,cooldown,min_level:1,
+        });
+    }
+    for (id,moves) in by_id {
+        if let Some(species)=reference.species.get_mut(&id) {
+            species.moves=moves;
+        }
     }
 }
 fn effect(chart:&Reference, attack:&str, target:&ReferenceSpecies) -> f64 {
@@ -570,27 +594,28 @@ mod tests {
             moves:Vec::new(),
         });
         merge_upstream_megas(&mut reference);
+        apply_upstream_movesets(&mut reference);
         let mega=reference.species.get(&9006).unwrap();
         assert_eq!(mega.types,vec!["FIRE","DRAGON"]);
         assert_eq!(mega.base[1],130.0);
-        assert_eq!(mega.moves[0].power,600.0);
-        assert_eq!(mega.moves[0].cooldown,30_000.0);
+        assert!(mega.moves.iter().any(|mv|mv.power==600.0&&mv.cooldown==60_000.0));
+        assert!(!mega.moves.iter().any(|mv|mv.power==600.0&&mv.cooldown==30_000.0));
         assert!(!reference.capture_stages.contains_key(&9006));
     }
     #[test]
-    fn upstream_v1357_3_mega_reference_uses_latest_types_stats_and_second_megas() {
+    fn upstream_v1398_1_mega_reference_uses_latest_types_stats_and_movesets() {
         // These compact rows supplement the live creature JSON for Megas.
-        // Every new upstream Mega and the changed Aggron typing must survive
-        // the base-species lookup used by the native battle simulator.
+        // Full spreadsheet moves replace the old invented signature attacks.
         let mut reference=Reference::default();
         let base=ReferenceSpecies{
             name:"Base".into(),types:vec!["NORMAL".into()],
             base:vec![100.0;6],moves:Vec::new(),
         };
-        for id in [26,306,373,445,500,531,952] {
+        for id in [6,26,306,373,445,500,531,952,970,9718] {
             reference.species.insert(id,base.clone());
         }
         merge_upstream_megas(&mut reference);
+        apply_upstream_movesets(&mut reference);
         for (id,types,stats) in [
             (3373,vec!["DRAGON","FLYING"],vec![95.0,145.0,130.0,120.0,90.0,120.0]),
             (3500,vec!["FIRE","FIGHTING"],vec![110.0,148.0,75.0,110.0,110.0,75.0]),
@@ -598,20 +623,29 @@ mod tests {
             (3952,vec!["GRASS","FIRE"],vec![65.0,138.0,85.0,138.0,85.0,75.0]),
             (9026,vec!["ELECTRIC"],vec![60.0,135.0,95.0,90.0,95.0,110.0]),
             (9445,vec!["DRAGON"],vec![108.0,130.0,85.0,141.0,85.0,151.0]),
+            (3970,vec!["ROCK","POISON"],vec![83.0,90.0,105.0,150.0,96.0,101.0]),
+            (3718,vec!["DRAGON","GROUND"],vec![216.0,70.0,91.0,216.0,85.0,100.0]),
         ] {
             let mega=reference.species.get(&id)
                 .unwrap_or_else(||panic!("Missing upstream Mega {id}"));
             assert_eq!(mega.types,types,"Mega {id} types");
             assert_eq!(mega.base,stats,"Mega {id} stats");
-            assert_eq!(mega.moves.len(),1,"Mega {id} signature attack");
-            assert_eq!(mega.moves[0].power,600.0);
+            assert!(mega.moves.len()>=12,"Mega {id} spreadsheet moves");
+            assert!(mega.moves.iter().any(|mv|mv.power==600.0
+                &&mv.cooldown==60_000.0),"Mega {id} has a 60s ultimate");
+            assert!(!mega.moves.iter().any(|mv|mv.power==600.0
+                &&mv.cooldown==30_000.0),"Mega {id} must not have a retired signature");
             assert!(special_capture_species(id),"Mega {id} must not use ordinary capture odds");
         }
         let aggron=&reference.species[&3306];
         assert_eq!(aggron.types,vec!["STEEL"]);
         assert_eq!(aggron.base[2],230.0);
         assert_eq!(include_str!("../assets/visual/upstream-megas.tsv").lines()
-            .filter(|line|line.starts_with(|c:char|c.is_ascii_digit())).count(),93);
+            .filter(|line|line.starts_with(|c:char|c.is_ascii_digit())).count(),94);
+        assert_eq!(reference.species[&3970].moves.len(),12);
+        assert!(reference.species[&6].moves.len()>=10,
+            "Regular species must also use the current spreadsheet");
+        assert_eq!(reference.species[&3718].base[0],216.0);
     }
     #[test]
     fn upstream_v1357_3_forms_map_to_base_dex_and_exclude_special_captures() {
