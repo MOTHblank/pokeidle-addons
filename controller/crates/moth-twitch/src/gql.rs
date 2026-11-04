@@ -158,7 +158,11 @@ impl TwitchGql {
         let user_id = value.get("user_id").and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| GqlError::Protocol("Twitch sign-in did not include a user id".into()))?;
-        self.client_id = Some(client_id.to_owned());
+        self.client_id = Some(if self.credentials.device_id.is_some() {
+            REFERENCE_CLIENT_ID.to_owned()
+        } else {
+            client_id.to_owned()
+        });
         self.user_id = Some(user_id.to_owned());
         Ok(ViewerIdentity {
             login: login.to_ascii_lowercase(),
