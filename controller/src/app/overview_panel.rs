@@ -259,7 +259,7 @@ pub(super) fn draw_overview_card(
     let running = app.runtimes[index].game.is_running();
     let native_view = sample.view.as_ref();
     let boss_view = sample.boss.as_ref();
-    if boss_view.and_then(overview_boss).is_some() && app.hunt_reference.is_none() {
+    if boss_view.and_then(overview_boss_key).is_some() && app.hunt_reference.is_none() {
         super::boss_panel::ensure_boss_combat_reference(app);
     }
     let account_name = native_view
@@ -365,9 +365,10 @@ pub(super) fn draw_overview_card(
             ui.add_space(7.0);
             ui.separator();
             ui.horizontal_wrapped(|ui| {
-                let active_boss = boss_view.and_then(overview_boss);
-                let (activity_label, activity_name) = if let Some(boss) = active_boss {
-                    (tr("Current fight"), boss.name.as_str())
+                let active_boss = boss_view.and_then(overview_boss_key);
+                let (activity_label, activity_name) = if let Some(key) = active_boss {
+                    (tr("Current fight"), boss_view.and_then(overview_boss)
+                        .map(|entry| entry.name.as_str()).unwrap_or(key))
                 } else {
                     let hunt = if !running { "—" } else if health.hunt.is_empty() {
                         match health.activity.as_str() {
@@ -736,10 +737,14 @@ fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
     view.hunts.iter().find(|entry| entry.slug == slug)
 }
 
-fn overview_boss(view: &BossView) -> Option<&BossEntry> {
-    let key = view.arena.as_deref().or_else(|| {
+fn overview_boss_key(view: &BossView) -> Option<&str> {
+    view.arena.as_deref().or_else(|| {
         if view.auto { view.auto_key.as_deref() } else { None }
-    })?;
+    })
+}
+
+fn overview_boss(view: &BossView) -> Option<&BossEntry> {
+    let key = overview_boss_key(view)?;
     view.catalog.iter().find(|entry| entry.key == key)
 }
 
@@ -755,8 +760,9 @@ fn overview_boss_species_id(
         .flat_map(|ch| ch.to_lowercase())
         .collect::<String>();
     let target = key(&entry.name);
-    reference?.species.iter().find_map(|(id, species)|
-        (key(&species.name) == target).then_some(*id))
+    reference.and_then(|reference| reference.species.iter().find_map(|(id, species)|
+        (key(&species.name) == target).then_some(*id)))
+        .or_else(|| native_hunts::game_species_id_by_name(&entry.name))
 }
 fn overview_hunt_art_species(view: &HuntView) -> Option<u64> {
     // Artwork follows the hunt's own species ID, never the current wild
@@ -832,6 +838,7 @@ fn draw_overview_matchup(
     // Preserve the last confirmed identity and artwork during a reconnect.
     // Connectivity and combat activity below still require fresh telemetry.
     let pokemon = view.and_then(|v|v.active_pokemon.as_ref());
+    let boss_key = boss_view.and_then(overview_boss_key);
     let boss = boss_view.and_then(overview_boss);
     let boss_species = boss.and_then(|entry|
         overview_boss_species_id(entry, app.hunt_reference.as_deref()));
@@ -872,19 +879,20 @@ fn draw_overview_matchup(
         // Boss arena state takes precedence over the saved/current hunt.
         // Outside bosses, keep the stable Hunt Atlas representative artwork.
         cols[1].with_layout(Layout::top_down(Align::Max), |ui| {
-            ui.label(RichText::new(tr(if boss.is_some() { "Current fight" } else { "Current hunt" }))
+            ui.label(RichText::new(tr(if boss_key.is_some() { "Current fight" } else { "Current hunt" }))
                 .size(9.0).color(DIM));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if boss.is_some() {
+                if boss_key.is_some() {
                     overview_combat_image(&mut app.visuals, ui,
-                        None, None, boss_species, true);
+                        None, boss_species.and_then(native_hunts::game_species_looktype),
+                        boss_species, true);
                 } else {
                     overview_combat_image(&mut app.visuals, ui,
                         None, hunt_looktype, hunt_species, true);
                 }
                 ui.vertical(|ui| {
-                    let name = if let Some(boss) = boss {
-                        boss.name.as_str()
+                    let name = if let Some(key) = boss_key {
+                        boss.map(|entry| entry.name.as_str()).unwrap_or(key)
                     } else if combat == OverviewCombatState::Center {
                         tr("At Pokémon Center")
                     } else {
@@ -897,7 +905,7 @@ fn draw_overview_matchup(
                     ui.add(egui::Label::new(RichText::new(compact_text(name, 21))
                         .size(11.0).strong().color(TEXT))
                         .truncate()).on_hover_text(name);
-                    let level = if boss.is_some() {
+                    let level = if boss_key.is_some() {
                         boss_level.map(|level| format!("Lv. {level}"))
                             .unwrap_or_else(|| "—".into())
                     } else {
@@ -910,7 +918,7 @@ fn draw_overview_matchup(
             });
         });
     });
-    let (state_label, color)=if boss.is_some() {
+    let (state_label, color)=if boss_key.is_some() {
         if !fresh {
             (tr("No live connection"), DIM)
         } else if boss_view.is_some_and(|state| state.auto) {
