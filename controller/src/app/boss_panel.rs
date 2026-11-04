@@ -168,7 +168,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 &format!("{} × {}", tokens, entry.token_name),
                             );
                             ui.label(RichText::new(tr(
-                                "Bosses now fight at your trainer level (minimum: their unlock level). A higher trainer level increases boss stats and battle duration; entry tokens and drop tiers still follow the original boss."
+                                "Bosses now fight at your trainer level (minimum: their unlock level). Its combat stats scale with that level, so old fixed-level farming expectations no longer apply. Entry tokens and drop tiers still follow the original boss."
                             )).size(10.0).color(MUTED));
 
                             let ready = live
