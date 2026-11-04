@@ -153,7 +153,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
         };
         ui.horizontal_wrapped(|ui| {
             status_chip(ui, "PokéIdle", game_label, game_online);
-            status_chip(ui, tr("Twitch miner"), twitch_miner_label, twitch_miner_online);
+            status_chip(ui, tr("Twitch"), twitch_miner_label, twitch_miner_online);
         });
         if let Some(state)=twitch_miner.as_ref() {
             if twitch_miner_online {
@@ -231,7 +231,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
                 setup.profile_ready);
             status_chip(ui, "PokéIdle login", game_label, game_online);
-            status_chip(ui, tr("Twitch miner"), twitch_miner_label, twitch_miner_online);
+            status_chip(ui, tr("Twitch"), twitch_miner_label, twitch_miner_online);
             ui.add_space(7.0);
             if game_online {
                 ui.label(RichText::new(tr(
@@ -247,13 +247,13 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
                     app.profile_action(profile, ProfileAction::GoogleSignIn);
                 }
-                if ui.button(tr("Twitch miner sign-in (optional)")).clicked() {
+                if ui.button(tr("Import Twitch login from Firefox")).clicked() {
                     app.runtimes[index].twitch.login_done_seen=false;
                     if let Err(error)=crate::native_twitch_login::start(profile) {
                         app.set_status(error,true);
                     }
                 }
-                if ui.button(tr("Twitch alternative sign-in (BiDi)")).clicked() {
+                if ui.button(tr("Alternative Firefox import")).clicked() {
                     app.runtimes[index].twitch.login_done_seen=false;
                     if let Err(error)=crate::native_twitch_login::start_alternative(profile) {
                         app.set_status(error,true);
@@ -261,7 +261,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 }
             });
             ui.label(RichText::new(tr(
-                "Twitch mining is optional and never blocks PokéIdle startup. Existing Firefox login is imported automatically; a new Twitch login is detected and its temporary Firefox window closes automatically."
+                "Twitch is optional. Use the Twitch page for the recommended code sign-in."
             )).size(10.0).color(MUTED));
         });
         if changed {
