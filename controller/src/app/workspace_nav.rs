@@ -241,7 +241,10 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.add_space(12.0);
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.add_space(6.0);
-                draw_credits(ui, &app.update_status);
+                if draw_credits(ui, &app.update_status) {
+                    app.workspace.panel_tab = PanelTab::Options;
+                    app.workspace.options_section = OptionsSection::Updates;
+                }
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(if cfg!(windows) { tr("Moth Controller · Windows") } else { tr("Moth Controller · Linux") })
