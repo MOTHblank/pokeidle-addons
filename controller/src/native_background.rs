@@ -1244,35 +1244,37 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         let pref = match pvp_preference.load(Ordering::Acquire) {
                             1 => Some(false), 2 => Some(true), _ => None,
                         };
-                        let vip = hunt_intel.view.bonuses.vip_active;
+                        // Fail open to the regular queue path when VIP has
+                        // not been identified yet. This keeps explicit Auto PvP
+                        // working even on incomplete state payloads. If the
+                        // server later confirms VIP, the next tick naturally
+                        // switches to the native pvpAutoFila path.
+                        let vip = hunt_intel.view.bonuses.vip_known
+                            && hunt_intel.view.bonuses.vip_active;
                         let vip_auto = hunt_intel.view.automation.as_ref()
                             .and_then(|a| a.get("pvpAutoFila")).and_then(Value::as_bool);
-                        // Do not treat an unconfirmed VIP status as non-VIP:
-                        // matchmaking must wait until the server reports it.
-                        if hunt_intel.view.bonuses.vip_known {
-                            if let Some(action) = pvp.next(pref, vip, vip_auto,
-                                hunt_intel.view.trainer_level, Instant::now()) {
-                                match action {
-                                    PvpAction::SetVipAuto(wanted) => {
-                                        if let Err(error) = automation_writer.queue(
-                                            "pvpAutoFila".into(), Value::Bool(wanted)) {
-                                            crate::logging::warn(&format!(
-                                                "Could not update VIP Auto PvP preference: {error}"));
-                                        }
+                        if let Some(action) = pvp.next(pref, vip, vip_auto,
+                            hunt_intel.view.trainer_level, Instant::now()) {
+                            match action {
+                                PvpAction::SetVipAuto(wanted) => {
+                                    if let Err(error) = automation_writer.queue(
+                                        "pvpAutoFila".into(), Value::Bool(wanted)) {
+                                        crate::logging::warn(&format!(
+                                            "Could not update VIP Auto PvP preference: {error}"));
                                     }
-                                    other => if let Some(wire) = other.wire() {
-                                        if socket.send(Message::Text(wire.to_string().into())).is_err() {
-                                            pvp.send_failed(other);
-                                            send_failed = true;
-                                        } else if matches!(other, PvpAction::Join | PvpAction::Leave) {
-                                            let activity = if other == PvpAction::Join {
-                                                "requested matchmaking"
-                                            } else { "requested queue cancellation" };
-                                            crate::logging::info(&format!(
-                                                "{}: Auto PvP {activity}", profile.label()));
-                                        }
-                                    },
                                 }
+                                other => if let Some(wire) = other.wire() {
+                                    if socket.send(Message::Text(wire.to_string().into())).is_err() {
+                                        pvp.send_failed(other);
+                                        send_failed = true;
+                                    } else if matches!(other, PvpAction::Join | PvpAction::Leave) {
+                                        let activity = if other == PvpAction::Join {
+                                            "requested matchmaking"
+                                        } else { "requested queue cancellation" };
+                                        crate::logging::info(&format!(
+                                            "{}: Auto PvP {activity}", profile.label()));
+                                    }
+                                },
                             }
                         }
                         last_pvp_tick = Instant::now();
