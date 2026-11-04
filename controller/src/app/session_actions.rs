@@ -82,16 +82,26 @@ impl ControllerApp {
                     .and_then(|config| firefox::find_profile_process(&config));
                 let existing_firefox = matches!(detected.as_ref(), Ok(Some(_)));
                 let mut twitch_auto_detected = false;
+                let mut browser_required = false;
                 // A cache preflight panic must never strand the UI in
-                // "starting" state. Report it, then authenticate via Firefox.
+                // "starting" state. A panic or transient transport failure is
+                // not evidence that the player's browser login expired.
                 let result = std::panic::catch_unwind(
                     std::panic::AssertUnwindSafe(|| {
                         crate::native_tls::ensure()?;
                         detected.and_then(|_| {
                             if existing_firefox { return Ok(None); }
-                            let Some(mut bootstrap) = crate::native_auth::load_for_auth(
-                                profile,&generation_state,generation)?
-                            else {
+                            let saved = match crate::native_auth::load_for_auth(
+                                profile,&generation_state,generation)
+                            {
+                                Ok(saved) => saved,
+                                Err(error) => {
+                                    browser_required = !error.starts_with("Cached login canceled:");
+                                    return Err(error);
+                                }
+                            };
+                            let Some(mut bootstrap) = saved else {
+                                browser_required = true;
                                 return Ok(None);
                             };
 
@@ -141,10 +151,15 @@ impl ControllerApp {
                                 }
                             }
 
-                            // Never project a cached, unverified connection as
-                            // started. A failed welcome needs a fresh Firefox
-                            // authentication, not infinite background retries.
-                            NativeSession::start_verified(profile, bootstrap).map(Some)
+                            // Only an explicit HTTP authentication rejection
+                            // proves that Firefox must refresh the saved login.
+                            match NativeSession::start_verified(profile, bootstrap) {
+                                Ok(native) => Ok(Some(native)),
+                                Err(error) => {
+                                    browser_required = error.starts_with("AUTH_REQUIRED:");
+                                    Err(error)
+                                }
+                            }
                         })
                     })
                 ).unwrap_or_else(|_| {
@@ -158,14 +173,15 @@ impl ControllerApp {
                     other=>other,
                 };
                 let _ = tx.send(CachedNativeEvent {
-                    index, generation, existing_firefox, twitch_auto_detected, result
+                    index, generation, existing_firefox, twitch_auto_detected,
+                    browser_required, result
                 });
             });
         if let Err(error) = started {
             self.runtimes[index].session.cached_native_busy = false;
-            self.runtimes[index].session.require_browser_login = true;
-            self.set_status(format!("Saved login could not be used: {error}"), true);
-            self.launch_firefox_bootstrap(profile, false);
+            // Failure to create the verification worker says nothing about
+            // authentication. Keep Firefox closed and preserve the cached login.
+            self.set_status(format!("Could not verify saved login: {error}"), true);
         }
     }
 
