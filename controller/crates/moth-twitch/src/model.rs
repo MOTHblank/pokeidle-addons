@@ -36,13 +36,15 @@ impl Credentials {
 pub struct MinerConfig {
     pub poll_interval: Duration,
     pub claim_bonuses: bool,
+    pub max_watched_channels: usize,
 }
 
 impl Default for MinerConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(45),
+            poll_interval: Duration::from_secs(30),
             claim_bonuses: true,
+            max_watched_channels: 2,
         }
     }
 }
