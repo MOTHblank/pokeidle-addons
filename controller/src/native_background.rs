@@ -1064,7 +1064,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         }
                         if matches!(command, GameCommand::BossStop | GameCommand::BossLeave) {
                             let actions = if matches!(command, GameCommand::BossLeave) {
-                                boss_manager.leave(&mut navigator)
+                                boss_manager.leave(&mut navigator, &hunt_intel.view, Instant::now())
                             } else {
                                 boss_manager.stop(&mut navigator, &hunt_intel.view,
                                     Instant::now()).into_iter().collect()
@@ -1134,8 +1134,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             continue;
                         }
                         if matches!(command, GameCommand::GiveUp) {
-                            // Explicit, player-confirmed action only. Never
-                            // resume a queued destination after surrender.
+                            // Manual Give Up cancels the old destination; the
+                            // game still supplies the authoritative Center state.
                             navigator.cancel();
                             hunt_intel.cancel_hunt_intent();
                             if hunt_intel.view.in_center { continue; }
@@ -1212,8 +1212,14 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // the queued destination itself authorizes one Give Up.
                     hunt_intel.view.pending_center = navigator.center_pending();
                     hunt_intel.view.navigation_warning =
-                        navigator.blocked(&hunt_intel.view, Instant::now())
-                        .then(|| crate::native_hunt_navigation::BLOCKED_NOTICE.to_owned());
+                        if navigator.give_up_failed() {
+                            Some(crate::native_hunt_navigation::GIVE_UP_FAILED_NOTICE.to_owned())
+                        } else if navigator.give_up_pending() {
+                            Some("Waiting for Pokémon Center confirmation after Give Up".into())
+                        } else {
+                            navigator.blocked(&hunt_intel.view, Instant::now())
+                                .then(|| crate::native_hunt_navigation::BLOCKED_NOTICE.to_owned())
+                        };
                     if pending_sale.as_ref().is_some_and(|(_,at)|
                         at.elapsed()>Duration::from_secs(20)) {
                         pending_sale=None;
