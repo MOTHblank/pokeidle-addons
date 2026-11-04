@@ -89,10 +89,10 @@ fn log_miner_event(account:&str,event:MinerEvent) {
     match event {
         MinerEvent::Connected {login,reference_client} => crate::logging::info(&format!(
             "{prefix} authenticated as {login} ({})",
-            if reference_client {"reference device session"} else {"Firefox compatibility session"}
+            if reference_client {"Twitch code"} else {"Firefox"}
         )),
         MinerEvent::Stopped => crate::logging::info(&format!(
-            "{prefix} miner stopped"
+            "{prefix} stopped"
         )),
         MinerEvent::RosterUpdated {channels} => crate::logging::info(&format!(
             "{prefix} official channel roster loaded: {channels} channel(s)"
@@ -171,7 +171,7 @@ impl TwitchMinerSession {
         if let Some(token) = token.map(str::trim).filter(|token| !token.is_empty()) {
             if let Err(error) = session.replace_token(token, None) {
                 crate::logging::warn(&format!(
-                    "Optional Twitch miner could not start; PokéIdle is unaffected: {error}"
+                    "Twitch could not start; PokéIdle is unaffected: {error}"
                 ));
             }
         }
@@ -184,7 +184,7 @@ impl TwitchMinerSession {
         wake:Option<PhaseWake>,
     )->Result<(),String> {
         self.replace_token_checked(token,wake,||true).and_then(|applied|
-            if applied {Ok(())} else {Err("Twitch miner replacement was superseded".into())})
+            if applied {Ok(())} else {Err("Twitch session update was superseded".into())})
     }
 
     pub fn replace_token_checked(
@@ -220,7 +220,7 @@ impl TwitchMinerSession {
             return Ok(false);
         }
         let mut slot = self.miner.lock()
-            .map_err(|_| "Twitch miner state unavailable".to_owned())?;
+            .map_err(|_| "Twitch state unavailable".to_owned())?;
         if self.closed.load(Ordering::Acquire) || !is_current() {
             miner.stop();
             return Ok(false);
