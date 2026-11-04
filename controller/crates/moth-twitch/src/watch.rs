@@ -148,7 +148,7 @@ impl WatchClient {
                 self.playlist_urls.remove(login);
                 return Err("Twitch returned an invalid media segment URL".into());
             }
-            let response=self.client.head(segment).send()
+            let response=self.client.head(segment).timeout(Duration::from_secs(10)).send()
                 .map_err(|_|"Could not touch Twitch media segment".to_owned())?;
             if response.status().as_u16()!=200 {
                 self.playlist_urls.remove(login);
@@ -162,7 +162,7 @@ impl WatchClient {
     }
 
     fn read_playlist(&self,address:&Url)->Result<Vec<Url>,String> {
-        let response=self.client.get(address.clone()).send()
+        let response=self.client.get(address.clone()).timeout(Duration::from_secs(10)).send()
             .map_err(|_|"Could not load Twitch stream playlist".to_owned())?;
         if !response.status().is_success() {
             return Err(format!(
