@@ -1,4 +1,4 @@
-//! Account profile management cards and profile/Kick workspace routing.
+//! Account profile management cards and Twitch/Kick workspace routing.
 use super::{egui, kick_panel, twitch_panel, localize_status, pt_br, status_chip, tr, tr_dynamic,
     AccountsSection, Align, Color32, ControllerApp, Duration, FontId, GameProfile,
     Layout, ProfileAction, RichText, Stroke, BAD, BORDER, GOOD, MUTED,
@@ -195,7 +195,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        // Keep game profile cards compact; Kick has its own workspace.
+        // Keep game profile cards compact; Twitch and Kick have dedicated workspaces.
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let kick_running = app.runtimes[index].kick.kick_monitor.is_some();
