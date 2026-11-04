@@ -320,6 +320,11 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     if snapshot.is_some() {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
                     if snapshot.is_some() {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
                 )).clicked() {
+                    // A cached Firefox cookie can complete before the next UI
+                    // pump observes LoginStatus::Running. Mark this user action
+                    // as a fresh generation immediately so Done is never
+                    // mistaken for the previous login completion.
+                    app.runtimes[index].twitch.login_done_seen=false;
                     if let Err(error)=crate::native_twitch_login::start(profile) {
                         app.set_status(error,true);
                     }
