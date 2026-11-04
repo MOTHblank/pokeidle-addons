@@ -15,6 +15,7 @@ pub struct PvpStatus {
     pub queued: bool,
     pub awaiting_reply: bool,
     pub cooldown_secs: u64,
+    pub retry_secs: u64,
     pub waiting_for_team: bool,
     pub waiting_for_level: Option<u32>,
     pub checking_queue: bool,
@@ -71,7 +72,10 @@ impl Default for PvpAutomation {
 impl PvpAutomation {
     pub fn on_frame(&mut self, frame: &Value, now: Instant) {
         if frame.get("t").and_then(Value::as_str) != Some("pvp") { return; }
-        if let Some(time) = frame.get("time").and_then(Value::as_array) {
+        // The game reports the initial PvP team as 'time', but an edit
+        // acknowledgement uses 'timeSalvo'. Both are authoritative.
+        if let Some(time) = frame.get("timeSalvo").or_else(|| frame.get("time"))
+            .and_then(Value::as_array) {
             self.team_ready = Some(!time.is_empty());
         }
         if let Some(level) = frame.get("regras")
@@ -157,6 +161,8 @@ impl PvpAutomation {
             enabled, vip, queued: self.queued,
             awaiting_reply: self.join_sent.is_some(),
             cooldown_secs: self.cooldown_until.map(|until|
+                until.saturating_duration_since(now).as_secs()).unwrap_or(0),
+            retry_secs: self.next_join_at.map(|until|
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
             waiting_for_team: enabled && !vip && self.team_ready == Some(false),
             waiting_for_level: if enabled && !vip {
