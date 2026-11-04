@@ -7,7 +7,7 @@
 //! not depend on Twitch authentication.
 
 use moth_twitch::{Credentials, Miner, MinerConfig};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Clone, Debug, Default)]
@@ -47,13 +47,22 @@ impl Default for TwitchSnapshot {
 #[derive(Clone, Default)]
 pub struct TwitchControl {
     inner: Option<moth_twitch::MinerControl>,
+    desired: Arc<Mutex<Vec<String>>>,
 }
 
 impl TwitchControl {
     pub fn set_channels(&self, channels: Vec<String>) {
+        if let Ok(mut desired) = self.desired.lock() {
+            *desired = channels.clone();
+        }
         if let Some(inner) = self.inner.as_ref() {
             inner.set_channels(channels);
         }
+    }
+
+    #[cfg(test)]
+    pub fn channels(&self) -> Vec<String> {
+        self.desired.lock().map(|channels| channels.clone()).unwrap_or_default()
     }
 }
 
@@ -106,6 +115,7 @@ impl TwitchSession {
     pub fn control(&self) -> TwitchControl {
         TwitchControl {
             inner: self.miner.as_ref().map(Miner::control),
+            desired: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
