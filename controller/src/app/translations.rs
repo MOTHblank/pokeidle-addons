@@ -3,6 +3,17 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Current arena" => "Arena atual",
+        "Filter history" => "Filtrar histórico",
+        "All bosses" => "Todos os bosses",
+        "No victories match this boss." =>
+            "Nenhuma vitória corresponde a este boss.",
+        "Only the latest 500 victories are retained per account." =>
+            "Somente as últimas 500 vitórias são preservadas por conta.",
+        "Boss farming queued" => "Farm de boss enviado à fila",
+        "Boss fight queued" => "Batalha de boss enviada à fila",
+        "Boss stop queued" => "Parada do boss enviada à fila",
+        "Boss leave queued" => "Saída do boss enviada à fila",
         "Choose boss" => "Escolher boss",
         "Victories" => "Vitórias",
         "Finish the current boss run before starting another." =>

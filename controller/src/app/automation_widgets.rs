@@ -26,7 +26,8 @@ pub(super) fn resource_chip(ui: &mut egui::Ui, text: &str) {
         .corner_radius(7.0)
         .inner_margin(Margin::symmetric(9, 6))
         .show(ui, |ui| {
-            ui.label(RichText::new(compact_text(text, 24)).size(10.0).color(TEXT));
+            ui.label(RichText::new(compact_text(text, 24)).size(10.0).color(TEXT))
+                .on_hover_text(text);
         });
 }
 
@@ -45,7 +46,8 @@ pub(super) fn automation_badge(ui: &mut egui::Ui, label: &str, value: &str, good
                         .color(if good { GOOD } else { MUTED }),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT));
+                ui.label(RichText::new(compact_text(tr(value), 54)).size(9.0).color(TEXT))
+                    .on_hover_text(tr(value));
             });
         }).response
 }

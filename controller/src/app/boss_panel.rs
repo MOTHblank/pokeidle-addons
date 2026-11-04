@@ -6,6 +6,19 @@ use super::{
     RichText, Stroke, ACCENT, BORDER, DIM, MUTED, PANEL, PANEL_ALT, TEXT, WARN,
 };
 use std::collections::BTreeMap;
+
+const BOSS_HISTORY_PAGE_SIZE: usize = 15;
+
+fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
+    let page_count = count.div_ceil(BOSS_HISTORY_PAGE_SIZE).max(1);
+    *page = (*page).min(page_count - 1);
+    let start = *page * BOSS_HISTORY_PAGE_SIZE;
+    start..(start + BOSS_HISTORY_PAGE_SIZE).min(count)
+}
+
+fn leave_confirmation_valid(live: bool, arena: Option<&str>, target: Option<&str>) -> bool {
+    live && matches!((arena, target), (Some(arena), Some(target)) if arena == target)
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn loot_age(now: u64, at: u64) -> String {
@@ -224,6 +237,13 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         };
                         automation_badge(ui, "Boss status", phase, live && (view.auto || view.arena.is_some()));
                     });
+                    if let Some(arena) = view.arena.as_deref() {
+                        let name = view.catalog.iter()
+                            .find(|entry| entry.key == arena)
+                            .map(|entry| entry.name.as_str())
+                            .unwrap_or(arena);
+                        detail_stat_line(ui, tr("Current arena"), name);
+                    }
                     if let Some(original) = view.original_hunt.as_deref() {
                         detail_stat_line(ui, tr("Return destination"), original);
                     }
@@ -239,6 +259,18 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     }
                     if let Some(warning) = hunt.navigation_warning.as_deref() {
                         ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
+                    }
+
+                    // Never let a confirmation from a previous arena or
+                    // disconnected session authorize leaving a new encounter.
+                    if app.workspace.boss_leave_confirm[index]
+                        && !leave_confirmation_valid(
+                            live, view.arena.as_deref(),
+                            app.workspace.boss_leave_target[index].as_deref(),
+                        )
+                    {
+                        app.workspace.boss_leave_confirm[index] = false;
+                        app.workspace.boss_leave_target[index] = None;
                     }
 
                     ui.add_space(8.0);
@@ -257,6 +289,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .stroke(Stroke::new(1.0, WARN.linear_multiply(0.5))),
                         ).clicked() {
                             app.workspace.boss_leave_confirm[index] = true;
+                            app.workspace.boss_leave_target[index] = view.arena.clone();
                         }
                     });
                     if app.workspace.boss_leave_confirm[index] {
@@ -274,14 +307,19 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 );
                                 ui.horizontal_wrapped(|ui| {
                                     if ui.add_enabled(
-                                        live && view.arena.is_some(),
+                                        leave_confirmation_valid(
+                                            live, view.arena.as_deref(),
+                                            app.workspace.boss_leave_target[index].as_deref(),
+                                        ),
                                         egui::Button::new(tr("Confirm leave")),
                                     ).clicked() {
                                         action = Some(GameCommand::BossLeave);
                                         app.workspace.boss_leave_confirm[index] = false;
+                                        app.workspace.boss_leave_target[index] = None;
                                     }
                                     if ui.button(tr("Cancel")).clicked() {
                                         app.workspace.boss_leave_confirm[index] = false;
+                                        app.workspace.boss_leave_target[index] = None;
                                     }
                                 });
                             });
@@ -358,7 +396,92 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     if !view.log.is_empty() {
                         ui.add_space(10.0);
                         ui.separator();
-                        for result in view.log.iter().rev().take(60) {
+
+                        // A per-account filter and bounded page keep the
+                        // retained 500-entry journal navigable without
+                        // creating hundreds of widgets on every repaint.
+                        let mut boss_names = BTreeMap::<String, String>::new();
+                        for result in view.log.iter().rev() {
+                            if !result.key.is_empty() {
+                                boss_names.entry(result.key.clone())
+                                    .or_insert_with(|| result.boss.clone());
+                            }
+                        }
+                        let filter = &mut app.workspace.boss_history_filter[index];
+                        if !filter.is_empty() && !boss_names.contains_key(filter.as_str()) {
+                            filter.clear();
+                        }
+                        let previous_filter = filter.clone();
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(tr("Filter history"))
+                                    .size(10.0)
+                                    .color(MUTED),
+                            );
+                            egui::ComboBox::from_id_salt(("boss-history-filter", index))
+                                .selected_text(
+                                    boss_names.get(filter.as_str()).map(String::as_str)
+                                        .unwrap_or(tr("All bosses")),
+                                )
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut *filter,
+                                        String::new(),
+                                        tr("All bosses"),
+                                    );
+                                    for (key, name) in &boss_names {
+                                        ui.selectable_value(&mut *filter, key.clone(), name);
+                                    }
+                                });
+                        });
+                        if *filter != previous_filter {
+                            app.workspace.boss_history_page[index] = 0;
+                        }
+                        let filtered: Vec<_> = view.log.iter().rev()
+                            .filter(|result| filter.is_empty() || result.key == *filter)
+                            .collect();
+                        let count = filtered.len();
+                        let page = &mut app.workspace.boss_history_page[index];
+                        let range = history_range(page, count);
+                        let page_count = count.div_ceil(BOSS_HISTORY_PAGE_SIZE).max(1);
+                        ui.horizontal_wrapped(|ui| {
+                            let first = if count == 0 { 0 } else { range.start + 1 };
+                            ui.label(
+                                RichText::new(format!("{first}–{} / {count}", range.end))
+                                    .size(10.0)
+                                    .color(DIM),
+                            );
+                            if page_count > 1 {
+                                if ui.add_enabled(
+                                    *page > 0,
+                                    egui::Button::new(tr("← Previous")),
+                                ).clicked() {
+                                    *page -= 1;
+                                }
+                                ui.label(
+                                    RichText::new(format!("{} / {page_count}", *page + 1))
+                                        .size(10.0)
+                                        .color(MUTED),
+                                );
+                                if ui.add_enabled(
+                                    *page + 1 < page_count,
+                                    egui::Button::new(tr("Next →")),
+                                ).clicked() {
+                                    *page += 1;
+                                }
+                            }
+                        });
+                        if filtered.is_empty() {
+                            ui.label(
+                                RichText::new(tr("No victories match this boss."))
+                                    .size(10.0)
+                                    .color(DIM),
+                            );
+                        }
+                        // Display the already-selected range. A page button
+                        // changes the next frame's range; no stale indices
+                        // are used in the current frame.
+                        for result in &filtered[range] {
                             let drops = if result.drops.is_empty() {
                                 tr("No items").to_owned()
                             } else {
@@ -390,9 +513,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             ui.separator();
                         }
                     }
-                    if view.log.len() > 60 {
+                    if view.log.len() >= 500 {
                         ui.label(
-                            RichText::new(tr("Showing the latest 60 victories (up to 500 are retained per account)."))
+                            RichText::new(tr("Only the latest 500 victories are retained per account."))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -400,13 +523,53 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 });
 
             if let Some(command) = action.take() {
+                let notice = match &command {
+                    GameCommand::BossStart { repeat: true, .. } => tr("Boss farming queued"),
+                    GameCommand::BossStart { repeat: false, .. } => tr("Boss fight queued"),
+                    GameCommand::BossStop => tr("Boss stop queued"),
+                    GameCommand::BossLeave => tr("Boss leave queued"),
+                    _ => tr("Boss command queued"),
+                };
                 let result = app.runtimes[index].game.native.as_ref()
                     .expect("native still present")
                     .send_command(command);
                 match result {
-                    Ok(()) => app.set_status(tr("Boss command queued"), false),
+                    Ok(()) => app.set_status(notice, false),
                     Err(error) => app.set_status(error, true),
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+
+    #[test]
+    fn history_pages_are_bounded_and_clamped() {
+        let mut page = 0;
+        assert_eq!(history_range(&mut page, 0), 0..0);
+        assert_eq!(history_range(&mut page, BOSS_HISTORY_PAGE_SIZE + 2), 0..15);
+        page = 1;
+        assert_eq!(history_range(&mut page, BOSS_HISTORY_PAGE_SIZE + 2), 15..17);
+        page = 99;
+        assert_eq!(history_range(&mut page, 5), 0..5);
+        assert_eq!(page, 0);
+    }
+
+    #[test]
+    fn leave_confirmation_requires_the_same_live_arena() {
+        assert!(leave_confirmation_valid(true, Some("arena-a"), Some("arena-a")));
+        assert!(!leave_confirmation_valid(true, Some("arena-b"), Some("arena-a")));
+        assert!(!leave_confirmation_valid(false, Some("arena-a"), Some("arena-a")));
+        assert!(!leave_confirmation_valid(true, None, Some("arena-a")));
+        assert!(!leave_confirmation_valid(true, Some("arena-a"), None));
+    }
+
+    #[test]
+    fn history_relative_age_never_underflows() {
+        assert_eq!(loot_age(100, 200), "0m");
+        assert_eq!(loot_age(3600, 0), "1h");
+        assert_eq!(loot_age(86400, 0), "1d");
+    }
 }
