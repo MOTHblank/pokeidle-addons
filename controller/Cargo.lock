@@ -1965,6 +1965,7 @@ dependencies = [
  "base64",
  "reqwest",
  "serde_json",
+ "tungstenite",
 ]
 
 [[package]]
