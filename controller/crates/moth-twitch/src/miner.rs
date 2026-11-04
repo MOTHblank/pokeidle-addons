@@ -405,17 +405,27 @@ fn apply_pubsub_events(
         let Some(event)=pending.pop_front() else {break};
         match event {
             PubSubEvent::Connected=>{
-                if let Ok(mut current)=snapshot.lock() {
+                let changed=if let Ok(mut current)=snapshot.lock() {
+                    let changed=!current.pubsub_connected;
                     current.pubsub_connected=true;
                     current.pubsub_error=None;
+                    changed
+                } else {false};
+                if changed {
+                    push_event(events,MinerEvent::PubSubConnected);
                 }
             }
             PubSubEvent::Warning(error)=>{
-                if let Ok(mut current)=snapshot.lock() {
+                let changed=if let Ok(mut current)=snapshot.lock() {
+                    let changed=current.pubsub_connected
+                        || current.pubsub_error.as_deref()!=Some(error.as_str());
                     current.pubsub_connected=false;
                     current.pubsub_error=Some(error.clone());
+                    changed
+                } else {true};
+                if changed {
+                    push_event(events,MinerEvent::Warning(format!("PubSub: {error}")));
                 }
-                push_event(events,MinerEvent::Warning(error));
             }
             PubSubEvent::PointsEarned{channel_id,amount,balance,reason}=>{
                 let Some((login,channel))=cache.iter_mut()
@@ -631,14 +641,19 @@ fn run(
                 if let Ok(mut current)=snapshot.lock() {
                     current.active=0;
                 }
+                let message=format!(
+                    "Twitch is signed in as {}, but PokéIdle is linked to {}",
+                    viewer.login, expected
+                );
+                if last_auth_warning.as_deref()!=Some(message.as_str()) {
+                    push_event(&events,MinerEvent::Warning(message.clone()));
+                    last_auth_warning=Some(message.clone());
+                }
                 set_phase(
                     &snapshot,
                     &phase_wake,
                     MinerPhase::NeedsLogin,
-                    Some(format!(
-                        "Twitch is signed in as {}, but PokéIdle is linked to {}",
-                        viewer.login, expected
-                    )),
+                    Some(message),
                 );
             } else if !channels.is_empty() {
                 let streak_limit=if started_at.elapsed()>LONG_SESSION {
@@ -836,6 +851,7 @@ fn poll_channels(
             continue;
         }
         channel.last_live_checked=Some(Instant::now());
+        let prior_live=channel.live;
         match gql.is_stream_live(&channel_id) {
             Ok(Some(live_stream)) => {
                 channel.live=Some(true);
@@ -843,14 +859,31 @@ fn poll_channels(
                     channel.stream_started=Some(started_at);
                 }
                 channel.last_error=None;
+                if prior_live!=Some(true) {
+                    push_event(events,MinerEvent::StreamOnline {
+                        channel:login.clone(),balance:channel.balance
+                    });
+                }
             }
             Ok(None) => {
                 channel.live=Some(false);
+                if prior_live==Some(true) {
+                    push_event(events,MinerEvent::StreamOffline {
+                        channel:login.clone()
+                    });
+                }
                 clear_stream_state(channel);
             }
             Err(error) => {
                 auth_failed |= error.is_auth();
-                channel.last_error=Some(error.user_message());
+                let message=error.user_message();
+                let changed=channel.last_error.as_deref()!=Some(message.as_str());
+                channel.last_error=Some(message.clone());
+                if changed {
+                    push_event(events,MinerEvent::Warning(format!(
+                        "{login} live check: {message}"
+                    )));
+                }
                 if first_error.is_none() {first_error=Some(error);}
             }
         }
