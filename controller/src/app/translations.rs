@@ -184,6 +184,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Showing the latest 60 victories (up to 500 are retained per account)." =>
             "Exibindo as últimas 60 vitórias (até 500 são preservadas por conta).",
         "Boss command queued" => "Comando de boss enviado à fila",
+        "Wait for a safe combat opening. If travel stays blocked for one minute, give up once and continue to the Pokémon Center." =>
+            "Aguarde uma abertura segura no combate. Se a viagem continuar bloqueada por um minuto, desista uma vez e continue até o Centro Pokémon.",
         "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, give up once to reach the Pokémon Center and continue the requested destination." =>
             "O combate continua bloqueando a viagem. O Moth continuará verificando a cada ciclo e, após um minuto, desistirá uma vez para chegar ao Centro Pokémon e continuar até o destino solicitado.",
         "Traveling to Pokémon Center" => "Indo ao Centro Pokémon",
