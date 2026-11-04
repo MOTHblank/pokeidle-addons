@@ -69,6 +69,11 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 } else {
                     label(br,"○ Offline","○ Offline")
                 }).size(10.0).color(if channel.live {GOOD}else{MUTED}));
+                if channel.watching {
+                    ui.label(RichText::new(label(br,
+                        "● Selected for watching", "● Selecionado para assistir"))
+                        .size(10.0).color(GOOD));
+                }
                 ui.label(RichText::new(if recent {
                     label(br, "● Watch signal sent", "● Sinal enviado")
                 } else if checked {
