@@ -14,9 +14,9 @@ impl ControllerApp {
         self.runtimes[index].session.native_handoff_busy = true;
         self.runtimes[index].session.native_handoff_last_attempt = Some(Instant::now());
         logging::info(&format!(
-            "{} capturing native game + Twitch IRC session via Firefox BiDi",
+            "{} capturing native game session and optional Twitch OAuth via Firefox BiDi",
             self.account_name(profile)));
-        self.set_status(format!("{}: signing in to PokéIdle and Twitch",
+        self.set_status(format!("{}: signing in to PokéIdle",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
         let generation_state=Arc::clone(&self.runtimes[index].session.auth_generation);
@@ -124,7 +124,7 @@ impl ControllerApp {
     }
 
     /// Authentication-only browser fallback. Never call as the ordinary
-    /// Launch path while reusable native game + Twitch credentials exist.
+    /// Launch path while reusable native game credentials exist.
     pub(super) fn launch_firefox_bootstrap(&mut self, profile: GameProfile, headless: bool) {
         self.launch_firefox_bootstrap_impl(profile, headless, true);
     }
@@ -527,7 +527,7 @@ impl ControllerApp {
                 self.runtimes[index].game.headless = false;
                 // After the user closes this window, refresh browser auth
                 // before returning to native mode instead of trusting stale
-                // cached Twitch or game login credentials.
+                // cached game login credentials or optional Twitch token.
                 self.runtimes[index].session.require_browser_login = true;
                 logging::info(&format!(
                     "{} Firefox spawned for {} sign-in without remote debugging (PID {})",
