@@ -15,6 +15,10 @@ fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
     let start = *page * BOSS_HISTORY_PAGE_SIZE;
     start..(start + BOSS_HISTORY_PAGE_SIZE).min(count)
 }
+
+fn leave_confirmation_valid(live: bool, arena: Option<&str>, target: Option<&str>) -> bool {
+    live && matches!((arena, target), (Some(arena), Some(target)) if arena == target)
+}
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn loot_age(now: u64, at: u64) -> String {
@@ -257,6 +261,18 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
                     }
 
+                    // Never let a confirmation from a previous arena or
+                    // disconnected session authorize leaving a new encounter.
+                    if app.workspace.boss_leave_confirm[index]
+                        && !leave_confirmation_valid(
+                            live, view.arena.as_deref(),
+                            app.workspace.boss_leave_target[index].as_deref(),
+                        )
+                    {
+                        app.workspace.boss_leave_confirm[index] = false;
+                        app.workspace.boss_leave_target[index] = None;
+                    }
+
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
                         if ui.add_enabled(
@@ -273,6 +289,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .stroke(Stroke::new(1.0, WARN.linear_multiply(0.5))),
                         ).clicked() {
                             app.workspace.boss_leave_confirm[index] = true;
+                            app.workspace.boss_leave_target[index] = view.arena.clone();
                         }
                     });
                     if app.workspace.boss_leave_confirm[index] {
@@ -290,14 +307,19 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 );
                                 ui.horizontal_wrapped(|ui| {
                                     if ui.add_enabled(
-                                        live && view.arena.is_some(),
+                                        leave_confirmation_valid(
+                                            live, view.arena.as_deref(),
+                                            app.workspace.boss_leave_target[index].as_deref(),
+                                        ),
                                         egui::Button::new(tr("Confirm leave")),
                                     ).clicked() {
                                         action = Some(GameCommand::BossLeave);
                                         app.workspace.boss_leave_confirm[index] = false;
+                                        app.workspace.boss_leave_target[index] = None;
                                     }
                                     if ui.button(tr("Cancel")).clicked() {
                                         app.workspace.boss_leave_confirm[index] = false;
+                                        app.workspace.boss_leave_target[index] = None;
                                     }
                                 });
                             });
@@ -521,7 +543,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{history_range, loot_age, BOSS_HISTORY_PAGE_SIZE};
+    use super::{history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
 
     #[test]
     fn history_pages_are_bounded_and_clamped() {
@@ -533,6 +555,15 @@ mod tests {
         page = 99;
         assert_eq!(history_range(&mut page, 5), 0..5);
         assert_eq!(page, 0);
+    }
+
+    #[test]
+    fn leave_confirmation_requires_the_same_live_arena() {
+        assert!(leave_confirmation_valid(true, Some("arena-a"), Some("arena-a")));
+        assert!(!leave_confirmation_valid(true, Some("arena-b"), Some("arena-a")));
+        assert!(!leave_confirmation_valid(false, Some("arena-a"), Some("arena-a")));
+        assert!(!leave_confirmation_valid(true, None, Some("arena-a")));
+        assert!(!leave_confirmation_valid(true, Some("arena-a"), None));
     }
 
     #[test]
