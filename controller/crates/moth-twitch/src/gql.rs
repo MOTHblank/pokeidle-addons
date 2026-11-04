@@ -117,10 +117,11 @@ impl TwitchGql {
             .map_err(|_| "Could not create Twitch HTTP client".to_owned())?;
         Ok(Self {
             client,
+            device_id: credentials.device_id.clone()
+                .unwrap_or_else(||random_string(32)),
             credentials,
             client_id: None,
             user_id: None,
-            device_id: random_string(32),
             client_session: random_hex(8),
             client_version: Mutex::new(ClientVersionState {
                 value: DEFAULT_CLIENT_VERSION.to_owned(),
