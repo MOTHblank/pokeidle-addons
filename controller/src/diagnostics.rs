@@ -70,6 +70,9 @@ impl DiagnosticsSampler {
             // A pause interval is not a valid CPU usage sample window.
             self.previous = None;
             self.last_read = None;
+            self.current = None;
+            self.history.clear();
+            self.network = None;
         }
         self.paused = paused;
     }
@@ -151,8 +154,6 @@ fn read_process_counters() -> Option<ProcessCounters> {
 fn read_process_counters() -> Option<ProcessCounters> {
     use std::ffi::c_void;
     use std::mem::size_of;
-    use std::ptr;
-
     #[repr(C)]
     #[derive(Default, Clone, Copy)]
     struct FileTime { low: u32, high: u32 }
