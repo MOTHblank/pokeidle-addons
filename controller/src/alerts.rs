@@ -15,6 +15,8 @@ pub struct DisconnectAlertState {
 }
 
 impl DisconnectAlertState {
+    pub fn pending(&self) -> bool { self.since.is_some() }
+
     pub fn observe(&mut self, was_online: bool, phase: Option<&str>,
         still_active: bool, now: Instant) -> bool {
         if !still_active || matches!(phase, Some("Online" | "NeedsLogin")) {
@@ -45,6 +47,10 @@ pub fn classify(message: &str, error: bool) -> Option<AlertKind> {
     }
     // Connection state is observed with a 90-second grace period elsewhere.
     // Text errors must never notify immediately about transient disconnections.
+    if ["disconnected", "connection lost", "connection interrupted",
+        "reconnecting", "socket closed"].iter().any(|text_part| text.contains(text_part)) {
+        return None;
+    }
     if ["auto catch", "restock", "automation", "market", "capture settings", "purchase"]
         .iter().any(|s| text.contains(s)) {
         return Some(AlertKind::Automation);
