@@ -1183,7 +1183,7 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
             .as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()));
     let twitch = read_twitch_auth_cookie(session);
     Ok(json!({ "bootstrap": bootstrap, "cookies": entries,
-        "autocatch": autocatch, "twitch": twitch }))
+        "autocatch": autocatch, "twitch": twitch, "twitchProbeVersion": 1 }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
