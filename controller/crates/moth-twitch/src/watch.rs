@@ -29,7 +29,13 @@ impl WatchClient {
         let spade_url = match self.spade_url.clone() {
             Some(url) => url,
             None => {
-                let url = self.resolve_spade_url(login)?;
+                // Twitch's standard Spade endpoint is stable. The current
+                // channel page can omit its settings script; that must not
+                // prevent watch-credit traffic entirely.
+                let url = self.resolve_spade_url(login).or_else(|_| {
+                    Url::parse("https://spade.twitch.tv/track")
+                        .map_err(|_| "Could not resolve Twitch watch endpoint".to_owned())
+                })?;
                 self.spade_url = Some(url.clone());
                 url
             }
