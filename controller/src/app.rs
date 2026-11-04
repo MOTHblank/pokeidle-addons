@@ -125,8 +125,8 @@ fn finish_firefox_shutdown_after_window() {
 }
 
 // Redraw cached information more often without triggering additional BiDi reads.
-const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(3);
-const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(30);
+const UI_REPAINT_INTERVAL: Duration = Duration::from_secs(5);
+const UI_BACKGROUND_REPAINT_INTERVAL: Duration = Duration::from_secs(60);
 const AUTH_PROGRESS_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 // Display-only data can be sampled together; native automation and session
 // transitions have their own workers/wake-ups and are not paced by this timer.
@@ -904,13 +904,13 @@ mod ui_repaint_tests {
     fn multi_account_overview_batches_nonessential_redraws() {
         assert_eq!(ui_repaint_interval(false, false, true, true), Duration::from_secs(4));
         assert_eq!(ui_repaint_interval(false, false, true, false), Duration::from_secs(2));
-        assert_eq!(ui_repaint_interval(false, false, false, false), Duration::from_secs(3));
+        assert_eq!(ui_repaint_interval(false, false, false, false), Duration::from_secs(5));
     }
 
     #[test]
     fn authentication_and_background_pacing_take_precedence() {
         assert_eq!(ui_repaint_interval(false, true, true, true), Duration::from_secs(1));
-        assert_eq!(ui_repaint_interval(true, false, true, true), Duration::from_secs(30));
+        assert_eq!(ui_repaint_interval(true, false, true, true), Duration::from_secs(60));
         assert_eq!(ui_repaint_interval(true, true, true, true), Duration::from_secs(1));
     }
 }
