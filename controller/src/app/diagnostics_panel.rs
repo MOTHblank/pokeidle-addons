@@ -181,28 +181,30 @@ pub(super) fn draw_diagnostics_panel(
                 let mut operational = OperationalSample::default();
                 for (index, runtime) in app.runtimes.iter().enumerate() {
                     if let Some(game) = runtime.game.native.as_ref() {
-                        let snapshot = game.snapshot();
-                        operational.game.push(GameQueueSample {
-                            slot: index,
-                            phase: snapshot.phase,
-                            capture_queued: snapshot.native_capture_queue,
-                            automation_queued: snapshot.native_automation.queued,
-                            automation_pending: snapshot.native_automation.pending_field.is_some(),
-                            market_pending: snapshot.native_market.pending.is_some(),
-                            restock_pending: snapshot.native_restock.pending,
-                        });
+                        if let Some(snapshot) = game.diagnostics_snapshot() {
+                            operational.game.push(GameQueueSample {
+                                slot: index,
+                                phase: snapshot.phase,
+                                capture_queued: snapshot.capture_queued,
+                                automation_queued: snapshot.automation_queued,
+                                automation_pending: snapshot.automation_pending,
+                                market_pending: snapshot.market_pending,
+                                restock_pending: snapshot.restock_pending,
+                            });
+                        }
                     }
                     if let Some(kick) = runtime.kick.kick_monitor.as_ref() {
-                        let current = kick.snapshot();
-                        network.bytes = network.bytes.saturating_add(current.bandwidth.bytes);
-                        network.last_minute = network.last_minute
-                            .saturating_add(current.bandwidth.last_minute);
-                        network.rows.push(HlsAccountSample {
-                            account: app.accounts[index].name.clone(),
-                            bytes: current.bandwidth.bytes,
-                            last_minute: current.bandwidth.last_minute,
-                            channels: current.channels.len(),
-                        });
+                        if let Some(current) = kick.diagnostics_snapshot() {
+                            network.bytes = network.bytes.saturating_add(current.bandwidth.bytes);
+                            network.last_minute = network.last_minute
+                                .saturating_add(current.bandwidth.last_minute);
+                            network.rows.push(HlsAccountSample {
+                                account: app.accounts[index].name.clone(),
+                                bytes: current.bandwidth.bytes,
+                                last_minute: current.bandwidth.last_minute,
+                                channels: current.channels,
+                            });
+                        }
                     }
                 }
                 let (channels, hls) = crate::native_kick_pool::diagnostics_usage();
