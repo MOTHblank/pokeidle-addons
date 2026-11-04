@@ -45,11 +45,19 @@ pub struct BossEntry {
     pub token_id: u64,
     pub token_name: String,
     pub tokens_per_entry: u64,
+    /// Pokémon species used for artwork/status when exposed by the boss catalog.
+    pub species_id: Option<u64>,
     /// Authoritative battle types from bossesJogaveis, with bossesCatalogo
     /// as a welcome-time fallback for older payload shapes.
     pub types: Vec<String>,
 }
 impl BossEntry {
+    fn species_id(raw: &Value) -> Option<u64> {
+        ["pokeId", "pokemonId", "speciesId", "dex"].into_iter()
+            .find_map(|field| raw.get(field).and_then(Value::as_u64))
+            .filter(|id| *id > 0)
+    }
+
     /// shared/bosses-lendarios.mjs v1.400.1: trainer level still unlocks
     /// the arena, but combat level follows the strongest eligible team
     /// Pokémon and never drops below this boss's own minimum.
@@ -78,6 +86,7 @@ impl BossEntry {
             token_name: entry.get("nome").and_then(Value::as_str)
                 .unwrap_or("Boss Token").to_owned(),
             tokens_per_entry,
+            species_id: Self::species_id(raw),
             types: ["type1", "type2"].into_iter().filter_map(|field|
                 raw.get(field).and_then(Value::as_str)
                     .map(str::trim).filter(|kind| !kind.is_empty())
@@ -479,15 +488,18 @@ impl BossManager {
                     // Current upstream sends type1/type2 on the playable
                     // boss record. Keep the gallery fallback because the
                     // browser client intentionally supports both shapes.
-                    if boss.types.is_empty() {
-                        if let Some(meta) = gallery.and_then(|rows| rows.iter().find(|row|
-                            row.get("key").and_then(Value::as_str) == Some(boss.key.as_str())
-                        )) {
+                    if let Some(meta) = gallery.and_then(|rows| rows.iter().find(|row|
+                        row.get("key").and_then(Value::as_str) == Some(boss.key.as_str())
+                    )) {
+                        if boss.types.is_empty() {
                             boss.types = ["type1", "type2"].into_iter().filter_map(|field|
                                 meta.get(field).and_then(Value::as_str)
                                     .map(str::trim).filter(|kind| !kind.is_empty())
                                     .map(str::to_ascii_uppercase)
                             ).collect();
+                        }
+                        if boss.species_id.is_none() {
+                            boss.species_id = BossEntry::species_id(meta);
                         }
                     }
                     boss
