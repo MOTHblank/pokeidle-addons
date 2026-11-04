@@ -137,6 +137,8 @@ pub struct HuntBonuses {
     pub twitch_pct: f64,
     pub guild_boost_active: bool,
     pub vip_active: bool,
+    /// Upstream shared/sacrificio.mjs: +20% XP while the altar boost lasts.
+    pub sacrifice_xp_active: bool,
     pub trainer_event_known: bool,
     pub pokemon_event_known: bool,
     pub guild_known: bool,
@@ -758,6 +760,15 @@ impl HuntIntel {
         self.view.bonuses.vip_active=self.view.vip_until
             .is_some_and(|until|until>clock);
         self.view.bonuses.guild_boost_active=self.view.guild_boost_until
+            .is_some_and(|until|until>clock);
+        // The server stores the redeemed Sacrifice boost as an epoch-ms
+        // expiry in automation.sacrificio.ate. A missing field is not an
+        // active boost; an expired one must stop affecting model XP even
+        // if no new estado arrives.
+        self.view.bonuses.sacrifice_xp_active=self.view.automation.as_ref()
+            .and_then(|a|a.get("sacrificio"))
+            .and_then(|s|s.get("ate"))
+            .and_then(Value::as_u64)
             .is_some_and(|until|until>clock);
         for (key,dest) in [
             ("xp",&mut self.view.bonuses.shop_trainer_xp_multiplier),
@@ -1404,6 +1415,23 @@ mod tests {
             "mobs":[{"s":1,"c":11,"r":15,"x":false}]}),now);
         assert_eq!(intel.view.geo_revisions["new-region"],1);
         assert_eq!(intel.view.geo_distances["new-region"].len(),8);
+    }
+    #[test]
+    fn sacrifice_xp_boost_tracks_partial_states_and_server_expiry() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"welcome","estado":{
+            "servidorAgora":1000,"automation":{"sacrificio":{"ate":2000}}
+        }}),now);
+        assert!(intel.view.bonuses.sacrifice_xp_active);
+        intel.ingest_value(&json!({"t":"estado","estado":{"xp":200}}),now);
+        assert!(intel.view.bonuses.sacrifice_xp_active);
+        intel.refresh_timed_xp_bonuses(now+Duration::from_millis(1001));
+        assert!(!intel.view.bonuses.sacrifice_xp_active);
+        intel.ingest_value(&json!({"t":"estado","estado":{
+            "servidorAgora":2100,"automation":{"sacrificio":{"ate":3000}}
+        }}),now);
+        assert!(intel.view.bonuses.sacrifice_xp_active);
     }
     #[test]
     fn partial_state_does_not_cancel_active_shop_boost() {
