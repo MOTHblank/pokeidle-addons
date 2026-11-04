@@ -484,9 +484,7 @@ impl BossManager {
     pub fn leave(&mut self, navigator: &mut HuntNavigator,
                  hunt: &HuntView, now: Instant) -> Vec<GameCommand> {
         let mut commands = Vec::new();
-        // Leaving/cancelling owns the destination now; never allow a pending
-        // boss retry to race the exit command.
-        navigator.cancel();
+        // Preserve pending Center state until cancel_pending_entry reads it.
         if self.trip.as_ref().is_some_and(|trip| trip.stage == Stage::Starting) {
             self.cancel_pending_entry(navigator, hunt, now);
             return commands;
@@ -495,6 +493,7 @@ impl BossManager {
             matches!(trip.stage, Stage::Cancelling | Stage::Returning)) {
             return commands;
         }
+        navigator.cancel();
         if let Some(trip) = self.trip.as_mut() {
             trip.ended = true;
             if trip.repeat {
@@ -1297,9 +1296,12 @@ mod tests {
         h.in_center = true;
         nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &h, now);
         assert!(m.stop(&mut nav, &h, now).is_none());
-        assert!(!m.active());
+        assert!(m.active());
         assert!(matches!(nav.next_action(&h, now),
             Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+        h.in_center = false;
+        m.next_action(&h, &mut nav, now);
+        assert!(!m.active());
     }
     #[test]
     fn leave_before_boss_entry_restores_original_hunt() {
