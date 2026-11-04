@@ -105,8 +105,8 @@ pub fn official_channels(payload: &Value) -> Option<Vec<String>> {
     let mut channels = official.iter().filter(|entry|
         entry.get("bonus").and_then(Value::as_bool).unwrap_or(true)
     ).filter_map(|entry|{
-        entry.get("login").or_else(||entry.get("nome"))
-            .and_then(Value::as_str).and_then(moth_twitch::normalize_login)
+        entry.as_str().or_else(||entry.get("login").or_else(||entry.get("nome"))
+            .and_then(Value::as_str)).and_then(moth_twitch::normalize_login)
     }).collect::<Vec<_>>();
     channels.sort_unstable();
     channels.dedup();
@@ -121,9 +121,9 @@ pub fn official_live_channels(payload: &Value) -> Option<Vec<String>> {
     let eligible = official.iter().filter(|entry| {
         entry.get("bonus").and_then(Value::as_bool).unwrap_or(true)
     }).filter_map(|entry| {
-        entry.get("login")
+        entry.as_str().or_else(||entry.get("login")
             .or_else(|| entry.get("nome"))
-            .and_then(Value::as_str)
+            .and_then(Value::as_str))
             .and_then(moth_twitch::normalize_login)
     }).collect::<std::collections::BTreeSet<_>>();
 
