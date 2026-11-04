@@ -19,6 +19,16 @@ fn memory_label(bytes: Option<u64>) -> String {
     bytes.map(mib).unwrap_or_else(|| "—".into())
 }
 
+/// Resident-memory movement relative to when this diagnostics session opened,
+/// not the process's lifetime high-water mark.
+fn memory_change_label(current: Option<u64>, baseline: Option<u64>) -> String {
+    current.zip(baseline)
+        .map(|(value, start)| format!(
+            "{:+.1} MiB", (value as i128 - start as i128) as f64 / 1_048_576.0
+        ))
+        .unwrap_or_else(|| "—".into())
+}
+
 fn history_chart(
     ui: &mut egui::Ui,
     title: &str,
@@ -142,6 +152,10 @@ pub(super) fn draw_diagnostics_panel(
                     if ui.checkbox(&mut paused, tr("Pause sampling")).changed() {
                         sampler.set_paused(paused);
                     }
+                    let mut inspect_threads = sampler.inspect_threads;
+                    if ui.checkbox(&mut inspect_threads, tr("Inspect thread CPU")).changed() {
+                        sampler.set_thread_inspection(inspect_threads);
+                    }
                     if ui.small_button(tr("Reset samples")).clicked() {
                         sampler.reset();
                     }
@@ -200,6 +214,11 @@ pub(super) fn draw_diagnostics_panel(
                 sampler.last_network_probe_ms =
                     Some(probe_start.elapsed().as_secs_f64() * 1000.0);
             }
+            let (memory_baseline, detailed_threads, hot_threads, threads_unavailable) = {
+                let sampler = app.diagnostics.as_ref().expect("active diagnostics");
+                (sampler.resident_baseline, sampler.inspect_threads,
+                    sampler.hot_threads.clone(), sampler.threads_unavailable)
+            };
             let network = app.diagnostics.as_ref()
                 .and_then(|sampler| sampler.network.as_ref())
                 .cloned().unwrap_or_default();
@@ -242,6 +261,8 @@ pub(super) fn draw_diagnostics_panel(
                         runtime_chip(ui, tr("CPU"), &cpu_label(cpu), ACCENT);
                         runtime_chip(ui, tr("RAM"), &memory_label(rss), GOOD);
                         runtime_chip(ui, tr("Peak RAM"), &memory_label(peak), MUTED);
+                        runtime_chip(ui, tr("RAM since opening"),
+                            &memory_change_label(rss, memory_baseline), MUTED);
                         runtime_chip(ui, tr("Threads"),
                             &threads.map(|n| n.to_string()).unwrap_or_else(|| "—".into()), MUTED);
                     });
@@ -259,6 +280,40 @@ pub(super) fn draw_diagnostics_panel(
                     |s| s.resident_bytes.map(|bytes| bytes as f64 / 1_048_576.0),
                     GOOD, "MiB");
             });
+            if detailed_threads {
+                ui.add_space(12.0);
+                egui::Frame::new().fill(PANEL).corner_radius(10.0)
+                    .stroke(egui::Stroke::new(1.0, BORDER))
+                    .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                        ui.label(RichText::new(tr("Top CPU threads"))
+                            .size(13.0).strong().color(TEXT));
+                        ui.label(RichText::new(tr(
+                            "Optional OS thread inspection every 15 seconds. CPU is percent of one core; new threads need two readings. Names may be generic, especially on Windows."
+                        )).size(10.0).color(MUTED));
+                        ui.add_space(7.0);
+                        if threads_unavailable {
+                            ui.label(RichText::new(tr("Thread inspection unavailable"))
+                                .size(10.0).color(WARN));
+                        } else if hot_threads.is_empty() {
+                            ui.label(RichText::new(tr("Collecting thread CPU baseline"))
+                                .size(10.0).color(DIM));
+                        } else {
+                            for thread in &hot_threads {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(&thread.name).size(11.0).strong().color(TEXT))
+                                        .on_hover_text(format!("TID {}", thread.id));
+                                    ui.label(RichText::new(format!(
+                                        "#{} · {:.1}%", thread.id, thread.cpu_percent
+                                    )).size(10.0).color(ACCENT));
+                                });
+                                let fraction = (thread.cpu_percent / 100.0).clamp(0.0, 1.0) as f32;
+                                ui.add(egui::ProgressBar::new(fraction)
+                                    .desired_width(ui.available_width()));
+                            }
+                        }
+                    });
+            }
+
             ui.add_space(12.0);
             egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
@@ -398,5 +453,8 @@ mod tests {
         assert_eq!(memory_label(None), "—");
         assert_eq!(cpu_label(Some(150.0)), "150.0%");
         assert_eq!(mib(1_048_576), "1.0 MiB");
+        assert_eq!(memory_change_label(Some(4_194_304), Some(2_097_152)), "+2.0 MiB");
+        assert_eq!(memory_change_label(Some(2_097_152), Some(4_194_304)), "-2.0 MiB");
+        assert_eq!(memory_change_label(None, Some(2_097_152)), "—");
     }
 }
