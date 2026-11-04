@@ -279,11 +279,17 @@ impl CaptureSettingsUpdater {
 fn resolve_twitch_startup_token(
     profile:GameProfile,
     legacy:Option<String>,
+    revision:u64,
 )->Option<String> {
     // This function always runs off the UI/game startup path. Twitch is
     // optional: keyring or Firefox-cookie failures are logged and never fail
     // the PokéIdle connection itself.
+    let current=||crate::native_twitch_login::credential_revision_is_current(
+        profile,revision);
+    if !current(){return None}
+
     let loaded=crate::native_auth::load_twitch_token(profile);
+    if !current(){return None}
     let mut token=match loaded {
         Ok(token)=>token,
         Err(error)=>{
@@ -294,11 +300,24 @@ fn resolve_twitch_startup_token(
     };
     let mut safe_to_scrub=token.is_some();
     let mut import_failed=false;
+
     if token.is_none() {
-        match crate::native_twitch_login::import_existing(profile) {
+        match crate::native_twitch_login::read_existing(profile) {
             Ok(Some(found))=>{
+                if !current(){return None}
+                match crate::native_auth::save_twitch_token_checked(
+                    profile,&found,current)
+                {
+                    Ok(true)=>safe_to_scrub=true,
+                    Ok(false)=>return None,
+                    Err(error)=>{
+                        safe_to_scrub=false;
+                        crate::logging::warn(&format!(
+                            "{} Twitch login is usable now but could not be saved: {error}",
+                            profile.name()));
+                    }
+                }
                 token=Some(found);
-                safe_to_scrub=true;
             }
             Ok(None)=>{
                 // Firefox is the source of truth for migration. A missing
@@ -318,16 +337,24 @@ fn resolve_twitch_startup_token(
     // itself was unavailable. Never resurrect it after Firefox reports logout.
     if token.is_none() && import_failed {
         if let Some(legacy)=legacy {
-            match crate::native_auth::save_twitch_token(profile,&legacy) {
-                Ok(())=>safe_to_scrub=true,
-                Err(error)=>crate::logging::warn(&format!(
-                    "{} could not migrate legacy Twitch login to protected storage: {error}",
-                    profile.name())),
+            if !current(){return None}
+            match crate::native_auth::save_twitch_token_checked(
+                profile,&legacy,current)
+            {
+                Ok(true)=>safe_to_scrub=true,
+                Ok(false)=>return None,
+                Err(error)=>{
+                    safe_to_scrub=false;
+                    crate::logging::warn(&format!(
+                        "{} legacy Twitch login is usable now but could not be saved: {error}",
+                        profile.name()));
+                }
             }
             token=Some(legacy);
         }
     }
 
+    if !current(){return None}
     if safe_to_scrub {
         if let Err(error)=crate::native_auth::scrub_legacy_twitch_from_game_cache(profile) {
             crate::logging::warn(&format!(
@@ -335,7 +362,7 @@ fn resolve_twitch_startup_token(
                 profile.name()));
         }
     }
-    token
+    current().then_some(token).flatten()
 }
 
 pub struct NativeSession {
@@ -443,11 +470,17 @@ impl NativeSession {
         // online. The retained control state replays roster/live/favorites.
         let twitch_auth_miner=Arc::clone(&twitch_miner);
         let twitch_auth_stop=Arc::clone(&stop);
+        let twitch_auth_revision=
+            crate::native_twitch_login::credential_revision(profile);
         if let Err(error)=thread::Builder::new()
             .name(format!("moth-twitch-auth-{}",profile.name()))
             .spawn(move||{
-                let token=resolve_twitch_startup_token(profile,legacy_twitch);
-                if twitch_auth_stop.load(Ordering::Relaxed){return}
+                let token=resolve_twitch_startup_token(
+                    profile,legacy_twitch,twitch_auth_revision);
+                if twitch_auth_stop.load(Ordering::Relaxed) ||
+                    !crate::native_twitch_login::credential_revision_is_current(
+                        profile,twitch_auth_revision)
+                {return}
                 if let Some(token)=token {
                     if let Err(error)=twitch_auth_miner.replace_token(&token,None) {
                         crate::logging::warn(&format!(
