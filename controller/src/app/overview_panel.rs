@@ -422,9 +422,9 @@ pub(super) fn draw_overview_card(
                         Color32::from_rgb(144, 43, 52), BAD)
                 };
                 let hint = if pt_br() {
-                    "Ativa ou desativa a busca automática de PvP. Não interrompe hunts. VIP utiliza a fila do jogo."
+                    "Ativa ou desativa a busca automática de PvP. Não interrompe hunts. No VIP, o Moth também assume a busca se a fila automática do jogo não entrar."
                 } else {
-                    "Toggle automatic PvP matchmaking. Does not interrupt hunts. VIP uses the game's own queue."
+                    "Toggle automatic PvP matchmaking. Does not interrupt hunts. On VIP, Moth also takes over matchmaking if the game's auto queue does not enter."
                 };
                 if ui.add_sized([147.0, 29.0],
                     egui::Button::new(RichText::new(text)
