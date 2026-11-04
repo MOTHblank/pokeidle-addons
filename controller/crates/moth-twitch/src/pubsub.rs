@@ -49,7 +49,7 @@ pub(crate) fn spawn(
                 }
                 for _ in 0..10 {
                     if stop.load(Ordering::Acquire) { return; }
-                    thread::sleep(RECONNECT_DELAY / 10);
+                    thread::sleep(Duration::from_secs(1));
                 }
             }
         });
@@ -109,6 +109,10 @@ fn run_connection(
 
         match socket.read() {
             Ok(message) => {
+                // tungstenite queues protocol-level pong/close replies while
+                // reading; flush them even when Twitch's application message
+                // itself is ignored.
+                let _ = socket.flush();
                 let Ok(text) = message.to_text() else { continue };
                 let envelope: Value = match serde_json::from_str(text) {
                     Ok(value) => value,
