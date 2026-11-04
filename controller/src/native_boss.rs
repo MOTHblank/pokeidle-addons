@@ -437,11 +437,18 @@ impl BossManager {
         let trip = self.trip.as_mut()?;
         trip.ended = true;
         if trip.stage == Stage::Starting {
-            // The HuntNavigator has not emitted the boss destination yet.
+            // The boss hasn't entered yet, but Center travel may already
+            // have completed. Do not strand the account at Center.
+            let return_to = trip.original.clone().filter(|_| _hunt.in_center);
             navigator.cancel();
             self.trip = None;
             self.view.original_hunt = None;
-            self.view.phase = "Boss request cancelled before entry".into();
+            if let Some(original) = return_to {
+                navigator.select(original, now);
+                self.view.phase = "Boss cancelled; returning to saved hunt".into();
+            } else {
+                self.view.phase = "Boss request cancelled before entry".into();
+            }
             return None;
         }
         // A Start that is waiting for confirmation may still be queued for a
@@ -453,17 +460,24 @@ impl BossManager {
         self.view.phase = "Stopping boss repetition; waiting for the arena to clear".into();
         Some(GameCommand::BossAuto { active: false, key: trip.key.clone() })
     }
-    pub fn leave(&mut self, navigator: &mut HuntNavigator) -> Vec<GameCommand> {
+    pub fn leave(&mut self, navigator: &mut HuntNavigator,
+                 hunt: &HuntView, now: Instant) -> Vec<GameCommand> {
         let mut commands = Vec::new();
         // Leaving/cancelling owns the destination now; never allow a pending
         // boss retry to race the exit command.
         navigator.cancel();
         if let Some(trip) = self.trip.as_mut() {
             if trip.stage == Stage::Starting {
+                let return_to = trip.original.clone().filter(|_| hunt.in_center);
                 navigator.cancel();
                 self.trip = None;
                 self.view.original_hunt = None;
-                self.view.phase = "Boss trip cancelled".into();
+                if let Some(original) = return_to {
+                    navigator.select(original, now);
+                    self.view.phase = "Boss cancelled; returning to saved hunt".into();
+                } else {
+                    self.view.phase = "Boss trip cancelled".into();
+                }
                 return commands;
             }
             trip.ended = true;
@@ -617,6 +631,11 @@ impl BossManager {
         }
 
         if self.trip.as_ref().is_some_and(|trip| trip.stage == Stage::Starting) {
+            if navigator.give_up_failed() {
+                self.view.warning = Some(
+                    crate::native_hunt_navigation::GIVE_UP_FAILED_NOTICE.into());
+                return None;
+            }
             if !hunt.in_center {
                 if !navigator.center_pending() {
                     navigator.center(now);
@@ -1235,6 +1254,32 @@ mod tests {
             Some(GameCommand::BossAuto {active:true,..})));
     }
 
+    #[test]
+    fn stopping_boss_after_center_arrival_restores_original_hunt() {
+        let mut m = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut h = hunt();
+        m.start("bronze", true, &h, &mut nav, now).unwrap();
+        h.in_center = true;
+        nav.observe(&json!({"t":"estado","estado":{"noCentro":true}}), &h, now);
+        assert!(m.stop(&mut nav, &h, now).is_none());
+        assert!(!m.active());
+        assert!(matches!(nav.next_action(&h, now),
+            Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+    }
+    #[test]
+    fn leave_before_boss_entry_restores_original_hunt() {
+        let mut m = manager();
+        let mut nav = HuntNavigator::default();
+        let now = Instant::now();
+        let mut h = hunt();
+        m.start("bronze", true, &h, &mut nav, now).unwrap();
+        h.in_center = true;
+        assert!(m.leave(&mut nav, &h, now).is_empty());
+        assert!(matches!(nav.next_action(&h, now),
+            Some(GameCommand::Hunt(slug)) if slug == "bulbasaur"));
+    }
     #[test]
     fn canceled_pending_boss_request_never_emits_a_start() {
         let mut manager = manager();
