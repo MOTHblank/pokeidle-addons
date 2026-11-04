@@ -9,6 +9,7 @@ const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
 const USER_ID_HASH: &str = "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca";
 const POINTS_CONTEXT_HASH: &str = "374314de591e69925fce3ddc2bcf085796f56ebb8cad67a0daa3165c03adc345";
 const CLAIM_POINTS_HASH: &str = "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af229395f1f6d1feed05b3d0";
+const REWARD_LIST_HASH: &str = "0b1471876d7647993731b9e3c6a13bf304c67fb31d07f06a945d42286ee377c4";
 const STREAM_INFO_HASH: &str = "e785b65ff71ad7b363b34878335f27dd9372869ad0c5740a130b9268bcdbe7e7";
 
 #[derive(Debug)]
@@ -49,6 +50,12 @@ pub(crate) struct PointsContext {
 
 pub(crate) struct StreamInfo {
     pub(crate) broadcast_id: String,
+    pub(crate) started_at: String,
+}
+
+pub(crate) struct StreakMilestone {
+    pub(crate) length: Option<u32>,
+    pub(crate) achieved_at: Option<String>,
 }
 
 pub(crate) struct TwitchGql {
@@ -191,7 +198,30 @@ impl TwitchGql {
             .ok_or_else(|| GqlError::Protocol(format!(
                 "Twitch live stream id is unavailable for {login}"
             )))?;
-        Ok(Some(StreamInfo { broadcast_id: broadcast_id.to_owned() }))
+        let started_at=stream.get("createdAt").and_then(Value::as_str)
+            .filter(|at| !at.is_empty())
+            .ok_or_else(|| GqlError::Protocol(format!(
+                "Twitch stream start time unavailable for {login}"
+            )))?;
+        Ok(Some(StreamInfo {
+            broadcast_id: broadcast_id.to_owned(),
+            started_at: started_at.to_owned(),
+        }))
+    }
+
+    pub(crate) fn streak(&self, channel_id: &str) -> Result<StreakMilestone, GqlError> {
+        let response=self.post("RewardList",REWARD_LIST_HASH,json!({
+            "channelID":channel_id,"shouldIncludeAllSuspendedStreaks":false
+        }))?;
+        let milestone=response.pointer("/data/channel/self/watchStreakMilestone/watchStreakMilestone");
+        Ok(StreakMilestone {
+            length: milestone.and_then(|item|item.get("value"))
+                .and_then(|value| value.as_str()
+                    .and_then(|s|s.parse::<u32>().ok())
+                    .or_else(||value.as_u64().and_then(|n|u32::try_from(n).ok()))),
+            achieved_at: milestone.and_then(|item|item.get("achievementTimestamp"))
+                .and_then(Value::as_str).map(str::to_owned),
+        })
     }
 
     pub(crate) fn claim_bonus(&self, channel_id: &str, claim_id: &str) -> Result<(), GqlError> {
