@@ -49,6 +49,15 @@ fn cpu_usage_percent(previous_ns: u128, current_ns: u128, elapsed: Duration) -> 
 }
 
 impl DiagnosticsSampler {
+    pub(crate) fn set_paused(&mut self, paused: bool) {
+        if self.paused && !paused {
+            // A pause interval is not a valid CPU usage sample window.
+            self.previous = None;
+            self.last_read = None;
+        }
+        self.paused = paused;
+    }
+
     pub(crate) fn sample_if_due(&mut self) {
         if self.paused { return; }
         let now = Instant::now();
