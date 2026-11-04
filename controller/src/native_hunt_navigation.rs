@@ -15,7 +15,7 @@ pub const GIVE_UP_FAILED_NOTICE: &str =
     "Pokémon Center was not confirmed after three Give Up attempts. Navigation is paused; check game state or cancel the destination.";
 
 pub const BLOCKED_NOTICE: &str =
-    "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, give up once to reach the Pokémon Center and continue the requested destination.";
+    "Combat keeps blocking travel. Moth will keep checking every worker tick and, after one minute, attempt Give Up. Moth continues only after Center confirmation and limits unconfirmed retries.";
 
 #[derive(Default)]
 struct SwitchGate {
