@@ -13,9 +13,6 @@ impl ControllerApp {
         };
         self.runtimes[index].session.native_handoff_busy = true;
         self.runtimes[index].session.native_handoff_last_attempt = Some(Instant::now());
-        logging::info(&format!(
-            "{} capturing native game session via Firefox BiDi",
-            self.account_name(profile)));
         self.set_status(format!("{}: signing in to PokéIdle",
             self.account_name(profile)), false);
         let tx = self.native_handoff_tx.clone();
