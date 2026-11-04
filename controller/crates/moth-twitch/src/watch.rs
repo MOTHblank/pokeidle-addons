@@ -16,6 +16,7 @@ pub(crate) struct WatchClient {
     client: Client,
     spade_url: Option<Url>,
     playlist_urls: HashMap<String, Url>,
+    session_cookie: Option<String>,
 }
 
 impl WatchClient {
@@ -29,7 +30,26 @@ impl WatchClient {
             client,
             spade_url: None,
             playlist_urls: HashMap::new(),
+            session_cookie: None,
         })
+    }
+
+    pub(crate) fn set_session(&mut self,oauth_token:&str,user_id:&str) {
+        self.session_cookie=if oauth_token.is_empty() {
+            None
+        } else if user_id.is_empty() {
+            Some(format!("auth-token={oauth_token}"))
+        } else {
+            Some(format!("auth-token={oauth_token}; persistent={user_id}"))
+        };
+    }
+
+    fn with_cookie(&self,request:reqwest::blocking::RequestBuilder)
+        ->reqwest::blocking::RequestBuilder {
+        match self.session_cookie.as_deref() {
+            Some(cookie)=>request.header("Cookie",cookie),
+            None=>request,
+        }
     }
 
     /// Match the reference miner's lightweight viewing behavior: touch the
@@ -77,7 +97,7 @@ impl WatchClient {
             "properties": properties
         })]).map_err(|_| "Could not encode Twitch watch event".to_owned())?;
         let data = base64::engine::general_purpose::STANDARD.encode(body);
-        let response = self.client.post(spade_url)
+        let response = self.with_cookie(self.client.post(spade_url))
             .form(&[("data", data)])
             .send()
             .map_err(|_| "Could not send Twitch watch event".to_owned())?;
@@ -156,7 +176,7 @@ impl WatchClient {
     }
 
     fn resolve_spade_url(&self, login: &str) -> Result<Url, String> {
-        let page = self.client.get(format!("https://www.twitch.tv/{login}"))
+        let page = self.with_cookie(self.client.get(format!("https://www.twitch.tv/{login}")))
             .header("User-Agent",LINUX_FIREFOX_USER_AGENT)
             .send()
             .map_err(|_| "Could not load Twitch channel page".to_owned())?
