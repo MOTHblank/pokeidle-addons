@@ -135,6 +135,13 @@ pub(super) fn draw_options_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         });
 }
 
+fn default_performance_options(current: UiOptions) -> UiOptions {
+    UiOptions {
+        atlas_aoe_enabled: current.atlas_aoe_enabled,
+        ..UiOptions::default()
+    }
+}
+
 fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tr("Background performance"))
         .size(17.0).strong().color(TEXT));
@@ -214,10 +221,7 @@ fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         if ui.small_button(tr("Restore default performance settings")).clicked() {
             // Performance reset must not wipe per-account Hunt Atlas choices.
-            app.save_ui_options(UiOptions {
-                atlas_aoe_enabled: app.ui_options.atlas_aoe_enabled,
-                ..UiOptions::default()
-            });
+            app.save_ui_options(default_performance_options(app.ui_options));
         }
         if ui.small_button(tr("Open performance diagnostics")).clicked() {
             // Sampling is still strictly opt-in on the focused Diagnostics page.
@@ -231,6 +235,23 @@ fn draw_options_contents(app: &mut ControllerApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tr(
         "Changes take effect after a successful save and are restored on the next launch."
     )).size(11.0).color(DIM));
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+
+    #[test]
+    fn performance_reset_preserves_all_account_atlas_choices() {
+        let mut current = UiOptions::default();
+        current.reduce_updates_unfocused = false;
+        current.reduce_updates_in_tray = false;
+        current.atlas_aoe_enabled = [true, false, true, true];
+        let reset = default_performance_options(current);
+        assert!(reset.reduce_updates_unfocused);
+        assert!(reset.reduce_updates_in_tray);
+        assert_eq!(reset.atlas_aoe_enabled, [true, false, true, true]);
+    }
 }
 
 pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
