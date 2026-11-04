@@ -378,7 +378,7 @@ fn confirm_streak(
     channel:&mut ChannelCache,
     reason:&str,
     snapshot:&Arc<Mutex<MinerSnapshot>>,
-    events:&Arc<Mutex<VecDeque<MinerEvent>>>,
+    events:&EventBus,
 ) {
     if channel.streak_confirmed==Some(true) {return;}
     channel.streak_confirmed=Some(true);
@@ -398,7 +398,7 @@ fn apply_pubsub_events(
     pending:&mut VecDeque<PubSubEvent>,
     cache:&mut HashMap<String,ChannelCache>,
     snapshot:&Arc<Mutex<MinerSnapshot>>,
-    events:&Arc<Mutex<VecDeque<MinerEvent>>>,
+    events:&EventBus,
 ) {
     let count=pending.len();
     for _ in 0..count {
