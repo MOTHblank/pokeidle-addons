@@ -134,7 +134,13 @@ jobs:
           RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $portable = "Moth-Controller-Portable-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
+          # v0.2.2 is the one-time bridge for v0.2.1, whose updater only knows
+          # the legacy unversioned portable asset name. Later releases are versioned.
+          if ($env:RELEASE_VERSION -eq '0.2.2') {
+            $portable = 'Moth-Controller-Portable-windows-x86_64.exe'
+          } else {
+            $portable = "Moth-Controller-Portable-v$($env:RELEASE_VERSION)-windows-x86_64.exe"
+          }
           Copy-Item 'controller/target/release/moth-controller.exe' "dist/$portable"
 
           # The installer should carry the exact same application icon as the
@@ -286,7 +292,12 @@ jobs:
           RELEASE_VERSION: ${{ needs.versao.outputs.version }}
         run: |
           set -euo pipefail
-          test -s "dist/Moth-Controller-Portable-v$RELEASE_VERSION-windows-x86_64.exe"
+          if [[ "$RELEASE_VERSION" == "0.2.2" ]]; then
+            portable="Moth-Controller-Portable-windows-x86_64.exe"
+          else
+            portable="Moth-Controller-Portable-v$RELEASE_VERSION-windows-x86_64.exe"
+          fi
+          test -s "dist/$portable"
           test -s "dist/Moth-Controller-Setup-v$RELEASE_VERSION.exe"
           test -s "dist/moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
           (cd dist && for checksum in *.sha256; do sed -i 's/\r$//' "$checksum"; done && sha256sum -c ./*.sha256)
