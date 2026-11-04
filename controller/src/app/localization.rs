@@ -520,6 +520,9 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
             "Os relatórios de suporte incluem apenas contagens agregadas, nunca detalhes privados das sessões.",
         "Opened data folder" => "Pasta de dados aberta",
         "Settings backup" => "Backup de configurações",
+        "Exports local app, account, and Kick stream preferences. Game server automation and credentials remain excluded." =>
+            "Exporta opções locais, contas e preferências de streams da Kick. Automações do servidor e credenciais ficam de fora.",
+        "Kick stream preferences" => "Preferências de streams da Kick",
         "Export only local app options and account labels/enabled flags. No credentials or server automation data." => "Exporta apenas opções locais e nomes/estado das contas. Sem credenciais ou automações do servidor.",
         "Export safe settings backup" => "Exportar backup seguro das configurações",
         "Settings backup saved" => "Backup de configurações salvo",
