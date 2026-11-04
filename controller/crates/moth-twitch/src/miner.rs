@@ -922,6 +922,7 @@ fn poll_channels(
                         channel.streak_priority_exhausted=false;
                         channel.last_watch=None;
                         channel.last_media_activity=None;
+                        channel.last_media_error=None;
                     }
                 }
                 Ok(None) => {
@@ -929,7 +930,14 @@ fn poll_channels(
                 }
                 Err(error) => {
                     auth_failed |= error.is_auth();
-                    channel.last_error=Some(error.user_message());
+                    let message=error.user_message();
+                    let changed=channel.last_error.as_deref()!=Some(message.as_str());
+                    channel.last_error=Some(message.clone());
+                    if changed {
+                        push_event(events,MinerEvent::Warning(format!(
+                            "{login} stream metadata: {message}"
+                        )));
+                    }
                     if first_error.is_none() {first_error=Some(error);}
                 }
             }
@@ -970,9 +978,33 @@ fn poll_channels(
     // Watch selection persists across polling iterations. Do not create
     // fresh temporary watch sessions while selected streams are between
     // their minute-watched requests.
+    let previous_slots=watch_slots.clone();
+    let slot_now=Instant::now();
     refresh_watch_slots(
-        watch_slots,&live,cache,favorites,Instant::now(),streak_limit
+        watch_slots,&live,cache,favorites,slot_now,streak_limit
     );
+    for previous in &previous_slots {
+        let still_present=watch_slots.iter().any(|slot|
+            slot.login==previous.login && slot.broadcast_id==previous.broadcast_id);
+        if !still_present {
+            push_event(events,MinerEvent::WatchSlotStopped {
+                channel:previous.login.clone(),
+                reason:watch_release_reason(
+                    &previous.login,&previous.broadcast_id,&live,cache,slot_now
+                ),
+                active:watch_slots.len(),
+            });
+        }
+    }
+    for (index,slot) in watch_slots.iter().enumerate() {
+        let already_present=previous_slots.iter().any(|previous|
+            previous.login==slot.login && previous.broadcast_id==slot.broadcast_id);
+        if !already_present {
+            push_event(events,MinerEvent::WatchSlotStarted {
+                channel:slot.login.clone(),slot:index+1,active:watch_slots.len()
+            });
+        }
+    }
     for slot in watch_slots.iter() {
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(&slot.login) else {continue};
@@ -980,6 +1012,7 @@ fn poll_channels(
             at.elapsed()<Duration::from_secs(15)) {continue;}
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
         channel.last_watch_attempt=Some(Instant::now());
+        let first_watch=channel.last_watch.is_none();
         match watch.send_minute_watched(
             &slot.login,channel_id,&slot.broadcast_id,&viewer.user_id,
             channel.game_id.as_deref(),channel.game_name.as_deref(),
@@ -989,11 +1022,21 @@ fn poll_channels(
                 channel.last_watch=Some(Instant::now());
                 channel.watch_failures=0;
                 channel.watch_attempts=channel.watch_attempts.saturating_add(1);
+                channel.last_error=None;
+                if first_watch {
+                    push_event(events,MinerEvent::WatchActive {
+                        channel:slot.login.clone()
+                    });
+                }
                 if let Some(media_error)=ack.media_error {
-                    push_event(events,MinerEvent::Warning(format!(
-                        "{} media activity: {media_error}",slot.login
-                    )));
+                    if channel.last_media_error.as_deref()!=Some(media_error.as_str()) {
+                        push_event(events,MinerEvent::Warning(format!(
+                            "{} media activity: {media_error}",slot.login
+                        )));
+                    }
+                    channel.last_media_error=Some(media_error);
                 } else {
+                    channel.last_media_error=None;
                     channel.last_media_activity=Some(Instant::now());
                 }
                 if let Ok(mut current)=snapshot.lock(){
@@ -1001,9 +1044,17 @@ fn poll_channels(
                 }
             }
             Err(error)=>{
+                let previous_failures=channel.watch_failures;
                 channel.watch_failures=channel.watch_failures.saturating_add(1);
                 channel.last_error=Some(error.clone());
-                push_event(events,MinerEvent::Warning(format!("{}: {error}",slot.login)));
+                if previous_failures==0 || channel.watch_failures==3 {
+                    let suffix=if channel.watch_failures>=3 {
+                        " (repeated failures; watch backoff active)"
+                    } else {""};
+                    push_event(events,MinerEvent::Warning(format!(
+                        "{} watch signal: {error}{suffix}",slot.login
+                    )));
+                }
             }
         }
         update_streamer(snapshot,&slot.login,channel,None);
