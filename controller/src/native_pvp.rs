@@ -47,6 +47,7 @@ pub struct PvpAutomation {
     next_join_at: Option<Instant>,
     next_info_at: Option<Instant>,
     last_vip_sync: Option<(bool, Instant)>,
+    vip_cancel_pending: bool,
     warning: Option<String>,
 }
 
@@ -56,7 +57,7 @@ impl Default for PvpAutomation {
             queue_known: false, queued: false, owned_queue: false,
             team_ready: None, min_level: None, cooldown_until: None,
             join_sent: None, next_join_at: None, next_info_at: None,
-            last_vip_sync: None, warning: None,
+            last_vip_sync: None, vip_cancel_pending: false, warning: None,
         }
     }
 }
@@ -122,6 +123,7 @@ impl PvpAutomation {
         self.next_info_at = None;
         self.next_join_at = None;
         self.last_vip_sync = None;
+        self.vip_cancel_pending = false;
         // Preserve ownership to cancel an in-flight queue if the user disabled
         // Auto PvP while disconnected and the server restored their entry.
     }
@@ -161,11 +163,33 @@ impl PvpAutomation {
             // None means inherit the existing server VIP preference. Avoid
             // overriding the user's in-game setting merely by connecting.
             if let Some(wanted) = preference {
+                if wanted { self.vip_cancel_pending = false; }
                 if vip_auto != Some(wanted) &&
                     self.last_vip_sync.is_none_or(|(old, sent)|
                         old != wanted || now.saturating_duration_since(sent) >= VIP_SYNC_RETRY) {
+                    if !wanted && vip_auto == Some(true) {
+                        // Disable the server auto-join first. Cancel its
+                        // currently active search only after confirmation.
+                        self.vip_cancel_pending = true;
+                        self.next_info_at = None;
+                    }
                     self.last_vip_sync = Some((wanted, now));
                     return Some(PvpAction::SetVipAuto(wanted));
+                }
+            }
+            if self.vip_cancel_pending && vip_auto == Some(false) {
+                if !self.queue_known {
+                    if self.next_info_at.is_none_or(|due| now >= due) {
+                        self.next_info_at = Some(now + INFO_INTERVAL);
+                        return Some(PvpAction::Info);
+                    }
+                    return None;
+                }
+                self.vip_cancel_pending = false;
+                if self.queued {
+                    self.queued = false;
+                    self.queue_known = false;
+                    return Some(PvpAction::Leave);
                 }
             }
             // A VIP queue can also run with the PvP page closed. Query its
@@ -272,6 +296,18 @@ mod tests {
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
         assert_eq!(p.next(Some(true),true,Some(false),Some(30),t),
             Some(PvpAction::SetVipAuto(true)));
+    }
+    #[test]
+    fn turning_off_vip_auto_queue_cancels_the_active_search_after_confirmation() {
+        let t=Instant::now();
+        let mut p=PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
+            Some(PvpAction::SetVipAuto(false)));
+        assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
+        assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),
+            Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),None);
     }
     #[test]
     fn match_and_reconnect_require_fresh_server_status_before_requeue() {
