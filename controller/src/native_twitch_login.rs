@@ -308,6 +308,14 @@ pub fn reset(profile: GameProfile) {
     }
 }
 pub fn start(profile: GameProfile) -> Result<(), String> {
+    start_mode(profile,false)
+}
+
+pub fn start_fresh(profile: GameProfile) -> Result<(), String> {
+    start_mode(profile,true)
+}
+
+fn start_mode(profile: GameProfile, fresh: bool) -> Result<(), String> {
     let cancelled = {
         let mut jobs = jobs().lock()
             .map_err(|_| "Twitch login state unavailable".to_owned())?;
@@ -324,7 +332,7 @@ pub fn start(profile: GameProfile) -> Result<(), String> {
     let spawned = thread::Builder::new()
         .name(format!("moth-twitch-login-{}", profile.name()))
         .spawn(move || {
-            let result = login(profile, &cancelled);
+            let result = login(profile, &cancelled, fresh);
             if let Ok(mut jobs) = jobs().lock() {
                 match result {
                     Ok(token) => {
@@ -358,17 +366,28 @@ fn reset_after_spawn_failure(profile: GameProfile) {
 fn twitch_config(profile: GameProfile) -> Result<Config, String> {
     Config::for_profile(profile)
 }
-pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<String, String> {
+fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool) -> Result<String, String> {
     let config = twitch_config(profile)?;
-    // A prior Firefox visit to Twitch may already have a session. Avoid
-    // opening another login window when it can be reused directly.
-    if let Some(token) = read_twitch_cookie(&config.profile_dir)? {
-        if cancelled.load(Ordering::Relaxed) { return Err("Twitch login cancelled".into()); }
-        native_auth::save_twitch_token(profile, &token)?;
-        return Ok(token);
-    }
-    if firefox::find_profile_process(&config)?.is_some() {
-        return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.".into());
+
+    if fresh {
+        // Refresh means a genuinely new Twitch browser session, not simply
+        // re-importing the same possibly rejected cookie. Do this inside the
+        // worker so SQLite never blocks the UI thread.
+        if firefox::find_profile_process(&config)?.is_some() {
+            return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.".into());
+        }
+        clear_twitch_cookie(&config.profile_dir)?;
+    } else {
+        // A prior Firefox visit to Twitch may already have a session. Avoid
+        // opening another login window when it can be reused directly.
+        if let Some(token) = read_twitch_cookie(&config.profile_dir)? {
+            if cancelled.load(Ordering::Relaxed) { return Err("Twitch login cancelled".into()); }
+            native_auth::save_twitch_token(profile, &token)?;
+            return Ok(token);
+        }
+        if firefox::find_profile_process(&config)?.is_some() {
+            return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.".into());
+        }
     }
     let mut browser = firefox::launch_twitch_login(&config)?;
     // The browser stays uninstrumented. Watch the local Firefox cookie
