@@ -81,7 +81,6 @@ impl ControllerApp {
                 let detected = Config::for_profile(profile)
                     .and_then(|config| firefox::find_profile_process(&config));
                 let existing_firefox = matches!(detected.as_ref(), Ok(Some(_)));
-                let mut twitch_auto_detected = false;
                 // A cache preflight panic must never strand the UI in
                 // "starting" state. Report it, then authenticate via Firefox.
                 let result = std::panic::catch_unwind(
@@ -89,62 +88,14 @@ impl ControllerApp {
                         crate::native_tls::ensure()?;
                         detected.and_then(|_| {
                             if existing_firefox { return Ok(None); }
-                            let Some(mut bootstrap) = crate::native_auth::load_for_auth(
-                                profile,&generation_state,generation)?
-                            else {
-                                return Ok(None);
-                            };
-
-                            // Existing users may have Twitch already signed in
-                            // inside this profile while PokéIdle starts entirely
-                            // from its encrypted native cache. Probe that local
-                            // profile once, headlessly, before starting native
-                            // gameplay so transition to the miner is automatic.
-                            if crate::native_auth::twitch_profile_probe_needed(&bootstrap) {
-                                match Config::for_profile(profile)
-                                    .and_then(|config|
-                                        firefox::detect_existing_twitch_login(&config))
-                                {
-                                    Ok(token) => {
-                                        twitch_auto_detected = token.is_some();
-                                        let (updated, warning) =
-                                            crate::native_auth::cache_twitch_profile_probe(
-                                                profile,&bootstrap,token.as_deref(),
-                                                &generation_state,generation);
-                                        bootstrap = updated;
-                                        if let Some(warning) = warning {
-                                            logging::warn(&format!(
-                                                "{} Twitch login migration cache warning: {warning}",
-                                                profile.name()
-                                            ));
-                                        }
-                                        if twitch_auto_detected {
-                                            logging::info(&format!(
-                                                "{} existing Twitch login detected automatically",
-                                                profile.name()
-                                            ));
-                                        } else {
-                                            logging::info(&format!(
-                                                "{} Twitch login migration checked; no existing login found",
-                                                profile.name()
-                                            ));
-                                        }
-                                    }
-                                    Err(error) => {
-                                        // Twitch is optional. A failed migration
-                                        // probe must never block PokéIdle.
-                                        logging::warn(&format!(
-                                            "{} automatic Twitch login detection unavailable: {error}",
-                                            profile.name()
-                                        ));
-                                    }
-                                }
-                            }
-
-                            // Never project a cached, unverified connection as
-                            // started. A failed welcome needs a fresh Firefox
-                            // authentication, not infinite background retries.
-                            NativeSession::start_verified(profile, bootstrap).map(Some)
+                            crate::native_auth::load_for_auth(
+                                profile,&generation_state,generation)
+                                .and_then(|saved| saved.map(|bootstrap| {
+                                    // Twitch cookie migration now happens inside
+                                    // NativeSession::start_verified using the direct
+                                    // Firefox cookie database path.
+                                    NativeSession::start_verified(profile, bootstrap)
+                                }).transpose())
                         })
                     })
                 ).unwrap_or_else(|_| {
@@ -158,7 +109,7 @@ impl ControllerApp {
                     other=>other,
                 };
                 let _ = tx.send(CachedNativeEvent {
-                    index, generation, existing_firefox, twitch_auto_detected, result
+                    index, generation, existing_firefox, result
                 });
             });
         if let Err(error) = started {
