@@ -365,14 +365,14 @@ impl DiagnosticsSampler {
             "detailed_thread_inspection": self.inspect_threads,
             "thread_cpu_hotspots": self.hot_threads.iter().map(|thread| serde_json::json!({
                 "thread_id": thread.id,
-                "thread_name": thread.name,
+                "thread_name": thread.name.as_str(),
                 "cpu_percent": thread.cpu_percent,
             })).collect::<Vec<_>>(),
             "thread_cpu_timeline": self.thread_history.iter().map(|point| serde_json::json!({
                 "age_ms": now.saturating_duration_since(point.at).as_millis(),
                 "top": point.hottest.iter().map(|thread| serde_json::json!({
                     "thread_id": thread.id,
-                    "thread_name": thread.name,
+                    "thread_name": thread.name.as_str(),
                     "cpu_percent": thread.cpu_percent,
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
