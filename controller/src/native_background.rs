@@ -1050,8 +1050,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             match boss_manager.start(key, *repeat,
                                 &hunt_intel.view, &mut navigator, Instant::now()) {
                                 Ok(()) => {
-                                    // Boss entry now uses the same safe switch gate
-                                    // as Hunt Atlas; it never detours through Center.
+                                    // Boss entry owns the same Hunt Atlas navigation:
+                                    // reach Center first, then enter the arena.
                                     hunt_intel.cancel_hunt_intent();
                                 }
                                 Err(error) => {
@@ -1123,7 +1123,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         }
                         if matches!(command, GameCommand::Center) {
                             // Normal Center uses the same timed gate as a hunt
-                            // change, without ever forcing a surrender.
+                            // change. One minute pending authorizes one Give Up.
                             if hunt_intel.view.in_center {
                                 navigator.cancel();
                                 hunt_intel.cancel_hunt_intent();
@@ -1186,10 +1186,9 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     if boss_manager.view.phase != boss_phase {
                         boss_manager.publish(&boss);
                     }
-                    // 60 ms worker wake catches the same narrow travel
-                    // openings for hunts, Center and bosses. Boss destinations
-                    // are consumed by BossManager above so its token validation
-                    // and lifecycle remain authoritative.
+                    // The 60 ms worker wake catches narrow travel openings for
+                    // hunts and Center. BossManager owns both legs of boss travel
+                    // so its token validation and lifecycle remain authoritative.
                     if !navigator.boss_pending() {
                         if let Some(command) = navigator.next_action(&hunt_intel.view, Instant::now()) {
                             let mut allowed = true;
@@ -1209,8 +1208,8 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             }
                         }
                     }
-                    // Give Up is NEVER issued by navigation; prolonged combat
-                    // only produces a visible warning while safe retries continue.
+                    // A blocked destination warns early; after one full minute
+                    // the queued destination itself authorizes one Give Up.
                     hunt_intel.view.pending_center = navigator.center_pending();
                     hunt_intel.view.navigation_warning =
                         navigator.blocked(&hunt_intel.view, Instant::now())
