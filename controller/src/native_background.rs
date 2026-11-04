@@ -935,7 +935,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.native_market = market.status.clone();
                     s.native_capture_status = gameplay.status.clone();
                 });
-                rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
                     s.error = None;
