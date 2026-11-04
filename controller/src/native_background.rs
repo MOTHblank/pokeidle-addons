@@ -1303,7 +1303,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             let vip_auto = hunt_intel.view.automation.as_ref()
                                 .and_then(|a| a.get("pvpAutoFila")).and_then(Value::as_bool);
                             s.native_pvp = pvp.status(pref, hunt_intel.view.bonuses.vip_active,
-                                vip_auto, Instant::now());
+                                vip_auto, hunt_intel.view.trainer_level, Instant::now());
                             s.native_auto_catch = gameplay.status.auto_catch;
                             s.native_capture_queue = gameplay.status.queue;
                             s.native_throws = gameplay.status.throws;
