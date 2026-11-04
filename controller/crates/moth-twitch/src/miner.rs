@@ -13,6 +13,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+pub type MinerEventSink = Arc<dyn Fn(MinerEvent) + Send + Sync>;
+
+#[derive(Clone)]
+struct EventBus {
+    queue: Arc<Mutex<VecDeque<MinerEvent>>>,
+    sink: Option<MinerEventSink>,
+}
+
 const WATCH_SLOTS: usize = 2;
 const STREAK_PRIORITY_BASE: Duration = Duration::from_secs(7 * 60);
 const STREAK_PRIORITY_EXTENDED: Duration = Duration::from_secs(20 * 60);
@@ -88,18 +96,26 @@ impl MinerControl {
 
 pub struct Miner {
     snapshot: Arc<Mutex<MinerSnapshot>>,
-    events: Arc<Mutex<VecDeque<MinerEvent>>>,
+    events: EventBus,
     control: MinerControl,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
 }
 
 impl Miner {
-    pub fn start(credentials: Credentials, config: MinerConfig) -> Result<Self, String> {
+    pub fn start(
+        credentials: Credentials,
+        config: MinerConfig,
+        event_sink: Option<MinerEventSink>,
+    ) -> Result<Self, String> {
         let worker_name = credentials.username.as_deref().unwrap_or("account").to_owned();
         let gql = TwitchGql::new(credentials)?;
         let snapshot = Arc::new(Mutex::new(MinerSnapshot::default()));
         let events = Arc::new(Mutex::new(VecDeque::new()));
+        let event_bus = EventBus {
+            queue: Arc::clone(&events),
+            sink: event_sink,
+        };
         let desired = Arc::new(Mutex::new(Vec::new()));
         let live = Arc::new(Mutex::new(Vec::new()));
         let expected_login = Arc::new(Mutex::new(None));
@@ -109,7 +125,7 @@ impl Miner {
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
 
         let worker_snapshot = Arc::clone(&snapshot);
-        let worker_events = Arc::clone(&events);
+        let worker_events = event_bus.clone();
         let worker_desired = Arc::clone(&desired);
         let worker_live = Arc::clone(&live);
         let worker_expected_login = Arc::clone(&expected_login);
@@ -315,12 +331,16 @@ fn notify(wake: &PhaseWake) {
     }
 }
 
-fn push_event(events: &Arc<Mutex<VecDeque<MinerEvent>>>, event: MinerEvent) {
-    if let Ok(mut events) = events.lock() {
-        while events.len() >= 128 {
-            events.pop_front();
+fn push_event(events: &EventBus, event: MinerEvent) {
+    let sink_event=event.clone();
+    if let Ok(mut queue) = events.queue.lock() {
+        while queue.len() >= 128 {
+            queue.pop_front();
         }
-        events.push_back(event);
+        queue.push_back(event);
+    }
+    if let Some(sink)=events.sink.as_ref() {
+        sink(sink_event);
     }
 }
 
@@ -486,7 +506,7 @@ fn run(
     mut gql: TwitchGql,
     config: MinerConfig,
     snapshot: Arc<Mutex<MinerSnapshot>>,
-    events: Arc<Mutex<VecDeque<MinerEvent>>>,
+    events: EventBus,
     desired: Arc<Mutex<Vec<String>>>,
     live: Arc<Mutex<Vec<String>>>,
     expected_login: Arc<Mutex<Option<String>>>,
@@ -637,7 +657,7 @@ fn poll_channels(
     streak_limit: Duration,
     stop: &AtomicBool,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
-    events: &Arc<Mutex<VecDeque<MinerEvent>>>,
+    events: &EventBus,
     phase_wake: &PhaseWake,
 ) -> bool {
     let mut first_error: Option<GqlError> = None;
