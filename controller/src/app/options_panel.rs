@@ -260,26 +260,22 @@ fn updates(app: &mut ControllerApp, ui: &mut egui::Ui) {
     #[cfg(windows)]
     if staged_version.is_some() {
         ui.add_space(10.0);
-        let active = app.accounts_have_live_work();
-        if ui.add_enabled(!active,
-            egui::Button::new(tr("Restart and install update"))).clicked() {
+        if ui.button(tr("Restart and install update")).clicked() {
             match update::request_restart_and_install(&app.update_status) {
                 Ok(_) => {
                     app.set_status(tr("Restarting to install update"), false);
-                    // Force a real application exit even when close-to-tray is enabled.
+                    // Update-triggered shutdown is explicit: bypass close-to-tray
+                    // and the active-account confirmation so installation can proceed.
+                    app.workspace.exit_confirmation = false;
+                    app.workspace.exit_approved = true;
                     app.tray_exit_requested.store(true, Ordering::Release);
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 Err(error) => app.set_status(error, true),
             }
         }
-        if active {
-            description(ui,
-                "Update is ready. Stop all active accounts before restarting to install it.");
-        } else {
-            description(ui,
-                "The verified update replaces only the application executable, then reopens Moth.");
-        }
+        description(ui,
+            "The verified update closes Moth, stops active accounts, replaces the application executable, then reopens Moth.");
     } else if newer {
         description(ui,
             "Downloading never interrupts active accounts. Installation only starts after you choose to restart.");

@@ -217,24 +217,17 @@ pub(super) fn draw_credits(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     #[cfg(windows)]
                     {
                         if staged_version.is_some() {
-                            let active = app.accounts_have_live_work();
-                            let response = ui.add_enabled(
-                                !active,
+                            let response = ui.add(
                                 egui::Button::new(
                                     RichText::new(tr("Restart & install")).size(9.0)
                                 ),
                             );
-                            let response = if active {
-                                response.on_hover_text(tr(
-                                    "Stop all active accounts before restarting to install it."
-                                ))
-                            } else {
-                                response
-                            };
                             if response.clicked() {
                                 match update::request_restart_and_install(&app.update_status) {
                                     Ok(_) => {
                                         app.set_status(tr("Restarting to install update"), false);
+                                        app.workspace.exit_confirmation = false;
+                                        app.workspace.exit_approved = true;
                                         app.tray_exit_requested.store(
                                             true,
                                             std::sync::atomic::Ordering::Release,
