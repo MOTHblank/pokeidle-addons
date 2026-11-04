@@ -113,6 +113,7 @@ impl Miner {
         let worker_favorites = Arc::clone(&favorites);
         let worker_stop = Arc::clone(&stop);
         let worker_phase_wake = Arc::clone(&phase_wake);
+        let worker_wake = wake_tx.clone();
         thread::Builder::new()
             .name(format!("moth-twitch-{worker_name}"))
             .spawn(move || {
@@ -127,6 +128,7 @@ impl Miner {
                     worker_favorites,
                     worker_stop,
                     worker_phase_wake,
+                    worker_wake,
                     wake_rx,
                 )
             })
@@ -316,6 +318,7 @@ fn run(
     favorites: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
     phase_wake: PhaseWake,
+    wake: SyncSender<()>,
     wake_rx: Receiver<()>,
 ) {
     let mut watch = match WatchClient::new() {
@@ -328,6 +331,10 @@ fn run(
     let mut identity: Option<ViewerIdentity> = None;
     let mut cache: HashMap<String, ChannelCache> = HashMap::new();
     let mut watch_slots: Vec<WatchSlot> = Vec::new();
+    let started_at=Instant::now();
+    let (pubsub_tx,pubsub_rx)=mpsc::channel();
+    let mut pubsub_started=false;
+    let mut pending_pubsub=VecDeque::new();
     let interval = config.poll_interval.max(Duration::from_secs(10));
 
     while !stop.load(Ordering::Acquire) {
@@ -357,6 +364,11 @@ fn run(
             }
         }
 
+        pending_pubsub.extend(pubsub_rx.try_iter());
+        apply_pubsub_events(
+            &gql,&config,&mut pending_pubsub,&mut cache,&snapshot,&events
+        );
+
         let channels = desired.lock().map(|channels| channels.clone()).unwrap_or_default();
         cache.retain(|channel, _| channels.binary_search(channel).is_ok());
         if let Ok(mut current) = snapshot.lock() {
@@ -383,6 +395,11 @@ fn run(
                     )),
                 );
             } else if !channels.is_empty() {
+                let streak_limit=if started_at.elapsed()>LONG_SESSION {
+                    STREAK_PRIORITY_EXTENDED
+                } else {
+                    STREAK_PRIORITY_BASE
+                };
                 let auth_failed = poll_channels(
                     &gql,
                     &mut watch,
@@ -393,10 +410,22 @@ fn run(
                     &favorites.lock().map(|items|items.clone()).unwrap_or_default(),
                     &mut cache,
                     &mut watch_slots,
+                    streak_limit,
                     &stop,
                     &snapshot,
                     &events,
                     &phase_wake,
+                );
+                if !pubsub_started && !auth_failed {
+                    pubsub::spawn(
+                        gql.oauth_token().to_owned(),viewer.user_id.clone(),
+                        Arc::clone(&stop),pubsub_tx.clone(),wake.clone()
+                    );
+                    pubsub_started=true;
+                }
+                pending_pubsub.extend(pubsub_rx.try_iter());
+                apply_pubsub_events(
+                    &gql,&config,&mut pending_pubsub,&mut cache,&snapshot,&events
                 );
                 if auth_failed {
                     identity = None;
@@ -426,6 +455,7 @@ fn poll_channels(
     favorites: &[String],
     cache: &mut HashMap<String, ChannelCache>,
     watch_slots: &mut Vec<WatchSlot>,
+    streak_limit: Duration,
     stop: &AtomicBool,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
@@ -613,7 +643,9 @@ fn poll_channels(
     // Watch selection persists across polling iterations. Do not create
     // fresh temporary watch sessions while selected streams are between
     // their minute-watched requests.
-    refresh_watch_slots(watch_slots,live,cache,favorites,Instant::now());
+    refresh_watch_slots(
+        watch_slots,live,cache,favorites,Instant::now(),streak_limit
+    );
     for slot in watch_slots.iter() {
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(&slot.login) else {continue};
