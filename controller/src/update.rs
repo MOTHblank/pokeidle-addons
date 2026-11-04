@@ -493,7 +493,7 @@ fn run_update_helper(target: &Path, checksum: &str, parent_pid: u32) -> Result<(
                 moved_old = true;
                 break;
             }
-            Err(error) if !target.exists() => break,
+            Err(_) if !target.exists() => break,
             Err(_) => thread::sleep(Duration::from_millis(250)),
         }
     }

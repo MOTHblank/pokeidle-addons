@@ -444,6 +444,11 @@ impl KickSupervisor {
         });
     }
     pub fn identity(&self)->Instant {self.identity}
+    /// Called only by the opt-in diagnostics sampler. Never wait for the
+    /// roster coordinator or Kick workers just to collect telemetry.
+    pub fn diagnostics_snapshot(&self)->Option<KickDiagnosticsSnapshot> {
+        self.monitor.try_lock().ok()?.diagnostics_snapshot()
+    }
     pub fn snapshot(&self)->KickSnapshot {
         self.monitor.lock().map(|monitor|monitor.snapshot()).unwrap_or_default()
     }
