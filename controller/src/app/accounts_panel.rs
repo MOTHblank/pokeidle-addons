@@ -1,5 +1,5 @@
-//! Account profile management cards and profile/Kick workspace routing.
-use super::{egui, kick_panel, localize_status, pt_br, status_chip, tr, tr_dynamic,
+//! Account profile management cards and Twitch/Kick workspace routing.
+use super::{egui, kick_panel, twitch_panel, localize_status, pt_br, status_chip, tr, tr_dynamic,
     AccountsSection, Align, Color32, ControllerApp, Duration, FontId, GameProfile,
     Layout, ProfileAction, RichText, Stroke, BAD, BORDER, GOOD, MUTED,
     PANEL, PANEL_ALT, TEXT, WARN};
@@ -12,15 +12,26 @@ pub(super) fn draw_accounts_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             if pt_br() { "Perfis PokéIdle" } else { "PokéIdle profiles" }).clicked() {
             app.workspace.accounts_section = AccountsSection::Profiles;
         }
+        if ui.selectable_label(app.workspace.accounts_section == AccountsSection::Twitch,
+            "Twitch").clicked() {
+            app.workspace.accounts_section = AccountsSection::Twitch;
+        }
         if ui.selectable_label(app.workspace.accounts_section == AccountsSection::Kick,
             "Kick").clicked() {
             app.workspace.accounts_section = AccountsSection::Kick;
         }
     });
     ui.add_space(12.0);
-    if app.workspace.accounts_section == AccountsSection::Kick {
-        kick_panel::draw_kick_panel(app, ui);
-        return;
+    match app.workspace.accounts_section {
+        AccountsSection::Twitch => {
+            twitch_panel::draw_twitch_panel(app, ui);
+            return;
+        }
+        AccountsSection::Kick => {
+            kick_panel::draw_kick_panel(app, ui);
+            return;
+        }
+        AccountsSection::Profiles => {}
     }
 
     if app.account_setup_checked_at
@@ -184,7 +195,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             }
         });
 
-        // Keep game profile cards compact; Kick has its own workspace.
+        // Keep game profile cards compact; Twitch and Kick have dedicated workspaces.
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             let kick_running = app.runtimes[index].kick.kick_monitor.is_some();
@@ -196,6 +207,11 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                                else { "Manage Kick →" }).clicked() {
                 app.workspace.kick_selected_account = index;
                 app.workspace.accounts_section = AccountsSection::Kick;
+            }
+            if ui.small_button(if pt_br() { "Gerenciar Twitch →" }
+                               else { "Manage Twitch →" }).clicked() {
+                app.workspace.twitch_selected_account = index;
+                app.workspace.accounts_section = AccountsSection::Twitch;
             }
         });
 

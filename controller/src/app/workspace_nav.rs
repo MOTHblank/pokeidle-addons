@@ -179,6 +179,12 @@ pub(super) fn draw_sidebar(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 app.workspace.panel_tab = PanelTab::Accounts;
                 app.workspace.accounts_section = AccountsSection::Profiles;
             }
+            if sidebar_button(ui, "  ·  Twitch",
+                app.workspace.panel_tab == PanelTab::Accounts &&
+                app.workspace.accounts_section == AccountsSection::Twitch).clicked() {
+                app.workspace.panel_tab = PanelTab::Accounts;
+                app.workspace.accounts_section = AccountsSection::Twitch;
+            }
             if sidebar_button(ui, "  ·  Kick",
                 app.workspace.panel_tab == PanelTab::Accounts &&
                 app.workspace.accounts_section == AccountsSection::Kick).clicked() {

@@ -22,6 +22,7 @@ mod hunt_panel;
 mod boss_panel;
 mod market_panel;
 mod kick_panel;
+mod twitch_panel;
 mod translations;
 mod localization;
 mod workspace_nav;
@@ -997,7 +998,7 @@ enum PanelTab { Overview, Hunts, Boss, Accounts, Automation, Diagnostics, Option
 enum OptionsSection { General, Appearance, Performance, Notifications, Updates, Data }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum AccountsSection { Profiles, Kick }
+enum AccountsSection { Profiles, Twitch, Kick }
 
 /// Profile commands are application actions, not sidebar presentation state.
 #[derive(Clone, Copy)]
