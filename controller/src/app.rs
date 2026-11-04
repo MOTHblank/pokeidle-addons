@@ -132,6 +132,17 @@ const AUTH_PROGRESS_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 // transitions have their own workers/wake-ups and are not paced by this timer.
 const UI_NATIVE_REPAINT_INTERVAL: Duration = Duration::from_secs(2);
 const UI_MULTI_ACCOUNT_REPAINT_INTERVAL: Duration = Duration::from_secs(4);
+// Worker completions may arrive in bursts (multiple accounts, Twitch/Kick,
+// auth handoff and persistence jobs). They only need to make the UI responsive,
+// not turn the immediate-mode renderer into a 60 FPS event consumer.
+// request_repaint_after is coalesced by egui to the earliest outstanding
+// deadline, so a burst becomes at most one visible frame per 100 ms.
+const UI_WORKER_REPAINT_DELAY: Duration = Duration::from_millis(100);
+
+#[track_caller]
+fn request_worker_repaint(ctx: &egui::Context) {
+    ctx.request_repaint_after(UI_WORKER_REPAINT_DELAY);
+}
 
 fn ui_repaint_interval(
     background: bool,
@@ -873,8 +884,9 @@ fn make_tray_icon() -> Result<tray_icon::Icon, String> {
 }
 
 // Every worker completion wakes the application event pump, even when its
-// window is unfocused or hidden in the tray. UI repaint *frequency* must never
-// be the clock that drives authentication and native session transitions.
+// window is unfocused or hidden in the tray. Bursts are intentionally
+// coalesced: control-plane completion must be prompt, but it must not become a
+// frame clock when several accounts publish at once.
 struct WakeSender<T> {
     sender: Sender<T>,
     ctx: egui::Context,
@@ -885,9 +897,10 @@ impl<T> Clone for WakeSender<T> {
     }
 }
 impl<T> WakeSender<T> {
+    #[track_caller]
     fn send(&self, event: T) -> Result<(), mpsc::SendError<T>> {
         self.sender.send(event)?;
-        self.ctx.request_repaint();
+        request_worker_repaint(&self.ctx);
         Ok(())
     }
 }
@@ -1284,7 +1297,7 @@ impl ControllerApp {
         // user reauthenticates without explicitly stopping the old session.
         self.invalidate_capture_session(index);
         let ctx = self.lifecycle_ctx.clone();
-        session.set_phase_waker(Arc::new(move || ctx.request_repaint()));
+        session.set_phase_waker(Arc::new(move || request_worker_repaint(&ctx)));
         // Historical forecasts remain dormant for users who have never opened
         // Hunt Atlas; reuse the already-loaded guide if it exists.
         if let Some(reference)=self.hunt_reference.as_ref() {
@@ -1487,6 +1500,28 @@ impl Drop for ControllerApp {
 }
 
 impl eframe::App for ControllerApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe 0.36 calls logic even when the native window is hidden.
+        // Keep lifecycle/event processing here so tray mode never depends on
+        // painting a frame just to drain worker completions.
+        self.refresh_processes();
+        self.inspect_notification_transitions();
+        self.sync_pokeidle_kick_streamers();
+        if self.account_setup_checked_at
+            .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
+            .unwrap_or(true)
+        {
+            self.refresh_account_setup();
+        }
+        let background = self.controller_in_background(ctx);
+        self.sync_monitor_paces(background);
+        if background {
+            // Hidden/unfocused windows may not execute ui(), so keep a very
+            // cheap control-plane heartbeat alive without requesting paints.
+            ctx.request_repaint_after(UI_BACKGROUND_REPAINT_INTERVAL);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.restore_existing_window(ui.ctx());
         self.handle_window_close(ui.ctx());
@@ -1494,8 +1529,8 @@ impl eframe::App for ControllerApp {
         // diagnostics never starts it or leaves any background worker.
         let recording_frame_start = self.recording.as_ref()
             .is_some_and(RecordingSession::is_running).then(Instant::now);
-        // The clock is not even queried outside active diagnostics. Starting
-        // here includes process refresh, connection work and all UI panels.
+        // The clock is not even queried outside active diagnostics. This
+        // measures the paint/UI pass; control-plane work now lives in logic().
         let diagnostics_frame_start = (self.diagnostics_enabled
             && self.workspace.panel_tab == PanelTab::Diagnostics
             && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
@@ -1506,19 +1541,10 @@ impl eframe::App for ControllerApp {
                 let hidden = false;
                 should_sample(true, hidden, ui.ctx().input(|input| input.viewport().focused))
             }).then(Instant::now);
-        self.refresh_processes();
-        self.inspect_notification_transitions();
-        self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
         // resetting the current frame's Pokémon sprite usage.
         self.visuals.poll(ui.ctx());
         self.visuals.begin_frame();
-        if self.account_setup_checked_at
-            .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
-            .unwrap_or(true)
-        {
-            self.refresh_account_setup();
-        }
 
         let diagnostics_preflight = diagnostics_frame_start.map(|start| start.elapsed());
         // Native workers publish state independently of the display timer.
@@ -1689,9 +1715,6 @@ impl eframe::App for ControllerApp {
         if self.workspace.panel_tab != PanelTab::Accounts {
             self.save_dirty_account_names();
         }
-        // Apply the persisted preference immediately to all Firefox monitors.
-        // Native game connections are never throttled.
-        self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
         if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
             sampler.record_frame(start.elapsed(), diagnostics_preflight, diagnostics_panel_elapsed);
         }
@@ -1706,6 +1729,11 @@ impl eframe::App for ControllerApp {
                 PanelTab::Options => "Options",
             };
             recording.note_ui_pass(page, start.elapsed());
+            recording.note_repaint_causes(
+                ui.ctx().repaint_causes().into_iter().map(|cause| {
+                    format!("{}:{} {}", cause.file, cause.line, cause.reason)
+                })
+            );
         }
         // Decide *after* UI controls have been processed: clicking Pause must
         // not arm a new diagnostics-specific repaint timer.
@@ -1735,6 +1763,9 @@ fn apply_visual_preferences(ctx: &egui::Context, preferences: AppPreferences) {
 
 fn configure_style(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
+    // Keep reactive-mode semantics explicit. If this is ever enabled,
+    // changing widget geometry/ids can create a self-sustaining repaint loop.
+    ctx.options_mut(|options| options.repaint_on_widget_change = false);
     ctx.global_style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(8.0, 6.0);
         style.spacing.button_padding = egui::vec2(12.0, 7.0);

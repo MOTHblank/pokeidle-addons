@@ -59,6 +59,7 @@ pub(crate) struct RecordingSession {
     pub(crate) draft_marker: String,
     pub(crate) markers: VecDeque<RecordingMarker>,
     pub(crate) page_timings: BTreeMap<&'static str, PageTimings>,
+    repaint_causes: BTreeMap<String, u64>,
     last_page: Option<&'static str>,
 }
 
@@ -95,7 +96,8 @@ impl RecordingSession {
         let mut recorder = Self {
             sampler, stop_tx: Some(stop_tx), running, began, ended: None,
             draft_marker: String::new(), markers: VecDeque::new(),
-            page_timings: BTreeMap::new(), last_page: None,
+            page_timings: BTreeMap::new(), repaint_causes: BTreeMap::new(),
+            last_page: None,
         };
         recorder.mark("Recording started");
         Ok(recorder)
@@ -141,6 +143,22 @@ impl RecordingSession {
         }
     }
 
+    /// Record egui's own explanation for why the current pass happened.
+    /// This is intentionally recording-only: exact file/line aggregation is
+    /// developer telemetry and has no cost in normal application use.
+    pub(crate) fn note_repaint_causes(
+        &mut self,
+        causes: impl IntoIterator<Item = String>,
+    ) {
+        if !self.is_running() { return; }
+        for cause in causes {
+            let cause: String = cause.chars().filter(|c| !c.is_control()).take(240).collect();
+            if cause.is_empty() { continue; }
+            let count = self.repaint_causes.entry(cause).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+
     /// Cloning up to an hour of history is intentional only while the
     /// developer is viewing the explicit recording interface.
     pub(crate) fn snapshot(&self) -> Option<DiagnosticsSampler> {
@@ -169,6 +187,16 @@ impl RecordingSession {
                 "maximum_ms": timings.maximum_ms,
             })
         }).collect::<Vec<_>>());
+        let mut repaint_causes: Vec<_> = self.repaint_causes.iter()
+            .map(|(cause, count)| (cause, *count))
+            .collect();
+        repaint_causes.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        report["repaint_causes"] = serde_json::json!(repaint_causes.into_iter()
+            .map(|(cause, count)| serde_json::json!({
+                "cause": cause,
+                "count": count,
+            }))
+            .collect::<Vec<_>>());
         crate::diagnostics::write_report(&report)
     }
 }
@@ -212,6 +240,12 @@ mod tests {
     #[test]
     fn explicit_stop_finishes_and_preserves_the_capture() {
         let mut recorder = RecordingSession::start().unwrap();
+        recorder.note_repaint_causes([
+            "src/app.rs:900 worker wake".to_owned(),
+            "src/app.rs:900 worker wake".to_owned(),
+            "egui/input.rs:1 pointer".to_owned(),
+        ]);
+        assert_eq!(recorder.repaint_causes["src/app.rs:900 worker wake"], 2);
         recorder.note_ui_pass("Overview", Duration::from_millis(12));
         recorder.note_ui_pass("Hunt Atlas", Duration::from_millis(90));
         assert_eq!(recorder.page_timings.len(), 2);
