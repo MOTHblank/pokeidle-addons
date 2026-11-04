@@ -304,7 +304,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.horizontal_wrapped(|ui| {
                         resource_chip(
                             ui,
-                            &format!("{}: {}", tr("Confirmed boss victories recorded"), view.log.len()),
+                            &format!("{}: {}", tr("Victories"), view.log.len()),
                         );
                     });
                     if let Some(error) = view.storage_warning.as_deref() {
@@ -327,11 +327,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     let mut totals = BTreeMap::<u64, u64>::new();
                     for battle in view.log.iter() {
                         for drop in &battle.drops {
-                            *totals.entry(drop.item_id).or_default() = totals
-                                .get(&drop.item_id)
-                                .copied()
-                                .unwrap_or_default()
-                                .saturating_add(drop.quantity);
+                            let total = totals.entry(drop.item_id).or_default();
+                            *total = total.saturating_add(drop.quantity);
                         }
                     }
                     if totals.is_empty() {
