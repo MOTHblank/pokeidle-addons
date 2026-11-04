@@ -192,12 +192,12 @@ pub(super) fn draw_hunt_row(
     ui:&mut egui::Ui,result:&RankedHunt<'_>,rank:usize,
     ranking:HuntRanking,view:&HuntView,reference:Option<&AtlasReference>,
     live:bool,native:&NativeSession,error:&mut Option<String>,
-    pending_ui:&mut Option<String>,aoe_enabled:bool,
+    pending_ui:&mut Option<(String, Instant)>,aoe_enabled:bool,
 ){
     let hunt=result.hunt;
     let current=view.hunt_slug.as_deref()==Some(hunt.slug.as_str());
     let pending=view.pending_hunt_slug.as_deref()==Some(hunt.slug.as_str())
-        || pending_ui.as_deref()==Some(hunt.slug.as_str());
+        || pending_ui.as_ref().is_some_and(|(slug,_)| slug == &hunt.slug);
     egui::Frame::new()
         .fill(if current{ACCENT.linear_multiply(0.12)}
             else if pending{WARN.linear_multiply(0.07)}else{PANEL})
@@ -297,7 +297,7 @@ pub(super) fn draw_atlas_recommendations(
     ui: &mut egui::Ui, view: &HuntView, native: &NativeSession, live: bool,
     workspace: &mut WorkspaceState, reference_handle: Option<&Arc<AtlasReference>>,
     rankings: &mut RankingsCache, estimates: &EstimateCache,
-    action_error: &mut Option<String>, action_pending: &mut Option<String>,
+    action_error: &mut Option<String>, action_pending: &mut Option<(String, Instant)>,
     aoe_enabled: bool,
 ) {
                     let hunts=&view;
