@@ -376,6 +376,15 @@ impl BossManager {
         if let Ok(mut state) = shared.lock() {
             *state = self.view.clone();
             state.busy = self.trip.is_some();
+            if let Some(trip) = self.trip.as_ref().filter(|trip|
+                matches!(trip.stage, Stage::Starting | Stage::Running) &&
+                !trip.confirmed && !trip.ended && !trip.stop_pending) {
+                state.request_key = Some(trip.key.clone());
+                state.request_repeat = Some(trip.repeat);
+            } else {
+                state.request_key = None;
+                state.request_repeat = None;
+            }
             state.can_stop = self.view.auto || self.trip.as_ref().is_some_and(|trip|
                 !trip.recovering && (trip.stage == Stage::Starting ||
                     (trip.repeat && trip.stage == Stage::Running)));
