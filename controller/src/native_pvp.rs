@@ -139,6 +139,7 @@ impl PvpAutomation {
         self.next_join_at = None;
         self.last_vip_sync = None;
         self.vip_cancel_pending = false;
+        self.leave_sent = None;
         // Preserve ownership to cancel an in-flight queue if the user disabled
         // Auto PvP while disconnected and the server restored their entry.
     }
@@ -156,6 +157,7 @@ impl PvpAutomation {
             cooldown_secs: self.cooldown_until.map(|until|
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
             waiting_for_team: enabled && !vip && self.team_ready == Some(false),
+            paused: enabled && vip && self.vip_rejected,
             warning: enabled.then(|| self.warning.clone()).flatten(),
         }
     }
@@ -203,11 +205,15 @@ impl PvpAutomation {
             return Some(PvpAction::Leave);
         }
         if vip {
+            if preference == Some(false) {
+                // The user must acknowledge a server refusal before retrying.
+                self.vip_rejected = false;
+            }
             // None means inherit the existing server VIP preference. Avoid
             // overriding the user's in-game setting merely by connecting.
             if let Some(wanted) = preference {
                 if wanted { self.vip_cancel_pending = false; }
-                if vip_auto != Some(wanted) &&
+                if !(wanted && self.vip_rejected) && vip_auto != Some(wanted) &&
                     self.last_vip_sync.is_none_or(|(old, sent)|
                         old != wanted || now.saturating_duration_since(sent) >= VIP_SYNC_RETRY) {
                     if !wanted && vip_auto == Some(true) {
@@ -283,6 +289,11 @@ impl PvpAutomation {
             self.owned_queue = false;
             self.join_sent = None;
             self.queue_known = false;
+        }
+        if action == PvpAction::Leave {
+            self.leave_sent = None;
+            self.queue_known = false;
+            self.next_info_at = None;
         }
         self.warning = Some("Could not send PvP matchmaking request".into());
     }
