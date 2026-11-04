@@ -239,6 +239,12 @@ pub fn validate_bootstrap(bootstrap: &Value) -> Result<(), String> {
     Credentials::parse(bootstrap).map(|_| ())
 }
 
+/// Browser authentication is necessary only when PokéIdle explicitly rejects
+/// the saved authorization. Transport and welcome failures do not prove expiry.
+pub fn authentication_rejected(error: &str) -> bool {
+    error.starts_with("AUTH_REQUIRED:")
+}
+
 type GameSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
 
 // Connection-state transitions notify the controller without a polling loop
@@ -1459,7 +1465,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 // Only an explicit authentication rejection proves the saved
                 // login is invalid. Missing welcomes, disconnects and network
                 // failures can happen while the same credentials remain valid.
-                let needs_login = error.starts_with("AUTH_REQUIRED:");
+                let needs_login = authentication_rejected(&error);
                 update(&snapshot, |s| {
                     s.phase = if needs_login { "NeedsLogin" } else { "Reconnecting" }.into();
                     s.error = Some(error);
@@ -1493,6 +1499,20 @@ mod tests {
         notify_phase_change(&wake);
         assert_eq!(calls.load(Ordering::Relaxed),1);
     }
+    #[test]
+    fn only_explicit_auth_rejection_requires_browser_refresh() {
+        assert!(authentication_rejected(
+            "AUTH_REQUIRED: PokéIdle refused native game authentication"));
+        for error in [
+            "Could not connect to PokéIdle. Check your internet connection.",
+            "Secure connection to PokéIdle failed: timed out",
+            "PokéIdle closed the connection during sign-in",
+            "PokéIdle did not confirm the connection",
+        ] {
+            assert!(!authentication_rejected(error), "{error}");
+        }
+    }
+
     #[test]
     fn rejects_non_game_and_unencrypted_endpoints() {
         assert!(websocket_authority("ws://pokeidle.io/ws").is_err());
