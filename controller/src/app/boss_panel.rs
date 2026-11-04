@@ -52,7 +52,7 @@ const TYPE_ORDER: [&str; 18] = [
     "DRAGON", "DARK", "STEEL", "FAIRY",
 ];
 
-fn ensure_boss_combat_reference(app: &mut ControllerApp) {
+pub(super) fn ensure_boss_combat_reference(app: &mut ControllerApp) {
     if app.hunt_reference.is_none() && app.hunt_reference_error.is_none() &&
         !app.hunt_reference_busy {
         app.hunt_reference_busy = true;
@@ -298,7 +298,7 @@ fn draw_boss_details(
                 } else if !view.state_known {
                     tr("Waiting for authoritative server boss state.").to_owned()
                 } else if view.busy && !view.auto && view.arena.is_none() {
-                    tr("Switching to boss; waiting for the same travel opening as Hunt Atlas.").to_owned()
+                    tr("Returning to the Pokémon Center before boss entry.").to_owned()
                 } else if view.busy || view.auto || view.arena.is_some() {
                     tr("Finish the current boss run before starting another.").to_owned()
                 } else if level.is_none() {
@@ -714,7 +714,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .color(TEXT),
             );
             ui.label(
-                RichText::new(tr("Boss entry waits for the same safe switch opening used by Hunt Atlas, then changes directly from the current hunt. Server repetition heals and spends entry tokens; Moth restores your original hunt when the run ends."))
+                RichText::new(tr("Boss entry uses Hunt Atlas navigation to return to the Pokémon Center first, then starts the selected boss. If travel stays blocked for one minute, the pending request authorizes one Give Up. Moth restores your original hunt when the run ends."))
                     .size(10.0)
                     .color(MUTED),
             );
