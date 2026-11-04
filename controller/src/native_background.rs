@@ -1132,10 +1132,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     while let Ok(result) = metadata_rx.try_recv() {
                         match result {
                             Ok(catalog) => {
-                                crate::logging::info(&format!(
-                                    "Native restock: public metadata available for {} item IDs",
-                                    catalog.items.len()
-                                ));
                                 restock.merge_item_metadata(&catalog);
                                 item_metadata = Some(catalog);
                             }
@@ -1215,13 +1211,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     // the same potion/revive inventory as hunts, while the server's
                     // Auto-Potion/Auto-Revive settings stay synchronized above.
                     if let Some(command) = restock.next(Instant::now()) {
-                        // Commands contain only category, product ID and
-                        // quantity. Never log authentication or personal data.
-                        if let GameCommand::ShopBuy { kind, id, qty } = &command {
-                            crate::logging::info(&format!(
-                                "Native restock: requesting {qty}x {kind} #{id}"
-                            ));
-                        }
                         if socket.send(Message::Text(command.wire().to_string().into())).is_err() {
                             restock.write_failed(Instant::now());
                             break;
@@ -1336,7 +1325,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                             if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
                                 let received_at = Instant::now();
                                 gameplay.ingest_value(&frame, received_at);
-                                let confirmed_before = restock.status.confirmed;
                                 restock.ingest_value(&frame, received_at);
                                 market.ingest_value(&frame, received_at, &market_cfg);
                                 // Submit a qualified freshly discovered bargain immediately.
@@ -1401,12 +1389,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                             s.pokemon_sale_error=None;
                                         });
                                     }
-                                }
-                                if restock.status.confirmed > confirmed_before {
-                                    crate::logging::info(&format!(
-                                        "Native restock: confirmed and reconciled {}",
-                                        restock.status.last_order.as_deref().unwrap_or("purchase")
-                                    ));
                                 }
                                 let roster_changed=observe_value(&snapshot, &frame);
                                 sync_twitch_miner_targets(&twitch_miner,&frame);
