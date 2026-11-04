@@ -184,10 +184,14 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 if let Some(snapshot) = current {
                     ui.add_space(12.0);
                     ui.horizontal_wrapped(|ui| {
-                        runtime_chip(ui, tr("CPU"),
-                            &cpu_label(snapshot.current.and_then(|s| s.cpu_percent)), ACCENT);
-                        runtime_chip(ui, tr("RAM"),
+                        runtime_chip(ui, tr("CPU (system)"),
+                            &cpu_label(snapshot.current.and_then(|s| s.cpu_system_percent)), ACCENT);
+                        runtime_chip(ui, tr("CPU (1 core)"),
+                            &cpu_label(snapshot.current.and_then(|s| s.cpu_percent)), MUTED);
+                        runtime_chip(ui, tr("Working set"),
                             &memory_label(snapshot.current.and_then(|s| s.resident_bytes)), GOOD);
+                        runtime_chip(ui, tr("Private commit"),
+                            &memory_label(snapshot.current.and_then(|s| s.private_bytes)), MUTED);
                         runtime_chip(ui, tr("Captured points"),
                             &snapshot.history.len().to_string(), MUTED);
                         runtime_chip(ui, tr("Thread snapshots"),
@@ -196,9 +200,9 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.add_space(8.0);
                     let history: Vec<_> = snapshot.history.iter().copied().collect();
                     ui.columns(2, |cols| {
-                        history_chart(&mut cols[0], tr("Recorded CPU history"),
-                            &history, |s| s.cpu_percent, ACCENT, "%");
-                        history_chart(&mut cols[1], tr("Recorded RAM history"),
+                        history_chart(&mut cols[0], tr("Recorded CPU history (system)"),
+                            &history, |s| s.cpu_system_percent, ACCENT, "%");
+                        history_chart(&mut cols[1], tr("Recorded working-set history"),
                             &history, |s| s.resident_bytes.map(|b| b as f64 / 1_048_576.0),
                             GOOD, "MiB");
                     });
@@ -206,18 +210,21 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     // Summarize spikes over the whole retained recording,
                     // rather than only showing whichever thread is busy now.
                     let mut cpu_peaks: Vec<_> = snapshot.history.iter()
-                        .filter_map(|point| Some((point.at?, point.cpu_percent?)))
+                        .filter_map(|point| Some((
+                            point.at?, point.cpu_system_percent?, point.cpu_percent?
+                        )))
                         .collect();
                     cpu_peaks.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));
-                    if let Some((_, peak)) = cpu_peaks.first() {
+                    if let Some((_, peak_system, peak_core)) = cpu_peaks.first() {
                         ui.label(RichText::new(format!(
-                            "{}: {peak:.1}%", tr("Highest recorded CPU")
+                            "{}: {peak_system:.1}% {} · {peak_core:.1}% {}",
+                            tr("Highest recorded CPU"), tr("system"), tr("one core")
                         )).size(11.0).strong().color(TEXT));
                         ui.label(RichText::new(tr(
-                            "Highest CPU intervals (nearest sampled thread, if available)"
+                            "Highest CPU intervals (system scale plus nearest sampled thread; thread CPU is one-core scale)"
                         )).size(10.0).color(MUTED));
                         let now = std::time::Instant::now();
-                        for (at, cpu) in cpu_peaks.iter().take(6) {
+                        for (at, system_cpu, core_cpu) in cpu_peaks.iter().take(6) {
                             let closest = snapshot.thread_history.iter()
                                 .filter_map(|sample| {
                                     let gap = if sample.at >= *at {
@@ -234,8 +241,9 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 "{} (#{}) · {:.1}%", thread.name, thread.id, thread.cpu_percent
                             )).unwrap_or_else(|| tr("No nearby thread sample").to_owned());
                             ui.label(RichText::new(format!(
-                                "-{:.0}s · {cpu:.1}% · {thread}",
-                                now.saturating_duration_since(*at).as_secs_f64()
+                                "-{:.0}s · {system_cpu:.1}% {} · {core_cpu:.1}% {} · {thread}",
+                                now.saturating_duration_since(*at).as_secs_f64(),
+                                tr("system"), tr("one core")
                             )).size(10.0).color(MUTED));
                         }
                     }
@@ -313,15 +321,61 @@ pub(super) fn draw_diagnostics_panel(
             ui.label(RichText::new(tr("Performance diagnostics"))
                 .size(17.0).strong().color(TEXT));
             ui.label(RichText::new(tr(
-                "Live dashboard measurements stop when this page loses focus. Explicit developer recordings continue across pages and tray until you stop them."
+                "Live sampling starts only when you enable it here and turns off when you leave this page. Explicit developer recordings continue across pages and tray until you stop them."
             )).size(11.0).color(MUTED));
+            ui.add_space(8.0);
+            let recording_running = app.recording.as_ref()
+                .is_some_and(crate::diagnostics_recording::RecordingSession::is_running);
+            ui.horizontal_wrapped(|ui| {
+                let live_label = if !app.diagnostics_enabled {
+                    tr("Off")
+                } else if active {
+                    tr("On")
+                } else {
+                    tr("Waiting for focus")
+                };
+                runtime_chip(ui, tr("Live sampling"), live_label,
+                    if active { GOOD } else if app.diagnostics_enabled { WARN } else { MUTED });
+                runtime_chip(ui, tr("Developer recording"),
+                    tr(if recording_running { "On" } else { "Off" }),
+                    if recording_running { GOOD } else { MUTED });
+                if app.diagnostics_enabled {
+                    if ui.button(tr("Turn live diagnostics off")).clicked() {
+                        app.diagnostics_enabled = false;
+                        app.diagnostics = None;
+                        ui.ctx().request_repaint();
+                    }
+                } else if ui.button(tr("Enable live diagnostics")).clicked() {
+                    app.diagnostics_enabled = true;
+                    ui.ctx().request_repaint();
+                }
+                if (app.diagnostics_enabled || recording_running)
+                    && ui.small_button(tr("Turn all diagnostics off")).clicked()
+                {
+                    app.diagnostics_enabled = false;
+                    app.diagnostics = None;
+                    if let Some(recording) = app.recording.as_mut() {
+                        if recording.is_running() { recording.stop(); }
+                    }
+                    ui.ctx().request_repaint();
+                }
+            });
+            ui.label(RichText::new(tr(
+                "When live diagnostics is off there is no live OS sampling. A developer recording is separate and is always shown above while it is active."
+            )).size(10.0).color(DIM));
             ui.add_space(10.0);
             draw_recording_section(app, ui);
             ui.add_space(12.0);
 
+            if !app.diagnostics_enabled {
+                ui.label(RichText::new(tr(
+                    "Live diagnostics are off. Enable them above to begin foreground sampling."
+                )).size(11.0).color(MUTED));
+                return;
+            }
             if !active {
                 ui.label(RichText::new(tr(
-                    "Diagnostics inactive: focus the window to start a new sample."
+                    "Live diagnostics are enabled but inactive until this window is focused."
                 )).size(11.0).color(WARN));
                 return;
             }
@@ -445,30 +499,34 @@ pub(super) fn draw_diagnostics_panel(
                     ui.label(RichText::new(tr("Controller process"))
                         .size(13.0).strong().color(TEXT));
                     ui.add_space(7.0);
-                    let cpu = sample.and_then(|s| s.cpu_percent);
+                    let cpu_system = sample.and_then(|s| s.cpu_system_percent);
+                    let cpu_core = sample.and_then(|s| s.cpu_percent);
                     let rss = sample.and_then(|s| s.resident_bytes);
                     let peak = sample.and_then(|s| s.peak_bytes);
+                    let private = sample.and_then(|s| s.private_bytes);
                     let threads = sample.and_then(|s| s.threads);
                     ui.horizontal_wrapped(|ui| {
-                        runtime_chip(ui, tr("CPU"), &cpu_label(cpu), ACCENT);
-                        runtime_chip(ui, tr("RAM"), &memory_label(rss), GOOD);
-                        runtime_chip(ui, tr("Peak RAM"), &memory_label(peak), MUTED);
-                        runtime_chip(ui, tr("RAM since opening"),
+                        runtime_chip(ui, tr("CPU (system)"), &cpu_label(cpu_system), ACCENT);
+                        runtime_chip(ui, tr("CPU (1 core)"), &cpu_label(cpu_core), MUTED);
+                        runtime_chip(ui, tr("Working set"), &memory_label(rss), GOOD);
+                        runtime_chip(ui, tr("Private commit"), &memory_label(private), MUTED);
+                        runtime_chip(ui, tr("Peak working set"), &memory_label(peak), MUTED);
+                        runtime_chip(ui, tr("Working set since opening"),
                             &memory_change_label(rss, memory_baseline), MUTED);
                         runtime_chip(ui, tr("Threads"),
                             &threads.map(|n| n.to_string()).unwrap_or_else(|| "—".into()), MUTED);
                     });
                     ui.add_space(6.0);
                     ui.label(RichText::new(tr(
-                        "CPU is measured as a percentage of one logical core (multi-core usage can exceed 100%). RAM is resident physical memory. Firefox is a separate process."
+                        "CPU (system) normalizes process CPU across logical processors and is the closest inexpensive comparison to Task Manager. Windows Task Manager can still differ under CPU boost because it uses Processor Utility. Working set includes shared resident pages; Private commit is committed private memory, not private working set. Firefox is a separate process."
                     )).size(10.0).color(DIM));
                 });
 
             ui.add_space(12.0);
             ui.columns(2, |columns| {
-                history_chart(&mut columns[0], tr("CPU history"), &history,
-                    |s| s.cpu_percent, ACCENT, "%");
-                history_chart(&mut columns[1], tr("RAM history"), &history,
+                history_chart(&mut columns[0], tr("CPU history (system)"), &history,
+                    |s| s.cpu_system_percent, ACCENT, "%");
+                history_chart(&mut columns[1], tr("Working-set history"), &history,
                     |s| s.resident_bytes.map(|bytes| bytes as f64 / 1_048_576.0),
                     GOOD, "MiB");
             });
