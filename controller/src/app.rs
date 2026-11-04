@@ -1350,15 +1350,9 @@ impl eframe::App for ControllerApp {
             // This frees the short history and CPU baseline immediately.
             self.diagnostics = None;
         }
-        let diagnostics_running = diagnostics_active &&
-            self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused);
-        let frame_start = diagnostics_running.then(Instant::now);
-        ui.ctx().request_repaint_after(if diagnostics_running {
-            SAMPLE_INTERVAL
-        } else {
-            ui_repaint_interval(background, auth_in_progress, native_detail,
-                multi_account_overview)
-        });
+        let frame_start = (diagnostics_active &&
+            self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused))
+            .then(Instant::now);
 
         egui::Panel::top("header")
             .frame(egui::Frame::new().fill(BG).inner_margin(Margin::symmetric(20, 13)))
@@ -1490,6 +1484,16 @@ impl eframe::App for ControllerApp {
         if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
             sampler.record_frame(start.elapsed());
         }
+        // Decide *after* UI controls have been processed: clicking Pause must
+        // not arm a new diagnostics-specific repaint timer.
+        let diagnostics_running = diagnostics_active &&
+            self.diagnostics.as_ref().is_some_and(|sampler| !sampler.paused);
+        ui.ctx().request_repaint_after(if diagnostics_running {
+            SAMPLE_INTERVAL
+        } else {
+            ui_repaint_interval(background, auth_in_progress, native_detail,
+                multi_account_overview)
+        });
     }
 }
 
