@@ -58,6 +58,14 @@ impl SingleInstance {
     }
 }
 
+/// Startup failures must be visible on console-less Windows builds. Never
+/// silently fall through into a second set of game and browser workers.
+pub fn report_acquire_error(error: &str) {
+    eprintln!("Moth Controller could not enforce single-instance mode: {error}");
+    #[cfg(windows)]
+    windows::show_error(error);
+}
+
 pub fn acquire() -> Result<Launch, String> {
     let signal = Arc::new(RestoreSignal::default());
     #[cfg(windows)]
@@ -120,6 +128,21 @@ mod windows {
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(window: Handle, message: *const u16, caption: *const u16,
+            options: u32) -> i32;
+    }
+
+    pub fn show_error(error: &str) {
+        let message = wide(&format!("Moth Controller could not open:\n{error}"));
+        let caption = wide("Moth Controller");
+        unsafe {
+            // MB_OK | MB_ICONERROR
+            MessageBoxW(std::ptr::null_mut(), message.as_ptr(), caption.as_ptr(), 0x10);
+        }
     }
 
     pub struct Guard {
