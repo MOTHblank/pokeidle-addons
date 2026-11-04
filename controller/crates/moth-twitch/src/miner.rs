@@ -784,7 +784,7 @@ fn poll_channels(
     for login in &live {
         if stop.load(Ordering::Acquire) {return false;}
         let Some(channel)=cache.get_mut(login) else {continue};
-        let Some(id)=channel.channel_id.as_deref() else {continue};
+        let Some(id)=channel.channel_id.clone() else {continue};
         if metadata_checks<4 && channel.stream_checked.is_none_or(|at|
             at.elapsed() >= Duration::from_secs(120)) {
             metadata_checks+=1;
@@ -818,7 +818,7 @@ fn poll_channels(
                 at.elapsed() >= Duration::from_secs(120)) {
             streak_checks+=1;
             channel.streak_checked=Some(Instant::now());
-            match gql.streak(id) {
+            match gql.streak(&id) {
                 Ok(milestone) => {
                     channel.streak_length=milestone.length;
                     let detected=match (
