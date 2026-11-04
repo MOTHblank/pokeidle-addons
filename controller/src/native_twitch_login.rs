@@ -391,10 +391,16 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool) -> Result<St
         // Read the first-party session during the active login. Some
         // browsers clear transient cookies when the window is closed.
         if let Ok(Some(token)) = read_twitch_cookie(&config.profile_dir) {
-            native_auth::save_twitch_token(profile, &token)?;
-            // The OS vault now owns the login. Close only the temporary
-            // Firefox process started by this button, not another account.
-            let _ = firefox::stop_child(&mut browser, None);
+            // Always release the temporary browser we own, even if protected
+            // credential persistence fails afterward.
+            let saved=native_auth::save_twitch_token(profile,&token);
+            let closed=firefox::stop_child(&mut browser,None);
+            if let Err(error)=saved {return Err(error);}
+            if let Err(error)=closed {
+                return Err(format!(
+                    "Twitch login was imported, but its temporary Firefox window could not close: {error}"
+                ));
+            }
             return Ok(token);
         }
         match browser.try_wait() {
