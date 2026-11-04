@@ -999,7 +999,7 @@ mod tests {
         let mut nav = HuntNavigator::default();
         manager.ingest(&json!({"t":"estado","estado":{"boss":{
             "auto":true,"autoKey":"bronze","arena":{"key":"bronze"}}}}));
-        let commands = manager.leave(&mut nav);
+        let commands = manager.leave(&mut nav, &hunt(), Instant::now());
         assert!(matches!(commands.first(),
             Some(GameCommand::BossAuto { active:false, .. })));
         assert!(matches!(commands.last(),Some(GameCommand::BossExit)));
