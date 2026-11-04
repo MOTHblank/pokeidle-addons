@@ -516,19 +516,6 @@ impl ControllerApp {
         let account_name = self.account_name(profile);
         self.refresh_processes();
 
-        // Twitch login is optional. Never stop a working PokéIdle native
-        // connection merely to open the shared Firefox profile for Twitch.
-        // Ask the user to stop the account explicitly first.
-        if matches!(action, ProfileAction::TwitchMiner)
-            && (self.runtimes[index].game.native.is_some()
-                || self.runtimes[index].session.cached_native_busy)
-        {
-            self.set_status(format!(
-                "{account_name}: Twitch sign-in requires this account to be stopped first. PokéIdle was left running."
-            ), true);
-            return;
-        }
-
         // A native handoff still owns the profile until its cleanup finishes.
         // stop_one intentionally cancels it asynchronously, so do not launch
         // another Firefox against the same locked profile during that window.
@@ -567,17 +554,11 @@ impl ControllerApp {
                 config.url.as_str(),
                 " opened Firefox without remote debugging for Google sign-in. After signing in, close that window and launch this account normally from the dashboard.",
             ),
-            ProfileAction::TwitchMiner => (
-                "Twitch",
-                "https://www.twitch.tv/",
-                " opened Firefox without remote debugging for optional Twitch miner sign-in. After signing in, close that window and launch this account normally to start the miner.",
-            ),
             ProfileAction::Folder => return,
         };
 
         let launched = match action {
             ProfileAction::GoogleSignIn => firefox::launch_unmonitored(&config, url),
-            ProfileAction::TwitchMiner => firefox::launch_twitch_login(&config),
             ProfileAction::Folder => return,
         };
 
@@ -590,11 +571,7 @@ impl ControllerApp {
                 self.runtimes[index].game.browser_only = true;
                 self.runtimes[index].game.headless = false;
                 // Google/PokéIdle sign-in may change the game credentials.
-                // Twitch sign-in cannot invalidate an otherwise valid cached
-                // PokéIdle login: keep the next Start on the fast native path.
-                if matches!(action, ProfileAction::GoogleSignIn) {
-                    self.runtimes[index].session.require_browser_login = true;
-                }
+                self.runtimes[index].session.require_browser_login = true;
                 logging::info(&format!(
                     "{} Firefox spawned for {} sign-in without remote debugging (PID {})",
                     account_name, service, pid
@@ -613,7 +590,7 @@ impl ControllerApp {
 
     pub(super) fn profile_action(&mut self, profile: GameProfile, action: ProfileAction) {
         let result = match action {
-            ProfileAction::GoogleSignIn | ProfileAction::TwitchMiner => {
+            ProfileAction::GoogleSignIn => {
                 self.open_unmonitored_sign_in(profile, action);
                 return;
             }
