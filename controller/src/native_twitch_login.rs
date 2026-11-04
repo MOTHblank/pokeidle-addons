@@ -250,11 +250,21 @@ pub fn clear_browser_session(profile: GameProfile) -> Result<(), String> {
 /// the interactive login watcher below.
 pub fn import_existing(profile: GameProfile) -> Result<Option<String>, String> {
     let config = twitch_config(profile)?;
-    let Some(token)=read_twitch_cookie(&config.profile_dir)? else {
-        return Ok(None);
-    };
-    native_auth::save_twitch_token(profile, &token)?;
-    Ok(Some(token))
+    let mut last_error=None;
+    for attempt in 0..3 {
+        match read_twitch_cookie(&config.profile_dir) {
+            Ok(None)=>return Ok(None),
+            Ok(Some(token))=>{
+                native_auth::save_twitch_token(profile,&token)?;
+                return Ok(Some(token));
+            }
+            Err(error)=>{
+                last_error=Some(error);
+                if attempt<2 {thread::sleep(Duration::from_millis(150));}
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(||"Twitch Firefox cookie lookup failed".into()))
 }
 
 #[derive(Clone, Debug)]
