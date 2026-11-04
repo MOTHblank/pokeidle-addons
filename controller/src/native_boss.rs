@@ -1121,7 +1121,7 @@ mod tests {
         assert!(navigator.next_action(&view, now).is_none());
     }
     #[test]
-    fn no_server_ack_does_not_leave_trip_stuck_forever() {
+    fn unconfirmed_boss_start_retries_like_hunt_atlas() {
         let mut manager = manager();
         let mut navigator = HuntNavigator::default();
         let now = Instant::now();
@@ -1131,11 +1131,16 @@ mod tests {
         assert!(matches!(manager.next_action(&view, &mut navigator, now),
             Some(GameCommand::BossAuto {active:true,..})));
         assert!(manager.next_action(&view, &mut navigator,
-            now + Duration::from_secs(19)).is_none());
+            now + Duration::from_millis(100)).is_none(),
+            "the shared navigator must respect the Hunt Atlas retry cadence");
+        assert!(matches!(manager.next_action(&view, &mut navigator,
+            now + Duration::from_millis(350)),
+            Some(GameCommand::BossAuto {active:true,..})));
+        assert!(matches!(manager.next_action(&view, &mut navigator,
+            now + Duration::from_secs(20)),
+            Some(GameCommand::BossAuto {active:true,..})),
+            "an unconfirmed boss destination keeps retrying just like a hunt change");
         assert!(manager.active());
-        manager.next_action(&view, &mut navigator, now + Duration::from_secs(20));
-        assert!(!manager.active(), "start from center finishes safely without any ack");
-        assert!(manager.view.warning.as_deref().unwrap_or("").contains("not confirmed"));
     }
     #[test]
     fn cancel_before_boss_dispatch_does_not_leave_a_trip_running() {
