@@ -402,6 +402,9 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64
         }
         if !current() {return Err("Twitch login cancelled".into());}
         clear_twitch_cookie(&config.profile_dir)?;
+        let cleared=crate::native_auth::clear_twitch_token_checked(
+            profile,||credential_revision_is_current(profile,revision))?;
+        if !cleared {return Err("Twitch login cancelled".into());}
     } else {
         // A prior Firefox visit to Twitch may already have a session. Avoid
         // opening another login window when it can be reused directly.
@@ -464,6 +467,16 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64
 #[cfg(test)]
 mod tests {
     use super::{cookie_looks_like_twitch_token, decode_twitch_auth_cookie};
+
+    #[test]
+    fn newer_credential_revision_supersedes_older_work() {
+        let profile=crate::config::GameProfile::Game4;
+        let before=super::credential_revision(profile);
+        let next=super::advance_credential_revision(profile);
+        assert!(next>before);
+        assert!(!super::credential_revision_is_current(profile,before));
+        assert!(super::credential_revision_is_current(profile,next));
+    }
 
     #[test]
     fn accepts_twitch_auth_token_format_only() {
