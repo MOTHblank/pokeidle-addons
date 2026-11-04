@@ -79,8 +79,9 @@ pub struct StreamerState {
     pub last_watch_signal: Option<Instant>,
     /// Last time the HLS media playlist and listed segments were successfully touched.
     pub last_media_activity: Option<Instant>,
-    /// Confirmed only when RewardList's achievement timestamp belongs to
-    /// the current live broadcast. None = not yet verified.
+    /// Confirmed by Twitch point-gain events (WATCH_STREAK / WATCH fallback)
+    /// or by a RewardList milestone belonging to the current broadcast.
+    /// None = not yet verified.
     pub streak_confirmed: Option<bool>,
     pub streak_length: Option<u32>,
     pub streak_checked: Option<Instant>,
