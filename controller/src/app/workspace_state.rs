@@ -1,7 +1,7 @@
 //! UI-only workspace selection and presentation preferences.
 //! No native sessions, worker channels, background jobs or timers live here.
 //! Keep defaults equivalent to the previous ControllerApp initialization.
-use super::{AccountsSection, AutomationSection, HuntRanking, HuntSubtab, PanelTab};
+use super::{AccountsSection, AutomationSection, HuntRanking, HuntSubtab, PanelTab, UiOptions};
 
 #[derive(Default)]
 pub(super) struct BrowserTabEditor {
@@ -32,6 +32,8 @@ impl Default for HuntUiFilters {
 
 pub(super) struct WorkspaceState {
     pub(super) panel_tab: PanelTab,
+    /// An unsuccessful Options write retains the exact requested values for retry.
+    pub(super) options_failed_save: Option<(UiOptions, String)>,
     pub(super) accounts_section: AccountsSection,
     pub(super) kick_selected_account: usize,
     pub(super) dashboard_show_history: bool,
@@ -61,6 +63,7 @@ impl Default for WorkspaceState {
     fn default() -> Self {
         Self {
             panel_tab: PanelTab::Overview,
+            options_failed_save: None,
             accounts_section: AccountsSection::Profiles,
             kick_selected_account: 0,
             dashboard_show_history: false,
@@ -113,6 +116,20 @@ impl WorkspaceState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_options_save_survives_account_switch_for_exact_retry() {
+        let mut workspace = WorkspaceState::default();
+        assert!(workspace.options_failed_save.is_none());
+        let mut requested = UiOptions::default();
+        requested.reduce_updates_unfocused = false;
+        requested.atlas_aoe_enabled[2] = true;
+        workspace.options_failed_save = Some((requested, "disk unavailable".into()));
+        workspace.select_account(3);
+        let (retry, error) = workspace.options_failed_save.as_ref().unwrap();
+        assert_eq!(*retry, requested);
+        assert_eq!(error, "disk unavailable");
+    }
 
     #[test]
     fn switching_accounts_discards_leave_confirmations_but_keeps_history_views() {
