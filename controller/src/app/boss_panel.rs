@@ -9,7 +9,7 @@ use super::{
 use super::hunt_panel::components::{
     atlas_type_multiplier, atlas_type_name, atlas_types_for_active, draw_atlas_matchup,
 };
-use crate::native_boss::{BossEntry, BossView};
+use crate::native_boss::{strongest_eligible_team_level, BossEntry, BossView};
 use crate::native_hunts::HuntView;
 use std::collections::BTreeMap;
 
@@ -81,7 +81,7 @@ fn draw_boss_selector(
 ) -> bool {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
-    let fight_level = entry.fight_level(hunt.trainer_level)
+    let fight_level = entry.fight_level(hunt)
         .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
     let card = egui::Frame::new()
         .fill(if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
@@ -171,6 +171,7 @@ fn draw_boss_details(
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
     let level = hunt.trainer_level;
+    let team_level = strongest_eligible_team_level(hunt);
     let has_level = level.is_some_and(|current| current >= entry.min_level);
     let has_tokens = tokens >= entry.tokens_per_entry;
 
@@ -204,7 +205,10 @@ fn draw_boss_details(
                 let current = level.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
                 resource_chip(ui, &format!("{}: {}", tr("Trainer level"), current));
                 resource_chip(ui, &format!("{}: {}", tr("Required level"), entry.min_level));
-                if let Some(fight_level) = entry.fight_level(level) {
+                let strongest = team_level.filter(|value| *value > 0)
+                    .map(|value| value.to_string()).unwrap_or_else(|| "—".into());
+                resource_chip(ui, &format!("{}: {}", tr("Strongest eligible team Pokémon"), strongest));
+                if let Some(fight_level) = entry.fight_level(hunt) {
                     resource_chip(ui, &format!("{}: {}", tr("Boss combat level"), fight_level));
                 }
                 resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
@@ -236,7 +240,7 @@ fn draw_boss_details(
 
             ui.add_space(7.0);
             ui.label(RichText::new(tr(
-                "Bosses now fight at your trainer level (minimum: their unlock level). Its combat stats scale with that level, so old fixed-level farming expectations no longer apply. Entry tokens and drop tiers still follow the original boss."
+                "Bosses fight at the level of your strongest eligible team Pokémon, never below their own unlock level. Trainer level still controls which bosses are unlocked; entry tokens and drop tiers are unchanged."
             )).size(10.0).color(MUTED));
             ui.label(
                 RichText::new(if restock_enabled {
