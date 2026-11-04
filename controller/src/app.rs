@@ -1187,8 +1187,13 @@ impl ControllerApp {
                 std::array::from_fn(|_| KickStreamPreferences::default())
             });
 
+        let mut workspace = WorkspaceState::default();
+        workspace.twitch_favorites = Config::load_twitch_favorites().unwrap_or_else(|error| {
+            logging::warn(&error);
+            std::array::from_fn(|_| Vec::new())
+        });
         let mut app = Self {
-            workspace: WorkspaceState::default(),
+            workspace,
             runtimes: std::array::from_fn(|index| AccountRuntime::new(
                 index,
                 std::mem::take(&mut kick_channels[index]),
@@ -1283,6 +1288,7 @@ impl ControllerApp {
             session.enable_background_forecasts(
                 Arc::clone(reference),self.ui_options.atlas_aoe_enabled[index]);
         }
+        session.set_twitch_favorites(self.workspace.twitch_favorites[index].clone());
         self.runtimes[index].game.native = Some(session);
         // Native roster publications bypass the UI redraw cadence entirely.
         // Attach them even if Kick was already running before game login.
