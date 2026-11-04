@@ -202,10 +202,10 @@ impl ControllerApp {
                 ) {
                     match game.refresh_twitch_token(token) {
                         Ok(())=>self.set_status(format!(
-                            "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
+                            "{account_name}: Twitch login imported; connection refreshed without restarting PokéIdle"
                         ),false),
                         Err(error)=>self.set_status(format!(
-                            "{account_name}: Twitch login saved but miner refresh failed: {error}"
+                            "{account_name}: Twitch login saved but connection refresh failed: {error}"
                         ),true),
                     }
                 } else if token.is_some() {

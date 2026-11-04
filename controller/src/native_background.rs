@@ -490,7 +490,7 @@ impl NativeSession {
                         Ok(true)=>{},
                         Ok(false)=>{},
                         Err(error)=>crate::logging::warn(&format!(
-                            "{} optional Twitch miner could not start: {error}",
+                            "{} Twitch could not start: {error}",
                             profile.name())),
                     }
                 }
