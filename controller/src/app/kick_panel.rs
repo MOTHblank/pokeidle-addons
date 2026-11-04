@@ -137,12 +137,25 @@ impl ControllerApp {
                 self.runtimes[index].kick.kick_discovered_live=channels;
             }
             let Some(profile)=GameProfile::from_index(index) else {continue};
-            if !self.runtimes[index].kick.kick_saved_login && matches!(
+            let login_done = matches!(
                 crate::native_kick_login::status(profile),
-                crate::native_kick_login::LoginStatus::Done
-            ) {self.runtimes[index].kick.kick_saved_login=true;}
+                crate::native_kick_login::LoginStatus::Done);
+            if login_done && !self.runtimes[index].kick.kick_login_done_seen {
+                // A new Firefox sign-in has populated the keyring; ignore any
+                // lookup started before that sign-in and read the fresh token.
+                self.runtimes[index].kick.kick_login_done_seen = true;
+                self.runtimes[index].kick.kick_token_revision =
+                    self.runtimes[index].kick.kick_token_revision.wrapping_add(1);
+                self.runtimes[index].kick.kick_token_checked = false;
+            } else if !login_done {
+                self.runtimes[index].kick.kick_login_done_seen = false;
+            }
+            if !self.runtimes[index].kick.kick_token_checked &&
+                !self.runtimes[index].kick.kick_token_loading {
+                self.queue_kick_token_load(index);
+            }
             let monitor_missing=self.runtimes[index].kick.kick_monitor.is_none();
-            if self.runtimes[index].kick.kick_saved_login && monitor_missing {
+            if self.runtimes[index].kick.kick_token_cached.is_some() && monitor_missing {
                 self.start_kick_account(index);
             }
             // Native workers publish roster revisions directly to the parked
@@ -229,6 +242,29 @@ impl ControllerApp {
         }
         self.persist_kick_channels(index);
     }
+    /// Keyring I/O can wait for a locked Secret Service session. Never invoke
+    /// it from construction, a foreground UI frame, or the Kick auto-start.
+    fn queue_kick_token_load(&mut self, index: usize) {
+        let state = &mut self.runtimes[index].kick;
+        if state.kick_token_loading || state.kick_token_checked { return; }
+        state.kick_token_loading = true;
+        let revision = state.kick_token_revision;
+        let tx = self.kick_token_tx.clone();
+        let profile = self.runtimes[index].game.profile;
+        if let Err(error) = std::thread::Builder::new()
+            .name(format!("moth-kick-keyring-{}", profile.name()))
+            .spawn(move || {
+                let result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(||
+                        native_auth::load_kick_token(profile)))
+                    .unwrap_or_else(|_|Err("Kick credential lookup panicked".into()));
+                let _ = tx.send(super::KickTokenLoadedEvent { index, revision, result });
+            }) {
+            state.kick_token_loading = false;
+            state.kick_token_checked = true;
+            super::logging::warn(&format!("Could not start Kick keyring lookup: {error}"));
+        }
+    }
     fn start_kick_account(&mut self, index: usize) {
         if self.runtimes[index].kick.kick_monitor.is_some() { return; }
         let Some(profile) = GameProfile::from_index(index) else { return; };
@@ -240,17 +276,15 @@ impl ControllerApp {
         let entered = self.runtimes[index].kick.kick_api_token_input.trim().to_owned();
         let token = if !entered.is_empty() {
             entered.clone()
+        } else if let Some(saved) = self.runtimes[index].kick.kick_token_cached.as_ref() {
+            saved.clone()
         } else {
-            match native_auth::load_kick_token(profile) {
-                Ok(Some(saved)) => saved,
-                Ok(None) => {
-                    self.runtimes[index].kick.kick_saved_login = false;
-                    self.set_status(kick_label(pt_br(), "Enter a Kick account token",
-                        "Informe o token da sua conta Kick"), true);
-                    return;
-                },
-                Err(error) => { self.set_status(error, true); return; },
+            // The pending or missing vault lookup is handled by the separate
+            // keyring worker; never block a Kick button click on the OS vault.
+            if !self.runtimes[index].kick.kick_token_checked {
+                self.queue_kick_token_load(index);
             }
+            return;
         };
         let monitor = match KickSupervisor::start(token.clone(), &target.join(","),
             stored_channel_list(self,index),self.runtimes[index].kick.kick_discovered_live.clone(),
@@ -273,7 +307,13 @@ impl ControllerApp {
         let mut error = false;
         if !entered.is_empty() && self.runtimes[index].kick.kick_remember_login {
             match native_auth::save_kick_token(profile, &token) {
-                Ok(()) => self.runtimes[index].kick.kick_saved_login = true,
+                Ok(()) => {
+                    let state = &mut self.runtimes[index].kick;
+                    state.kick_saved_login = true;
+                    state.kick_token_cached = Some(token.clone());
+                    state.kick_token_revision = state.kick_token_revision.wrapping_add(1);
+                    state.kick_token_checked = true;
+                },
                 Err(reason) => {
                     error = true;
                     message = format!("{} · {}", message,
@@ -312,6 +352,11 @@ impl ControllerApp {
                 self.stop_kick_account(index);
                 self.runtimes[index].kick.kick_api_token_input.clear();
                 self.runtimes[index].kick.kick_saved_login = false;
+                self.runtimes[index].kick.kick_token_cached = None;
+                self.runtimes[index].kick.kick_token_checked = true;
+                self.runtimes[index].kick.kick_token_revision =
+                    self.runtimes[index].kick.kick_token_revision.wrapping_add(1);
+                self.runtimes[index].kick.kick_login_done_seen = false;
                 crate::native_kick_login::reset(profile);
                 self.set_status(kick_label(pt_br(), "Saved Kick login removed",
                     "Login Kick salvo removido"), false);
@@ -554,9 +599,6 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.workspace.kick_selected_account.min(3);
     let profile = GameProfile::from_index(index).expect("known Kick profile");
     let login_status = crate::native_kick_login::status(profile);
-    if matches!(login_status, crate::native_kick_login::LoginStatus::Done) {
-        app.runtimes[index].kick.kick_saved_login = true;
-    }
     let now=Instant::now();
     let monitor_identity=app.runtimes[index].kick.kick_monitor.as_ref().map(|m|m.identity());
     let native_stamp=app.runtimes[index].kick.kick_native_stamp;

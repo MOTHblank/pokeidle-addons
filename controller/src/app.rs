@@ -911,6 +911,12 @@ mod lifecycle_wake_tests {
     }
 }
 
+struct KickTokenLoadedEvent {
+    index: usize,
+    revision: u64,
+    result: Result<Option<String>, String>,
+}
+
 struct NativeHandoffEvent {
     index: usize,
     generation: u64,
@@ -1058,6 +1064,8 @@ pub struct ControllerApp {
     firefox_stopped_rx: Receiver<FirefoxStoppedEvent>,
     cached_native_tx: WakeSender<CachedNativeEvent>,
     cached_native_rx: Receiver<CachedNativeEvent>,
+    kick_token_tx: WakeSender<KickTokenLoadedEvent>,
+    kick_token_rx: Receiver<KickTokenLoadedEvent>,
     ui_options: UiOptions,
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
@@ -1104,6 +1112,7 @@ impl ControllerApp {
         let (hunt_reference_tx, hunt_reference_rx) = wake_channel(&cc.egui_ctx);
         let (capture_save_tx,capture_save_rx)=wake_channel(&cc.egui_ctx);
         let (inventory_catalog_tx,inventory_catalog_rx)=wake_channel(&cc.egui_ctx);
+        let (kick_token_tx,kick_token_rx)=wake_channel(&cc.egui_ctx);
 
         #[cfg(windows)]
         let tray_hidden = Arc::new(AtomicBool::new(false));
@@ -1144,6 +1153,8 @@ impl ControllerApp {
             firefox_stopped_rx,
             cached_native_tx,
             cached_native_rx,
+            kick_token_tx,
+            kick_token_rx,
             ui_options: Config::load_ui_options().unwrap_or_else(|error| {
                 logging::warn(&format!("controller options load failed: {error}"));
                 UiOptions::default()

@@ -154,6 +154,30 @@ impl ControllerApp {
     }
 
     pub(super) fn refresh_processes(&mut self) {
+        while let Ok(event) = self.kick_token_rx.try_recv() {
+            if event.index >= self.runtimes.len() { continue; }
+            let state = &mut self.runtimes[event.index].kick;
+            if state.kick_token_revision != event.revision { continue; }
+            state.kick_token_loading = false;
+            state.kick_token_checked = true;
+            match event.result {
+                Ok(Some(token)) => {
+                    state.kick_token_cached = Some(token);
+                    state.kick_saved_login = true;
+                }
+                Ok(None) => {
+                    state.kick_token_cached = None;
+                    state.kick_saved_login = false;
+                }
+                Err(error) => {
+                    state.kick_token_cached = None;
+                    state.kick_saved_login = false;
+                    logging::warn(&format!(
+                        "Saved Kick login lookup unavailable: {error}"
+                    ));
+                }
+            }
+        }
         while let Ok(event) = self.firefox_stopped_rx.try_recv() {
             self.finish_firefox_stop(
                 event.index, event.generation, event.ownership, event.result

@@ -71,6 +71,12 @@ pub(super) struct KickAccountState {
     pub(super) kick_discovery_available: bool,
     pub(super) kick_channel_new: String,
     pub(super) kick_saved_login: bool,
+    /// Loaded in a background worker; never saved to an unprotected file.
+    pub(super) kick_token_cached: Option<String>,
+    pub(super) kick_token_loading: bool,
+    pub(super) kick_token_checked: bool,
+    pub(super) kick_token_revision: u64,
+    pub(super) kick_login_done_seen: bool,
     pub(super) kick_remember_login: bool,
 }
 
@@ -143,8 +149,12 @@ impl AccountRuntime {
                 kick_display_cache: kick_panel::KickDisplayCache::default(),
                 kick_discovery_available: false,
                 kick_channel_new: String::new(),
-                kick_saved_login: crate::native_auth::load_kick_token(profile)
-                    .ok().flatten().is_some(),
+                kick_saved_login: false,
+                kick_token_cached: None,
+                kick_token_loading: false,
+                kick_token_checked: false,
+                kick_token_revision: 0,
+                kick_login_done_seen: false,
                 kick_remember_login: true,
             },
             telemetry: TelemetryState {
