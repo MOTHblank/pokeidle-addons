@@ -526,7 +526,7 @@ fn poll_channels(
     let mut watch_slots=config.max_watched_channels.min(2);
     for login in candidates {
         if watch_slots==0 {break;}
-        let channel=&mut cache[login];
+        let Some(channel)=cache.get_mut(login) else {continue};
         if channel.last_watch_attempt.is_some_and(|at|
             at.elapsed()<Duration::from_secs(55)) {continue;}
         let Some(channel_id)=channel.channel_id.as_deref() else {continue};
