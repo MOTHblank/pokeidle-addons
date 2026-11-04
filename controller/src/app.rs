@@ -1005,7 +1005,6 @@ enum AccountsSection { Profiles, Twitch, Kick }
 #[derive(Clone, Copy)]
 enum ProfileAction {
     GoogleSignIn,
-    TwitchMiner,
     Folder,
 }
 
