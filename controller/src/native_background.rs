@@ -67,6 +67,18 @@ pub fn finish_game_workers_after_window() {
 }
 
 #[derive(Clone, Debug)]
+/// Minimal queue metrics for the opt-in Diagnostics page. Never clone the
+/// larger market, roster, or gameplay snapshots just to read queue lengths.
+#[derive(Clone, Debug)]
+pub struct NativeDiagnosticsSnapshot {
+    pub phase: String,
+    pub capture_queued: usize,
+    pub automation_queued: usize,
+    pub automation_pending: bool,
+    pub market_pending: bool,
+    pub restock_pending: bool,
+}
+
 pub struct NativeSnapshot {
     pub phase: String,
     pub last_received: Option<Instant>,
@@ -439,6 +451,20 @@ impl NativeSession {
     }
     pub fn snapshot(&self) -> NativeSnapshot {
         self.snapshot.lock().map(|status| status.clone()).unwrap_or_default()
+    }
+
+    /// On-demand and nonblocking: if the game worker owns its snapshot,
+    /// Diagnostics skips this tick rather than stalling automation or the UI.
+    pub fn diagnostics_snapshot(&self) -> Option<NativeDiagnosticsSnapshot> {
+        let state = self.snapshot.try_lock().ok()?;
+        Some(NativeDiagnosticsSnapshot {
+            phase: state.phase.clone(),
+            capture_queued: state.native_capture_queue,
+            automation_queued: state.native_automation.queued,
+            automation_pending: state.native_automation.pending_field.is_some(),
+            market_pending: state.native_market.pending.is_some(),
+            restock_pending: state.native_restock.pending,
+        })
     }
     /// Allocation-free roster change token. A new session timestamp prevents
     /// old revision numbers from hiding a freshly authenticated game session.
