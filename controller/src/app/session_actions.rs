@@ -513,7 +513,13 @@ impl ControllerApp {
             ProfileAction::Folder => return,
         };
 
-        match firefox::launch_unmonitored(&config, url) {
+        let launched = match action {
+            ProfileAction::GoogleSignIn => firefox::launch_unmonitored(&config, url),
+            ProfileAction::TwitchMiner => firefox::launch_twitch_login(&config),
+            ProfileAction::Folder => return,
+        };
+
+        match launched {
             Ok(child) => {
                 let pid = child.id();
                 self.runtimes[index].game.child = Some(child);
