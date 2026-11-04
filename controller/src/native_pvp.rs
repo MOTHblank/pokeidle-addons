@@ -292,6 +292,11 @@ impl PvpAutomation {
                     return Some(PvpAction::SetVipAuto(wanted));
                 }
             }
+            if self.vip_cancel_pending && vip_auto != Some(false) {
+                // Wait for the game's automation snapshot to confirm that VIP
+                // auto-queue is off before issuing any other PvP request.
+                return None;
+            }
             if self.vip_cancel_pending && vip_auto == Some(false) {
                 if !self.queue_known {
                     if self.next_info_at.is_none_or(|due| now >= due) {
