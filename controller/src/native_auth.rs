@@ -257,10 +257,6 @@ pub fn save_twitch_token_checked(
     Ok(true)
 }
 
-pub fn save_twitch_token(profile: GameProfile, token: &str) -> Result<(), String> {
-    save_twitch_token_checked(profile,token,||true).map(|_|())
-}
-
 pub fn clear_twitch_token(profile: GameProfile) -> Result<(), String> {
     let _guard=twitch_write(profile).lock()
         .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
