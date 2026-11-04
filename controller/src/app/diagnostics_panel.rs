@@ -2,7 +2,9 @@
 //! Runtime chips and Kick HLS counters; no worker is spawned to render it.
 use super::{egui, runtime_chip, tr, ControllerApp, RichText, ACCENT, BORDER,
     DIM, GOOD, MUTED, PANEL, PANEL_ALT, TEXT, WARN};
-use crate::diagnostics::{DiagnosticsSampler, PerformanceSample};
+use crate::diagnostics::{
+    DiagnosticsSampler, HlsAccountSample, HlsNetworkSample, PerformanceSample,
+};
 
 fn mib(bytes: u64) -> String {
     format!("{:.1} MiB", bytes as f64 / 1_048_576.0)
@@ -25,7 +27,7 @@ fn history_chart(
     unit: &str,
 ) {
     egui::Frame::new().fill(PANEL).stroke(egui::Stroke::new(1.0, BORDER))
-        .corner_radius(8).inner_margin(12).show(ui, |ui| {
+        .corner_radius(8.0).inner_margin(12).show(ui, |ui| {
             ui.label(RichText::new(title).size(11.0).strong().color(TEXT));
             let values: Vec<f64> = samples.iter().filter_map(metric).collect();
             let peak = values.iter().copied().fold(0.0_f64, f64::max);
@@ -79,7 +81,7 @@ pub(super) fn draw_diagnostics_panel(
             }
 
             // Allocate the sampler only on the first active foreground frame.
-            let (sample, history, last_frame_ms, slowest_frame_ms, recorded_frames, paused) = {
+            let (sample, history, last_frame_ms, slowest_frame_ms, recorded_frames, paused, refresh_network) = {
                 let sampler = app.diagnostics.get_or_insert_with(DiagnosticsSampler::default);
                 ui.horizontal(|ui| {
                     let mut paused = sampler.paused;
@@ -90,11 +92,36 @@ pub(super) fn draw_diagnostics_panel(
                         *sampler = DiagnosticsSampler::default();
                     }
                 });
-                sampler.sample_if_due();
+                let refresh_network = sampler.sample_if_due();
                 (sampler.current, sampler.history.iter().copied().collect::<Vec<_>>(),
                     sampler.last_frame_ms, sampler.slowest_frame_ms,
-                    sampler.recorded_frames, sampler.paused)
+                    sampler.recorded_frames, sampler.paused, refresh_network)
             };
+
+            // Snapshot Kick accounting on exactly the same two-second tick.
+            // Pausing the panel also freezes this cache; there is no per-frame
+            // polling of every Kick channel.
+            if refresh_network {
+                let mut network = HlsNetworkSample::default();
+                for (index, runtime) in app.runtimes.iter().enumerate() {
+                    if let Some(kick) = runtime.kick.kick_monitor.as_ref() {
+                        let current = kick.snapshot();
+                        network.bytes = network.bytes.saturating_add(current.bandwidth.bytes);
+                        network.last_minute = network.last_minute
+                            .saturating_add(current.bandwidth.last_minute);
+                        network.rows.push(HlsAccountSample {
+                            account: app.accounts[index].name.clone(),
+                            bytes: current.bandwidth.bytes,
+                            last_minute: current.bandwidth.last_minute,
+                            channels: current.channels.len(),
+                        });
+                    }
+                }
+                app.diagnostics.as_mut().expect("active diagnostics").network = Some(network);
+            }
+            let network = app.diagnostics.as_ref()
+                .and_then(|sampler| sampler.network.as_ref())
+                .cloned().unwrap_or_default();
 
             if paused {
                 ui.label(RichText::new(tr("Sampling paused")).size(11.0).color(WARN));
@@ -104,7 +131,7 @@ pub(super) fn draw_diagnostics_panel(
             }
             ui.add_space(12.0);
 
-            egui::Frame::new().fill(PANEL).corner_radius(10)
+            egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
                 .inner_margin(14).show(ui, |ui| {
                     ui.label(RichText::new(tr("Controller process"))
@@ -136,7 +163,7 @@ pub(super) fn draw_diagnostics_panel(
                     GOOD, "MiB");
             });
             ui.add_space(12.0);
-            egui::Frame::new().fill(PANEL).corner_radius(10)
+            egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
                 .inner_margin(14).show(ui, |ui| {
                     ui.label(RichText::new(tr("UI work")).size(13.0).strong().color(TEXT));
@@ -157,45 +184,31 @@ pub(super) fn draw_diagnostics_panel(
                 });
 
             ui.add_space(12.0);
-            egui::Frame::new().fill(PANEL).corner_radius(10)
+            egui::Frame::new().fill(PANEL).corner_radius(10.0)
                 .stroke(egui::Stroke::new(1.0, BORDER))
                 .inner_margin(14).show(ui, |ui| {
                     ui.label(RichText::new(tr("Kick HLS network"))
                         .size(13.0).strong().color(TEXT));
-                    let mut total_bytes = 0_u64;
-                    let mut recent_bytes = 0_u64;
-                    let mut rows = Vec::new();
-                    // Reuse already-accounted bytes; do not start a network probe.
-                    for (index, runtime) in app.runtimes.iter().enumerate() {
-                        if let Some(kick) = runtime.kick.kick_monitor.as_ref() {
-                            let snapshot = kick.snapshot();
-                            total_bytes = total_bytes.saturating_add(snapshot.bandwidth.bytes);
-                            recent_bytes = recent_bytes.saturating_add(snapshot.bandwidth.last_minute);
-                            rows.push((app.accounts[index].name.clone(),
-                                snapshot.bandwidth.bytes, snapshot.bandwidth.last_minute,
-                                snapshot.channels.len()));
-                        }
-                    }
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
-                        runtime_chip(ui, tr("Session transferred"), &mib(total_bytes), ACCENT);
-                        runtime_chip(ui, tr("Last 60 seconds"), &mib(recent_bytes), GOOD);
+                        runtime_chip(ui, tr("Session transferred"), &mib(network.bytes), ACCENT);
+                        runtime_chip(ui, tr("Last 60 seconds"), &mib(network.last_minute), GOOD);
                         runtime_chip(ui, tr("Last-minute rate"),
-                            &format!("{:.1} KiB/s", recent_bytes as f64 / 60.0 / 1024.0), MUTED);
+                            &format!("{:.1} KiB/s", network.last_minute as f64 / 60.0 / 1024.0), MUTED);
                     });
                     ui.add_space(8.0);
-                    for (account, bytes, minute, channels) in &rows {
+                    for row in &network.rows {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(account).size(11.0).strong().color(TEXT));
+                            ui.label(RichText::new(&row.account).size(11.0).strong().color(TEXT));
                             ui.label(RichText::new(format!(
                                 "{} {} · {} {} · {} {}",
-                                mib(*bytes), tr("total"),
-                                mib(*minute), tr("last minute"),
-                                channels, tr("channels")
+                                mib(row.bytes), tr("total"),
+                                mib(row.last_minute), tr("last minute"),
+                                row.channels, tr("channels")
                             )).size(10.0).color(MUTED));
                         });
                     }
-                    if rows.is_empty() {
+                    if network.rows.is_empty() {
                         ui.label(RichText::new(tr("No active Kick sessions"))
                             .size(10.0).color(DIM));
                     }
