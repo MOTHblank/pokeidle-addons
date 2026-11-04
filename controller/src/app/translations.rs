@@ -89,6 +89,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Damaged boss loot history was preserved in a backup file. New victories use a fresh journal." =>
             "O histórico de loot danificado foi preservado em um backup. Novas vitórias usarão um arquivo novo.",
         "Boss trip cancelled before entry because the connection dropped" => "Viagem de boss cancelada antes da entrada devido à desconexão",
+        "Boss request cancelled before entry because the connection dropped" => "Solicitação de boss cancelada antes da entrada devido à desconexão",
         "Connection interrupted; verifying boss state before restoring saved hunt" => "Conexão interrompida; verificando o boss antes de restaurar a hunt salva",
         "Verifying boss state after reconnect" => "Verificando o boss após reconectar",
         "Another boss repetition is active; saved hunt return was cancelled" => "Outro boss está em repetição; retorno automático à hunt foi cancelado",
@@ -100,6 +101,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Original hunt already restored after reconnect" => "Hunt original já restaurada após reconectar",
         "Game location changed during reconnection; automatic return cancelled" => "Localização mudou durante a reconexão; retorno automático cancelado",
         "Boss tokens or requirements changed before entry; returning to saved hunt" => "Tokens ou requisitos do boss mudaram antes da entrada; retornando à hunt salva",
+        "Boss tokens or requirements changed before entry; request cancelled" => "Tokens ou requisitos do boss mudaram antes da entrada; solicitação cancelada",
         "Boss entry cancelled" => "Entrada do boss cancelada",
         "Boss start was not confirmed by server; returning to saved hunt" => "Início do boss não confirmado pelo servidor; retornando à hunt salva",
         "Boss start unconfirmed" => "Início do boss não confirmado",
@@ -117,8 +119,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Server-native Boss Farm" => "Farm de Boss (servidor)",
         "Start this account to manage server-native boss farming" =>
             "Inicie esta conta para gerenciar o farm de bosses no servidor",
-        "The game server repeats the chosen boss, heals and spends its entry tokens. Moth travels to the Pokémon Center and restores your original hunt when the run ends. It never uses Give Up automatically." =>
-            "O servidor repete o boss escolhido, cura a equipe e consome os tokens de entrada. O Moth vai ao Centro Pokémon e retorna à hunt original quando a sequência terminar. Nunca usa Desistir automaticamente.",
+        "Boss entry waits for the same safe switch opening used by Hunt Atlas, then changes directly from the current hunt. Server repetition heals and spends entry tokens; Moth restores your original hunt when the run ends." =>
+            "A entrada no boss aguarda a mesma abertura segura usada pelo Hunt Atlas e troca diretamente da hunt atual. A repetição do servidor cura a equipe e consome os tokens; o Moth restaura a hunt original quando a sequência termina.",
         "Waiting for the server's playable boss catalog." =>
             "Aguardando o catálogo de bosses jogáveis do servidor.",
         "No playable boss arenas are currently advertised by the server." =>
@@ -161,6 +163,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
             "Exibindo as últimas 60 vitórias (até 500 são preservadas por conta).",
         "Boss command queued" => "Comando de boss enviado à fila",
         "Traveling to Pokémon Center" => "Indo ao Centro Pokémon",
+        "Waiting for a safe boss switch opening" => "Aguardando abertura segura para trocar para o boss",
+        "Boss request cancelled before entry" => "Solicitação de boss cancelada antes da entrada",
         "Server farming requested" => "Farm de boss solicitado ao servidor",
         "Boss battle requested" => "Batalha de boss solicitada",
         "Returning to saved hunt" => "Retornando à hunt salva",
