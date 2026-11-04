@@ -48,17 +48,27 @@ fn open_channel(login: &str) -> Result<(), String> {
         .map_err(|error| format!("Could not open Twitch channel: {error}"))
 }
 
-fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState, br: bool) -> bool {
+fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
+               favorite: bool, br: bool) -> (bool,bool) {
     let recent = channel.last_watch_signal
         .is_some_and(|at| at.elapsed() < Duration::from_secs(125));
     let checked = channel.last_update
         .is_some_and(|at| at.elapsed() < Duration::from_secs(180));
     let mut open = false;
+    let mut toggle_favorite=false;
     egui::Frame::new().fill(PANEL_ALT).stroke(Stroke::new(1.0, BORDER))
         .corner_radius(7.0).inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
+                toggle_favorite=ui.small_button(if favorite {"★"}else{"☆"})
+                    .on_hover_text(label(br,"Toggle favorite streamer",
+                        "Marcar ou desmarcar streamer favorito")).clicked();
                 ui.label(RichText::new(&channel.login).size(12.0).strong().color(TEXT));
+                ui.label(RichText::new(if channel.live {
+                    label(br,"● LIVE","● AO VIVO")
+                } else {
+                    label(br,"○ Offline","○ Offline")
+                }).size(10.0).color(if channel.live {GOOD}else{MUTED}));
                 ui.label(RichText::new(if recent {
                     label(br, "● Watch signal sent", "● Sinal enviado")
                 } else if checked {
@@ -66,6 +76,14 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState, br: bool
                 } else {
                     label(br, "○ Awaiting data", "○ Aguardando dados")
                 }).size(10.0).color(if recent { GOOD } else if checked { WARN } else { MUTED }));
+                if channel.live {
+                    let (streak_text,streak_color)=match channel.streak_confirmed {
+                        Some(true)=>(label(br,"✓ Streak collected","✓ Sequência coletada"),GOOD),
+                        Some(false)=>(label(br,"◌ Streak pending","◌ Sequência pendente"),WARN),
+                        None=>(label(br,"◌ Streak unverified","◌ Sequência não verificada"),MUTED),
+                    };
+                    ui.label(RichText::new(streak_text).size(10.0).color(streak_color));
+                }
                 let points = channel.points
                     .map(|p| p.to_string()).unwrap_or_else(|| "—".into());
                 ui.label(RichText::new(format!("{}: {points}",
@@ -79,6 +97,14 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState, br: bool
                 ui.label(RichText::new(error).size(10.0).color(WARN));
             }
             ui.collapsing(label(br, "Technical details", "Detalhes técnicos"), |ui| {
+                if let Some(length)=channel.streak_length {
+                    ui.label(format!("{}: {length}",label(br,"Watch streak","Sequência")));
+                }
+                if let Some(at)=channel.streak_checked {
+                    ui.label(format!("{}: {} s",
+                        label(br,"Streak verified","Sequência verificada há"),
+                        at.elapsed().as_secs()));
+                }
                 if let Some(at) = channel.last_update {
                     ui.label(format!("{}: {} s", label(br, "Last check", "Última consulta"),
                         at.elapsed().as_secs()));
@@ -97,7 +123,31 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState, br: bool
                     .size(10.0).color(MUTED));
             });
         });
-    open
+    (open,toggle_favorite)
+}
+
+impl ControllerApp {
+    fn toggle_twitch_favorite(&mut self, index:usize, login:&str) {
+        let Some(login)=moth_twitch::normalize_login(login) else {return};
+        let mut next=self.workspace.twitch_favorites.clone();
+        if let Some(position)=next[index].iter().position(|item|item==&login) {
+            next[index].remove(position);
+        } else if next[index].len()<128 {
+            next[index].push(login);
+        } else {
+            self.set_status(label(pt_br(),"Too many favorite channels",
+                "Muitos canais favoritos"),true);
+            return;
+        }
+        if let Err(error)=Config::save_twitch_favorites(&next) {
+            self.set_status(error,true);
+            return;
+        }
+        self.workspace.twitch_favorites=next;
+        if let Some(game)=self.runtimes[index].game.native.as_ref() {
+            game.set_twitch_favorites(self.workspace.twitch_favorites[index].clone());
+        }
+    }
 }
 
 pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
@@ -219,8 +269,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(RichText::new(label(br, "Channels", "Canais"))
             .size(15.0).strong().color(TEXT));
         ui.label(RichText::new(label(br,
-            "Eligible official channels are selected from PokéIdle's live roster. At most two channels receive watch telemetry each cycle; all selected channels can have their balances checked.",
-            "Os canais oficiais elegíveis vêm da lista ao vivo do PokéIdle. No máximo dois canais recebem sinais de visualização por ciclo; o saldo de todos os selecionados pode ser consultado."))
+            "All official Twitch streamers are listed, including offline channels. Favorites are preferred after pending streaks. Two watch slots are fixed; all streamer balances are checked when authenticated.",
+            "Todos os streamers oficiais são listados, inclusive offline. Favoritos têm prioridade após sequências pendentes. Duas vagas de visualização fixas; todos os saldos são consultados com autenticação."))
             .size(10.0).color(MUTED));
         ui.add_space(6.0);
         if let Some(snapshot) = snapshot.as_ref() {
@@ -233,13 +283,32 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         "Aguardando informações dos canais.")
                 }).size(11.0).color(MUTED));
             }
-            for channel in &snapshot.streamers {
-                if channel_row(ui, channel, br) {
+            let favorites=app.workspace.twitch_favorites[index].clone();
+            let mut rows=snapshot.streamers.iter().collect::<Vec<_>>();
+            rows.sort_by(|a,b| {
+                b.live.cmp(&a.live)
+                    .then_with(||favorites.contains(&b.login).cmp(&favorites.contains(&a.login)))
+                    .then_with(||a.login.cmp(&b.login))
+            });
+            let mut offline=0usize;
+            for channel in rows {
+                if !channel.live {offline+=1;}
+                let (open, favorite_clicked)=channel_row(ui, channel,
+                    favorites.contains(&channel.login),br);
+                if favorite_clicked {
+                    app.toggle_twitch_favorite(index,&channel.login);
+                }
+                if open {
                     if let Err(error) = open_channel(&channel.login) {
                         app.set_status(error, true);
                     }
                 }
                 ui.add_space(4.0);
+            }
+            if offline>0 {
+                ui.label(RichText::new(format!("{}: {offline}",
+                    label(br,"Offline streamers","Streamers offline")))
+                    .size(10.0).color(MUTED));
             }
         } else {
             ui.label(RichText::new(label(br,
