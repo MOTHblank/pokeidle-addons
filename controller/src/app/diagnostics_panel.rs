@@ -294,7 +294,7 @@ pub(super) fn draw_diagnostics_panel(
                         runtime_chip(ui, tr("Process probe"),
                             &process_probe_ms.map(|ms| format!("{ms:.2} ms"))
                                 .unwrap_or_else(|| "—".into()), MUTED);
-                        runtime_chip(ui, tr("Kick probe"),
+                        runtime_chip(ui, tr("Diagnostics refresh"),
                             &network_probe_ms.map(|ms| format!("{ms:.2} ms"))
                                 .unwrap_or_else(|| "—".into()), MUTED);
                     });
