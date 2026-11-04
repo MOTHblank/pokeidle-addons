@@ -16,11 +16,11 @@ fn metric(ui: &mut egui::Ui, name: &str, value: String, color: Color32) {
 fn phase_label(phase: moth_twitch::MinerPhase, br: bool) -> (&'static str, Color32) {
     use moth_twitch::MinerPhase::*;
     match phase {
-        Online => (label(br, "● Miner connected", "● Minerador conectado"), GOOD),
+        Online => (label(br, "● Connected", "● Conectado"), GOOD),
         Connecting => (label(br, "◌ Connecting", "◌ Conectando"), WARN),
         Reconnecting => (label(br, "◌ Reconnecting", "◌ Reconectando"), WARN),
         NeedsLogin => (label(br, "○ Sign-in required", "○ Login necessário"), WARN),
-        Failed => (label(br, "● Miner error", "● Erro no minerador"), BAD),
+        Failed => (label(br, "● Connection error", "● Erro de conexão"), BAD),
         Stopped => (label(br, "○ Stopped", "○ Parado"), MUTED),
     }
 }
@@ -53,11 +53,11 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 }).size(10.0).color(if channel.live {GOOD}else{MUTED}));
                 if channel.watching {
                     ui.label(RichText::new(label(br,
-                        "▶ MINING SLOT", "▶ VAGA MINERANDO"))
+                        "▶ WATCHING", "▶ ASSISTINDO"))
                         .size(10.0).strong().color(GOOD));
                 }
                 ui.label(RichText::new(if recent {
-                    label(br, "● Watch signal sent", "● Sinal enviado")
+                    label(br, "● Active", "● Ativo")
                 } else if checked {
                     label(br, "◌ Checking", "◌ Verificando")
                 } else {
@@ -81,11 +81,8 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                     label(br, "Balance", "Saldo")))
                     .size(11.0).color(if channel.points.is_some() { TEXT } else { MUTED }));
                 if channel.points_gained > 0 {
-                    ui.label(RichText::new(format!(
-                        "+{} {}",
-                        channel.points_gained,
-                        label(br, "from Moth watch", "pela visualização do Moth")
-                    )).size(11.0).color(GOOD));
+                    ui.label(RichText::new(format!("+{}", channel.points_gained))
+                        .size(11.0).color(GOOD));
                 }
                 open = ui.small_button("↗").on_hover_text(label(br,
                     "Open Twitch channel in this account's Firefox profile",
@@ -98,8 +95,8 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 if channel.live && channel.streak_priority_exhausted
                     && channel.streak_confirmed!=Some(true) {
                     ui.label(RichText::new(label(br,
-                        "Reference streak-priority window ended without Twitch confirmation. Farming continues normally and RewardList/PubSub can still confirm it later.",
-                        "A janela de prioridade de sequência terminou sem confirmação da Twitch. A mineração continua normalmente e RewardList/PubSub ainda podem confirmar depois."))
+                        "Streak-priority window ended without Twitch confirmation. Watching continues normally and Twitch can still confirm it later.",
+                        "A janela de prioridade da sequência terminou sem confirmação da Twitch. A visualização continua normalmente e a Twitch ainda pode confirmar depois."))
                         .size(10.0).color(WARN));
                 }
                 if let Some(length)=channel.streak_length {
@@ -181,11 +178,11 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let br = pt_br();
     egui::ScrollArea::vertical().id_salt("twitch_workspace")
         .auto_shrink([false, true]).show(ui, |ui| {
-        ui.label(RichText::new(label(br, "Twitch Miner", "Minerador Twitch"))
+        ui.label(RichText::new(label(br, "Twitch", "Twitch"))
             .font(FontId::proportional(22.0)).strong().color(TEXT));
         ui.label(RichText::new(label(br,
-            "Native channel points mining, separate from PokéIdle authentication.",
-            "Mineração nativa de pontos do canal, independente do login do PokéIdle."))
+            "Watch official streams and collect Twitch channel points.",
+            "Acompanhe as lives oficiais e acumule pontos do canal na Twitch."))
             .size(11.0).color(MUTED));
         ui.add_space(8.0);
 
@@ -221,7 +218,6 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             .unwrap_or((label(br, "○ Optional sign-in", "○ Login opcional"), MUTED));
         let desired = snapshot.as_ref().map_or(0, |state| state.desired);
         let available = snapshot.as_ref().map_or(0, |state| state.active);
-        let watch_signals = snapshot.as_ref().map_or(0, |state| state.watch_signals);
         let gained = snapshot.as_ref().map_or(0, |state| state.points_gained);
         let claimed = snapshot.as_ref().map_or(0, |state| state.bonuses_claimed);
         let (streaks_collected, streaks_live)=snapshot.as_ref().map(|state| {
@@ -254,13 +250,13 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.columns(4, |cols| {
                 metric(&mut cols[0], label(br, "Live now", "Ao vivo agora"),
                     live_names.len().to_string(), if live_names.is_empty() {MUTED}else{GOOD});
-                metric(&mut cols[1], label(br, "Mining slots", "Vagas minerando"),
+                metric(&mut cols[1], label(br, "Watching", "Assistindo"),
                     format!("{}/2",mining_names.len()),
                     if mining_names.len()==2 {GOOD}else if mining_names.is_empty(){MUTED}else{WARN});
                 metric(&mut cols[2], label(br, "Streaks confirmed", "Sequências confirmadas"),
                     format!("{streaks_collected}/{streaks_live}"),
                     if streaks_collected > 0 {GOOD}else{MUTED});
-                metric(&mut cols[3], label(br, "Moth watch points", "Pontos via Moth"),
+                metric(&mut cols[3], label(br, "Points earned", "Pontos ganhos"),
                     format!("+{gained}"), if gained > 0 { GOOD } else { TEXT });
             });
             ui.add_space(5.0);
@@ -274,7 +270,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }).size(10.0).color(TEXT));
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(label(br,"▶ MINING NOW","▶ MINERANDO AGORA"))
+                ui.label(RichText::new(label(br,"▶ WATCHING NOW","▶ ASSISTINDO AGORA"))
                     .size(10.0).strong().color(if mining_names.is_empty(){MUTED}else{GOOD}));
                 ui.label(RichText::new(if mining_names.is_empty() {
                     label(br,"No watch slot selected yet","Nenhuma vaga selecionada ainda").to_owned()
@@ -283,21 +279,16 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 }).size(10.0).strong().color(if mining_names.is_empty(){MUTED}else{TEXT}));
             });
             ui.label(RichText::new(format!(
-                "{}: {available}/{desired} · {}: {claimed} · {}: {watch_signals}",
+                "{}: {available}/{desired} · {}: {claimed}",
                 label(br, "Channels checked", "Canais consultados"),
-                label(br, "Bonus chests claimed", "Baús de bônus coletados"),
-                label(br, "Watch signals acknowledged", "Sinais de visualização aceitos")
+                label(br, "Bonus chests claimed", "Baús de bônus coletados")
             )).size(10.0).color(MUTED));
             if !live_names.is_empty() && mining_names.is_empty() {
                 ui.label(RichText::new(label(br,
-                    "Live streams are detected, but no mining slot is established yet. Stream metadata/watch setup is still pending or failed; check the channel rows for errors.",
-                    "Há lives detectadas, mas nenhuma vaga de mineração foi estabelecida. Os metadados/configuração de visualização ainda estão pendentes ou falharam; confira os erros nos canais."))
+                    "Live streams are available, but Moth is not watching one yet. Check the channels below if this persists.",
+                    "Há lives disponíveis, mas o Moth ainda não está assistindo a nenhuma. Confira os canais abaixo se isso persistir."))
                     .size(10.0).color(WARN));
             }
-            ui.label(RichText::new(label(br,
-                "Moth watch points count only Twitch WATCH/WATCH_STREAK events after Moth has sent watch activity for that channel. Balance increases, pending bonus claims, and activity from other Twitch clients are not counted as Moth-mined points.",
-                "Pontos via Moth contam apenas eventos WATCH/WATCH_STREAK da Twitch após o Moth enviar atividade de visualização para o canal. Aumentos de saldo, bônus pendentes e atividade de outros clientes Twitch não são contados como pontos minerados pelo Moth."))
-                .size(9.0).color(DIM));
         });
 
         if let Some(state) = snapshot.as_ref() {
@@ -313,31 +304,31 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(label(br, "Twitch connection", "Conexão Twitch"))
                 .size(13.0).strong().color(TEXT));
             ui.label(RichText::new(if connected {
-                label(br, "Authenticated. Moth uses the same Twitch client identity and device-code flow as the reference channel-points miner; Firefox import remains available as a fallback.",
-                    "Autenticado. O Moth usa a mesma identidade de cliente Twitch e fluxo por código de dispositivo do minerador de referência; a importação pelo Firefox continua disponível como alternativa.")
+                label(br, "Twitch connected. Moth can watch streams and collect channel points.",
+                    "Twitch conectada. O Moth pode assistir às lives e coletar pontos do canal.")
             } else if has_game {
-                label(br, "Recommended: sign in with Twitch's device code, matching the reference miner. Firefox import is available when you want to reuse an existing browser session.",
-                    "Recomendado: entre com o código de dispositivo da Twitch, igual ao minerador de referência. A importação pelo Firefox fica disponível para reutilizar uma sessão existente do navegador.")
+                label(br, "Sign in to Twitch to collect channel points. Use the code method first, or import your Firefox login.",
+                    "Entre na Twitch para coletar pontos do canal. Use primeiro o código ou importe seu login do Firefox.")
             } else {
-                label(br, "Sign in with Twitch's device code first. The token is stored in Moth's protected credential vault; start PokéIdle afterward to receive the official streamer roster.",
-                    "Primeiro entre com o código de dispositivo da Twitch. O token é salvo no cofre protegido do Moth; depois inicie o PokéIdle para receber a lista oficial de streamers.")
+                label(br, "Sign in to Twitch, then start PokéIdle to load the official channels.",
+                    "Entre na Twitch e depois inicie o PokéIdle para carregar os canais oficiais.")
             }).size(11.0).color(MUTED));
             if let Some(state)=snapshot.as_ref() {
                 if connected {
                     ui.label(RichText::new(if state.reference_client {
-                        label(br,"✓ Reference Twitch client session",
-                            "✓ Sessão com cliente Twitch de referência")
+                        label(br,"✓ Signed in with Twitch code",
+                            "✓ Login por código Twitch")
                     } else {
-                        label(br,"◌ Firefox compatibility session",
-                            "◌ Sessão de compatibilidade via Firefox")
-                    }).size(10.0).color(if state.reference_client {GOOD}else{WARN}));
+                        label(br,"✓ Signed in through Firefox",
+                            "✓ Login via Firefox")
+                    }).size(10.0).color(GOOD));
                 }
                 let pubsub_text=if state.pubsub_connected {
-                    label(br,"● Channel-points events connected",
-                        "● Eventos de pontos conectados")
+                    label(br,"● Point updates connected",
+                        "● Atualização de pontos conectada")
                 } else {
-                    label(br,"○ Channel-points events reconnecting; polling fallback remains active",
-                        "○ Eventos de pontos reconectando; consulta periódica continua ativa")
+                    label(br,"○ Reconnecting point updates",
+                        "○ Reconectando atualização de pontos")
                 };
                 ui.label(RichText::new(pubsub_text).size(10.0)
                     .color(if state.pubsub_connected {GOOD}else{WARN}));
@@ -371,8 +362,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         if has_login {"Refresh with Twitch code"} else {"Sign in with Twitch code"},
                         if has_login {"Renovar com código Twitch"} else {"Entrar com código Twitch"}
                     )).on_hover_text(label(br,
-                        "Recommended. Uses Twitch's Android TV device-code flow, matching the reference channel-points miner.",
-                        "Recomendado. Usa o fluxo de código de dispositivo Android TV da Twitch, igual ao minerador de referência."
+                        "Recommended. Sign in with a code at twitch.tv/activate.",
+                        "Recomendado. Entre com um código em twitch.tv/activate."
                     )).clicked() {
                         app.runtimes[index].twitch.login_done_seen=false;
                         if let Err(error)=crate::native_twitch_login::start_reference(profile) {
@@ -384,14 +375,14 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         if has_login {"Renovar via Firefox"} else {"Importar login do Firefox"}
                     )).on_hover_text(label(br,
                         if has_login {
-                            "Starts a fresh Firefox Twitch login and imports the resulting auth-token."
+                            "Opens Firefox so you can sign in to Twitch again for this account."
                         } else {
-                            "Reuses an existing Twitch auth-token from this account's Firefox profile, or opens Firefox if none is present."
+                            "Reuses the Twitch login already available in this account's Firefox profile, or opens Firefox if needed."
                         },
                         if has_login {
-                            "Inicia um novo login Twitch pelo Firefox e importa o auth-token resultante."
+                            "Abre o Firefox para você entrar novamente na Twitch nesta conta."
                         } else {
-                            "Reutiliza um auth-token Twitch existente no perfil Firefox desta conta, ou abre o Firefox se não houver um."
+                            "Reutiliza o login da Twitch já disponível no perfil Firefox desta conta ou abre o Firefox se necessário."
                         }
                     )).clicked() {
                         app.runtimes[index].twitch.login_done_seen=false;
@@ -405,11 +396,11 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         }
                     }
                     if ui.small_button(label(br,
-                        "Firefox BiDi fallback",
-                        "Alternativa Firefox BiDi"
+                        "Alternative Firefox import",
+                        "Importação alternativa do Firefox"
                     )).on_hover_text(label(br,
-                        "Reads the same Firefox auth cookie through the browser protocol when direct cookies.sqlite access is troublesome.",
-                        "Lê o mesmo cookie de autenticação pelo protocolo do navegador quando o acesso direto ao cookies.sqlite apresenta problemas."
+                        "Try this if the regular Firefox import fails.",
+                        "Tente esta opção se a importação normal do Firefox falhar."
                     )).clicked() {
                         app.runtimes[index].twitch.login_done_seen=false;
                         if let Err(error)=crate::native_twitch_login::start_alternative(profile) {
@@ -422,8 +413,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 });
             }
             ui.label(RichText::new(label(br,
-                "Device-code sign-in gives Moth the same Twitch Client-ID/token pairing used by the reference miner. Firefox methods are compatibility fallbacks.",
-                "O login por código fornece ao Moth o mesmo par Client-ID/token usado pelo minerador de referência. Os métodos Firefox são alternativas de compatibilidade."
+                "Use the code method first. If it fails, try one of the Firefox options.",
+                "Use primeiro o método por código. Se falhar, tente uma das opções do Firefox."
             )).size(10.0).color(MUTED));
                         if let crate::native_twitch_login::LoginStatus::Error(error)=&login_status {
                 ui.label(RichText::new(localize_status(error.clone())).size(10.0)
@@ -444,8 +435,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         ui.label(RichText::new(label(br, "Channels", "Canais"))
             .size(15.0).strong().color(TEXT));
         ui.label(RichText::new(label(br,
-            "All official Twitch streamers are listed, including offline channels. Favorites are preferred after pending streaks. Two watch slots are fixed; all streamer balances are checked when authenticated.",
-            "Todos os streamers oficiais são listados, inclusive offline. Favoritos têm prioridade após sequências pendentes. Duas vagas de visualização fixas; todos os saldos são consultados com autenticação."))
+            "All official Twitch streamers are listed, including offline channels. Favorites are preferred after pending streaks. Moth watches up to two streams at once.",
+            "Todos os streamers oficiais são listados, inclusive offline. Favoritos têm prioridade após sequências pendentes. O Moth assiste a até duas lives ao mesmo tempo."))
             .size(10.0).color(MUTED));
         ui.add_space(6.0);
         {
