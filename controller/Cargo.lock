@@ -1946,6 +1946,7 @@ dependencies = [
 name = "moth-controller"
 version = "0.1.14"
 dependencies = [
+ "moth-twitch",
  "eframe",
  "image",
  "reqwest",
@@ -1955,6 +1956,16 @@ dependencies = [
  "tray-icon",
  "tungstenite",
  "winresource",
+]
+
+[[package]]
+name = "moth-twitch"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
