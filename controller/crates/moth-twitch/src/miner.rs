@@ -238,10 +238,13 @@ fn effective_live_channels(
 fn clear_stream_state(channel:&mut ChannelCache) {
     channel.broadcast_id=None;
     channel.stream_started=None;
+    channel.stream_checked=None;
     channel.streak_confirmed=None;
     channel.streak_checked=None;
     channel.watch_attempts=0;
     channel.watch_reward_count=0;
+    channel.watch_failures=0;
+    channel.last_watch_attempt=None;
     channel.streak_priority_exhausted=false;
     channel.last_watch=None;
     channel.last_media_activity=None;
@@ -798,6 +801,8 @@ fn poll_channels(
                         channel.streak_checked=None;
                         channel.watch_attempts=0;
                         channel.watch_reward_count=0;
+                        channel.watch_failures=0;
+                        channel.last_watch_attempt=None;
                         channel.streak_priority_exhausted=false;
                         channel.last_watch=None;
                         channel.last_media_activity=None;
