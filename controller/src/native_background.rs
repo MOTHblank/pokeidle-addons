@@ -721,6 +721,13 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool
 }
 
 fn sync_twitch_miner_targets(control:&TwitchMinerControl,payload:&Value) {
+    if let Some(twitch)=payload.get("estado").and_then(|state|state.get("twitch")) {
+        let linked=twitch.get("vinculado").and_then(Value::as_bool)
+            .unwrap_or_else(||twitch.get("login").and_then(Value::as_str).is_some());
+        let login=linked.then(||twitch.get("login").and_then(Value::as_str))
+            .flatten().map(str::to_owned);
+        control.set_expected_login(login);
+    }
     if let Some(channels)=crate::native_twitch_miner::official_live_channels(payload) {
         control.set_channels(channels);
     }
@@ -1402,7 +1409,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                     ));
                                 }
                                 let roster_changed=observe_value(&snapshot, &frame);
-                sync_twitch_miner_targets(&twitch_miner,&frame);
+                                sync_twitch_miner_targets(&twitch_miner,&frame);
                                 publish_kick_roster(&kick_roster_publisher,&snapshot,roster_changed);
                             }
                         },
