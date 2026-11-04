@@ -49,7 +49,7 @@ fn main() {
         Ok(single_instance::Launch::Primary(instance)) => instance,
         Ok(single_instance::Launch::Existing) => return,
         Err(error) => {
-            eprintln!("Moth Controller could not enforce single-instance mode: {error}");
+            single_instance::report_acquire_error(&error);
             return;
         }
     };
