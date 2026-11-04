@@ -140,6 +140,8 @@ impl Default for MinerSnapshot {
 #[derive(Clone, Debug)]
 pub enum MinerEvent {
     Connected { login: String, reference_client: bool },
+    Stopped,
+    RosterUpdated { channels: usize },
     PubSubConnected,
     StreamOnline { channel: String, balance: Option<u64> },
     StreamOffline { channel: String },
