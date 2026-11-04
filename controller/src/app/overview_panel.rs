@@ -441,6 +441,12 @@ pub(super) fn draw_overview_card(
                 }
                 if fresh {
                     if let Some(status) = sample.native.as_ref().map(|s| &s.native_pvp) {
+                        // Rank is account information, so show it independently
+                        // from whether matchmaking automation is enabled.
+                        if let Some(rank) = pvp_rank_text(status) {
+                            ui.label(RichText::new(format!("PvP · {rank}"))
+                                .size(10.0).color(ACCENT));
+                        }
                         // Use the worker's effective state for operational details;
                         // the button above uses the saved preference for immediate toggles.
                         if status.enabled || status.cancelling {
@@ -466,7 +472,7 @@ pub(super) fn draw_overview_card(
                             } else if status.checking_queue {
                                 Some(if pt_br() { "Verificando fila" } else { "Checking queue" }.to_owned())
                             } else {
-                                pvp_rank_text(status)
+                                None
                             };
                             if let Some(info) = info {
                                 let response = ui.label(RichText::new(info)
