@@ -128,7 +128,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 });
                 egui::CollapsingHeader::new(tr("Edit rule & limits"))
                     .id_salt(("market-rule-editor",index,rule.id.as_str()))
-                    .default_open(false)
+                    .default_open(rule.buy_max==0 || (rule.kind=="item" && rule.item_id==0))
                     .show(ui,|ui|{
                         ui.horizontal_wrapped(|ui|{
                             egui::ComboBox::from_id_salt(("native-market-kind",index,i))
@@ -321,7 +321,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         ui.horizontal_wrapped(|ui|{
                             ui.label(RichText::new(format!(
                                 "#{} · {} · {} {} /{} · {}x · {}",
-                                row.id,tr(&row.kind),row.price,tr(&row.currency),
+                                row.id,if row.kind=="item" {
+                                    item_name(item_catalog.as_deref(),row.item_id)
+                                } else {tr(&row.kind).to_owned()},row.price,tr(&row.currency),
                                 tr("unit"),row.quantity,tr_dynamic(row.phase.clone())
                             )).size(10.0).color(MUTED));
                             if ui.add_enabled(cfg.snatch_targets.len()<40,
@@ -371,6 +373,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 match MarketRules::import_watch(&automation.market_import) {
                     Ok(imported)=>{
                         *cfg=imported;
+                        automation.market_item_searches.clear();
                         automation.market_notice=tr("Rules imported. Review and save them to use automatic buying.").into();
                     }
                     Err(error)=>automation.market_notice=format!("Import rejected: {error}"),
@@ -381,7 +384,11 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             if ui.button(tr("Save market rules")).clicked(){save=true;}
             if ui.small_button(tr("Revert unsaved changes")).clicked(){
                 match MarketRules::load(profile) {
-                    Ok(saved)=>{*cfg=saved;automation.market_notice=tr("Reloaded saved market rules.").into();}
+                    Ok(saved)=>{
+                        *cfg=saved;
+                        automation.market_item_searches.clear();
+                        automation.market_notice=tr("Reloaded saved market rules.").into();
+                    }
                     Err(error)=>automation.market_notice=error,
                 }
             }
