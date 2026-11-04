@@ -97,6 +97,13 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 ui.label(RichText::new(error).size(10.0).color(WARN));
             }
             ui.collapsing(label(br, "Technical details", "Detalhes técnicos"), |ui| {
+                if channel.live && channel.streak_confirmed!=Some(true)
+                    && channel.streak_watch_attempts>=20 {
+                    ui.label(RichText::new(label(br,
+                        "Streak not confirmed after watch window; still retrying in rotation.",
+                        "Sequência não confirmada após janela de visualização; tentativas continuam em rodízio."))
+                        .size(10.0).color(WARN));
+                }
                 if let Some(length)=channel.streak_length {
                     ui.label(format!("{}: {length}",label(br,"Watch streak","Sequência")));
                 }
