@@ -129,9 +129,12 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
         let index = app.workspace.twitch_selected_account.min(3);
         let profile = GameProfile::from_index(index).expect("valid Twitch account");
-        let game = app.runtimes[index].game.native.as_ref();
-        let snapshot = game.and_then(|session| session.twitch_miner_snapshot());
-        let game_state = game.map(|session| session.snapshot());
+        let (has_game, snapshot, game_state) = {
+            let game = app.runtimes[index].game.native.as_ref();
+            (game.is_some(),
+                game.and_then(|session| session.twitch_miner_snapshot()),
+                game.map(|session| session.snapshot()))
+        };
         let connected = snapshot.as_ref()
             .is_some_and(|state| state.phase == moth_twitch::MinerPhase::Online);
         let phase = snapshot.as_ref().map(|state| state.phase);
@@ -189,7 +192,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(if connected {
                 label(br, "Authenticated in this session. The miner runs without a Twitch browser tab.",
                     "Autenticado nesta sessão. O minerador funciona sem aba da Twitch.")
-            } else if game.is_some() {
+            } else if has_game {
                 label(br, "Twitch is optional. Sign in using this account's isolated Firefox profile, then restart the account to import the session.",
                     "A Twitch é opcional. Entre pelo perfil isolado do Firefox desta conta e reinicie a conta para importar a sessão.")
             } else {
