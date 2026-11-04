@@ -280,6 +280,28 @@ mod tests {
     }
 
     #[test]
+    fn resuming_clears_stale_cpu_and_network_samples() {
+        let mut sampler = DiagnosticsSampler {
+            paused: true,
+            current: Some(PerformanceSample::default()),
+            network: Some(HlsNetworkSample::default()),
+            last_read: Some(Instant::now()),
+            previous: Some((Instant::now(), ProcessCounters {
+                cpu_ns: 100, resident_bytes: None, peak_bytes: None, threads: None,
+            })),
+            ..DiagnosticsSampler::default()
+        };
+        sampler.history.push_back(PerformanceSample::default());
+        sampler.set_paused(false);
+        assert!(!sampler.paused);
+        assert!(sampler.current.is_none());
+        assert!(sampler.network.is_none());
+        assert!(sampler.previous.is_none());
+        assert!(sampler.last_read.is_none());
+        assert!(sampler.history.is_empty());
+    }
+
+    #[test]
     fn history_is_bounded() {
         let mut sampler = DiagnosticsSampler::default();
         for _ in 0..100 {
