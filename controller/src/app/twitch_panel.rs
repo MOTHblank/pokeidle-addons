@@ -385,11 +385,19 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         }
                     }
                     if ui.button(label(br,
-                        "Import Firefox login",
-                        "Importar login do Firefox"
+                        if has_login {"Refresh via Firefox"} else {"Import Firefox login"},
+                        if has_login {"Renovar via Firefox"} else {"Importar login do Firefox"}
                     )).on_hover_text(label(br,
-                        "Reuses the auth-token already stored in this account's Firefox profile.",
-                        "Reutiliza o auth-token já salvo no perfil Firefox desta conta."
+                        if has_login {
+                            "Starts a fresh Firefox Twitch login and imports the resulting auth-token."
+                        } else {
+                            "Reuses an existing Twitch auth-token from this account's Firefox profile, or opens Firefox if none is present."
+                        },
+                        if has_login {
+                            "Inicia um novo login Twitch pelo Firefox e importa o auth-token resultante."
+                        } else {
+                            "Reutiliza um auth-token Twitch existente no perfil Firefox desta conta, ou abre o Firefox se não houver um."
+                        }
                     )).clicked() {
                         app.runtimes[index].twitch.login_done_seen=false;
                         let result=if has_login {
