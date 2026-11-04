@@ -1,24 +1,13 @@
 name: Build e release do Moth Controller (Windows e Linux)
 
 on:
-  # Release da nova versão por alteração do Cargo.toml em master.
-  # Mudanças no lockfile e notas também reexecutam builds pendentes.
-  # O envio da tag correspondente pode iniciar a publicação; o token não
-  # dispara uma segunda execução quando a release cria a tag.
+  # Release automática somente quando Cargo.toml muda em master.
+  # Alterações comuns de código não executam testes/builds de release.
+  # Retries/publicações extraordinárias devem usar workflow_dispatch.
   push:
     branches: [master]
     paths:
       - 'controller/Cargo.toml'
-      - 'controller/Cargo.lock'
-      - 'controller/build.rs'
-      - 'controller/icon.rs'
-      - 'controller/src/**'
-      - 'controller/windows/**'
-      - 'controller/linux/**'
-      - 'LICENSE'
-      - '.github/release-notes/v*.md'
-      # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
-      - '.github/workflows/build-controller.yml'
     tags:
       - 'v*.*.*'
   # Execução manual gera artefatos; publicação é opcional e só no master.
@@ -55,7 +44,6 @@ jobs:
         env:
           REQUEST_PUBLISH: ${{ inputs.publish_release || false }}
           PREVIOUS_MASTER_SHA: ${{ github.event.before || '' }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(grep -m1 '^version = "' controller/Cargo.toml | cut -d '"' -f 2)"
@@ -83,13 +71,8 @@ jobs:
             if [[ "$version" != "$previous" ]]; then
               echo "Versão alterada: $previous -> $version. Publicação habilitada."
               publish=true
-            elif gh release view "$tag" >/dev/null 2>&1; then
-              echo "Release $tag já existe; apenas validando os binários."
             else
-              # Um ajuste ao workflow permite recuperar a publicação depois
-              # de uma execução que falhou, sem inventar uma nova versão.
-              echo "Release $tag ainda não publicada; nova tentativa habilitada."
-              publish=true
+              echo "Cargo.toml mudou sem alterar a versão; nenhuma release será executada."
             fi
           elif [[ "$REQUEST_PUBLISH" == true ]]; then
             if [[ "$GITHUB_REF" != refs/heads/master ]]; then
