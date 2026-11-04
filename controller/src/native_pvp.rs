@@ -21,7 +21,6 @@ pub struct PvpRankSummary {
 #[derive(Clone, Debug, Default)]
 pub struct PvpStatus {
     pub enabled: bool,
-    pub vip: bool,
     pub queued: bool,
     pub awaiting_reply: bool,
     pub cooldown_secs: u64,
@@ -178,6 +177,9 @@ impl PvpAutomation {
     pub fn on_user_toggle(&mut self) {
         self.vip_rejected = false;
         self.last_vip_sync = None;
+        // A user toggle changes eligibility immediately. Do not let a
+        // previous low-frequency status poll delay the next queue check.
+        self.next_info_at = None;
         self.warning = None;
     }
 
@@ -207,7 +209,7 @@ impl PvpAutomation {
         vip_auto: Option<bool>, level: Option<u32>, now: Instant) -> PvpStatus {
         let enabled = Self::enabled(preference, vip, vip_auto);
         PvpStatus {
-            enabled, vip, queued: self.queued,
+            enabled, queued: self.queued,
             awaiting_reply: self.join_sent.is_some(),
             cooldown_secs: self.cooldown_until.map(|until|
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
@@ -306,15 +308,25 @@ impl PvpAutomation {
                     return Some(PvpAction::Leave);
                 }
             }
-            // A VIP queue can also run with the PvP page closed. Query its
-            // status occasionally, but never submit a client-side Join.
-            if enabled && self.next_info_at.is_none_or(|due| now >= due) {
+            // A VIP queue can also run with the PvP page closed. Keep the
+            // read-only PvP snapshot fresh even while Auto PvP is disabled so
+            // the overview can always show the trainer's current rank.
+            if self.next_info_at.is_none_or(|due| now >= due) {
                 self.next_info_at = Some(now + INFO_INTERVAL);
                 return Some(PvpAction::Info);
             }
             return None;
         }
-        if !enabled { return None; }
+        if !enabled {
+            // Rank is useful account information, not an automation-only
+            // detail. A read-only info poll is safe while disabled and never
+            // joins or leaves matchmaking.
+            if self.next_info_at.is_none_or(|due| now >= due) {
+                self.next_info_at = Some(now + INFO_INTERVAL);
+                return Some(PvpAction::Info);
+            }
+            return None;
+        }
 
         if let Some(sent) = self.join_sent {
             if now.saturating_duration_since(sent) < JOIN_ACK_TIMEOUT { return None; }
@@ -393,6 +405,27 @@ mod tests {
     }
 
     #[test]
+    fn disabled_non_vip_refreshes_rank_without_joining_matchmaking() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        assert_eq!(p.next(Some(false), false, None, Some(25), t),
+            Some(PvpAction::Info));
+        p.on_frame(&json!({
+            "t":"pvp",
+            "rank":{"tierId":"ouro","divisaoNum":"III","pontos":615,"partidas":9},
+            "regras":{"posicionamento":5},
+            "fila":{"na":false}
+        }), t);
+        let status = p.status(Some(false), false, None, Some(25), t);
+        assert!(!status.enabled);
+        assert_eq!(status.rank.as_ref().map(|rank| rank.points), Some(615));
+        assert_eq!(p.next(Some(false), false, None, Some(25),
+            t + Duration::from_secs(1)), None);
+        assert_eq!(p.next(Some(false), false, None, Some(25),
+            t + INFO_INTERVAL), Some(PvpAction::Info));
+    }
+
+    #[test]
     fn non_vip_requests_info_then_joins_without_hunt_or_battle_commands() {
         let t = Instant::now();
         let mut p = PvpAutomation::default();
@@ -463,7 +496,7 @@ mod tests {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
         p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
-        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Info));
         p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":10},
             "fila":{"na":false}}),t);
         assert_eq!(p.next(Some(true),false,None,Some(40),t),Some(PvpAction::Join));
@@ -549,7 +582,7 @@ mod tests {
         let mut p = PvpAutomation::default();
         p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
         p.on_reconnect();
-        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Info));
         p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
         p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":1},
             "fila":{"na":false}}),t);
