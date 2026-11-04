@@ -517,9 +517,10 @@ fn login_reference_device(
                 .filter(|value|!value.is_empty())
                 .ok_or_else(||"Twitch did not return an access token".to_owned())?
                 .to_owned();
+            let credential=moth_twitch::encode_reference_credential(&access,&device_id)?;
             if !current(){return Err("Twitch login cancelled".into());}
-            save_current_token(profile,&access,revision)?;
-            return Ok(access);
+            save_current_token(profile,&credential,revision)?;
+            return Ok(credential);
         }
     }
     Err("Twitch device code expired before authorization".into())
