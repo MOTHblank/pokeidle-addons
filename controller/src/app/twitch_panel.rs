@@ -325,7 +325,12 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     // as a fresh generation immediately so Done is never
                     // mistaken for the previous login completion.
                     app.runtimes[index].twitch.login_done_seen=false;
-                    if let Err(error)=crate::native_twitch_login::start(profile) {
+                    let result=if snapshot.is_some() {
+                        crate::native_twitch_login::start_fresh(profile)
+                    } else {
+                        crate::native_twitch_login::start(profile)
+                    };
+                    if let Err(error)=result {
                         app.set_status(error,true);
                     }
                 }
