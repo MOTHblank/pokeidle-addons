@@ -500,7 +500,8 @@ impl NativeSession {
                 "{} could not start Twitch credential worker: {error}",profile.name()));
         }
 
-        let worker = thread::Builder::new().name("moth-native-game".to_owned())
+        let worker = thread::Builder::new()
+            .name(format!("moth-native-game-{}", profile.name()))
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
