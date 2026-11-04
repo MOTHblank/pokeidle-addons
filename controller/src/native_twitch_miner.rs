@@ -110,8 +110,8 @@ fn log_miner_event(account:&str,event:MinerEvent) {
         MinerEvent::WatchSlotStarted {channel,slot,active} => crate::logging::info(&format!(
             "{prefix} watch slot {slot}/2 selected: {channel} ({active}/2 active)"
         )),
-        MinerEvent::WatchActive {channel} => crate::logging::info(&format!(
-            "{prefix} watch active: {channel}; first minute-watched signal accepted"
+        MinerEvent::WatchSignalAccepted {channel} => crate::logging::info(&format!(
+            "{prefix} watch signal accepted: {channel}; first minute-watched acknowledgement"
         )),
         MinerEvent::WatchSlotStopped {channel,reason,active} => crate::logging::info(&format!(
             "{prefix} watch slot released: {channel} ({reason}; {active}/2 active)"
