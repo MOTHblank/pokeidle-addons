@@ -1043,6 +1043,8 @@ mod priority_tests {
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
             streak_confirmed:Some(false),
+            watch_attempts:1,
+            last_watch:Some(Instant::now()),
             ..Default::default()
         });
         let mut pending=VecDeque::from([
@@ -1073,6 +1075,30 @@ mod priority_tests {
     }
 
     #[test]
+    fn unassociated_pubsub_gain_updates_balance_but_not_moth_points() {
+        let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
+        let config=MinerConfig::default();
+        let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
+        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            channel_id:Some("123".to_owned()),
+            balance:Some(100),
+            ..Default::default()
+        });
+        let mut pending=VecDeque::from([PubSubEvent::PointsEarned {
+            channel_id:"123".into(),amount:100,balance:Some(200),
+            reason:"WATCH".into()
+        }]);
+        apply_pubsub_events(
+            &gql,&config,&mut pending,&mut cache,&snapshot,&events
+        );
+        assert_eq!(cache["alpha"].balance,Some(200));
+        assert_eq!(cache["alpha"].points_gained,0);
+        assert_eq!(snapshot.lock().unwrap().points_gained,0);
+    }
+
+    #[test]
     fn pubsub_watch_streak_confirms_immediately() {
         let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
         let config=MinerConfig::default();
@@ -1082,6 +1108,8 @@ mod priority_tests {
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
             streak_confirmed:Some(false),
+            watch_attempts:1,
+            last_watch:Some(Instant::now()),
             ..Default::default()
         });
         let mut pending=VecDeque::from([PubSubEvent::PointsEarned {
