@@ -57,6 +57,19 @@ pub(crate) struct StreakMilestone {
     pub(crate) length: Option<u32>,
     pub(crate) achieved_at: Option<String>,
 }
+impl StreakMilestone {
+    fn from_response(response:&Value)->Self {
+        let milestone=response.pointer("/data/channel/self/watchStreakMilestone/watchStreakMilestone");
+        Self {
+            length: milestone.and_then(|item|item.get("value"))
+                .and_then(|value| value.as_str()
+                    .and_then(|s|s.parse::<u32>().ok())
+                    .or_else(||value.as_u64().and_then(|n|u32::try_from(n).ok()))),
+            achieved_at: milestone.and_then(|item|item.get("achievementTimestamp"))
+                .and_then(Value::as_str).map(str::to_owned),
+        }
+    }
+}
 
 pub(crate) struct TwitchGql {
     client: Client,
@@ -216,15 +229,7 @@ impl TwitchGql {
         let response=self.post("RewardList",REWARD_LIST_HASH,json!({
             "channelID":channel_id,"shouldIncludeAllSuspendedStreaks":false
         }))?;
-        let milestone=response.pointer("/data/channel/self/watchStreakMilestone/watchStreakMilestone");
-        Ok(StreakMilestone {
-            length: milestone.and_then(|item|item.get("value"))
-                .and_then(|value| value.as_str()
-                    .and_then(|s|s.parse::<u32>().ok())
-                    .or_else(||value.as_u64().and_then(|n|u32::try_from(n).ok()))),
-            achieved_at: milestone.and_then(|item|item.get("achievementTimestamp"))
-                .and_then(Value::as_str).map(str::to_owned),
-        })
+        Ok(StreakMilestone::from_response(&response))
     }
 
     pub(crate) fn claim_bonus(&self, channel_id: &str, claim_id: &str) -> Result<(), GqlError> {
@@ -252,5 +257,24 @@ impl TwitchGql {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parses_reward_list_milestone_and_absent_streak() {
+        let result=json!({"data":{"channel":{"self":{"watchStreakMilestone":{
+            "watchStreakMilestone":{
+                "value":"5","achievementTimestamp":"2026-11-04T20:15:00Z"
+            }
+        }}}}});
+        let milestone=StreakMilestone::from_response(&result);
+        assert_eq!(milestone.length,Some(5));
+        assert_eq!(milestone.achieved_at.as_deref(),Some("2026-11-04T20:15:00Z"));
+        let absent=StreakMilestone::from_response(&json!({"data":{"channel":{"self":{}}}}));
+        assert_eq!(absent.length,None);
+        assert_eq!(absent.achieved_at,None);
     }
 }
