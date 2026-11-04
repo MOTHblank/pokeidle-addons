@@ -193,26 +193,30 @@ impl ControllerApp {
             if done && !self.runtimes[index].twitch.login_done_seen {
                 self.runtimes[index].twitch.login_done_seen=true;
                 let account_name=self.account_name(profile);
-                if let Some(game)=self.runtimes[index].game.native.as_ref() {
-                    match game.refresh_twitch_login() {
-                        Ok(true)=>{
+                let token=crate::native_twitch_login::take_completed_token(profile);
+                if let (Some(game),Some(token))=(
+                    self.runtimes[index].game.native.as_ref(),token.as_deref()
+                ) {
+                    match game.refresh_twitch_token(token) {
+                        Ok(())=>{
                             game.set_twitch_favorites(
                                 self.workspace.twitch_favorites[index].clone());
                             self.set_status(format!(
                                 "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
                             ),false)
                         },
-                        Ok(false)=>self.set_status(format!(
-                            "{account_name}: Twitch login finished but no saved credential was found"
-                        ),true),
                         Err(error)=>self.set_status(format!(
                             "{account_name}: Twitch login saved but miner refresh failed: {error}"
                         ),true),
                     }
-                } else {
+                } else if token.is_some() {
                     self.set_status(format!(
                         "{account_name}: Twitch login imported; it will start with this account"
                     ),false);
+                } else {
+                    self.set_status(format!(
+                        "{account_name}: Twitch login finished but no credential was returned"
+                    ),true);
                 }
             } else if !done {
                 self.runtimes[index].twitch.login_done_seen=false;
