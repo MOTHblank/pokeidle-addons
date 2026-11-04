@@ -34,7 +34,9 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
   e marcadores manuais para correlacionar lentidões. O ícone REC na barra
   lateral indica gravação ativa. O usuário pode exportar o relatório JSON
   **explicitamente**, ou descartar a captura; não há gravação automática em
-  disco. Somente as ações do desenvolvedor criam e encerram esse worker.
+  disco. Rótulos de marcadores digitados manualmente são incluídos na
+  exportação e devem ser revisados antes do compartilhamento. Somente as
+  ações do desenvolvedor criam e encerram esse worker.
   Na execução normal, sem uma gravação iniciada, **não há custo contínuo de
   diagnóstico para usuários comuns**.
   A opção **Inspecionar CPU das threads** fica **desligada por padrão**.
