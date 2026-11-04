@@ -103,7 +103,11 @@ pub struct Miner {
 }
 
 impl Miner {
-    pub fn start(
+    pub fn start(credentials: Credentials, config: MinerConfig) -> Result<Self, String> {
+        Self::start_with_sink(credentials,config,None)
+    }
+
+    pub fn start_with_sink(
         credentials: Credentials,
         config: MinerConfig,
         event_sink: Option<MinerEventSink>,
@@ -213,10 +217,12 @@ struct ChannelCache {
     last_points_attempt: Option<Instant>,
     last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
+    last_claim_error: Option<String>,
     last_channel_id_error: Option<String>,
     last_points_error: Option<String>,
     last_stream_error: Option<String>,
     last_streak_error: Option<String>,
+    last_live_error: Option<String>,
     broadcast_id: Option<String>,
     stream_started: Option<String>,
     game_id: Option<String>,
@@ -807,6 +813,7 @@ fn poll_channels(
                         if channel.last_claim_id.as_deref() != Some(claim_id) {
                             match gql.claim_bonus(channel_id, claim_id) {
                                 Ok(()) => {
+                                    channel.last_claim_error=None;
                                     channel.last_claim_id = Some(claim_id.to_owned());
                                     if let Ok(mut current) = snapshot.lock() {
                                         current.bonuses_claimed =
@@ -819,7 +826,14 @@ fn poll_channels(
                                 }
                                 Err(error) => {
                                     auth_failed |= error.is_auth();
-                                    channel.last_error=Some(error.user_message());
+                                    let message=error.user_message();
+                                    if channel.last_claim_error.as_deref()!=Some(message.as_str()) {
+                                        push_event(events,MinerEvent::Warning(format!(
+                                            "{login} bonus claim: {message}"
+                                        )));
+                                    }
+                                    channel.last_claim_error=Some(message.clone());
+                                    channel.last_error=Some(message);
                                     if first_error.is_none() {
                                         first_error = Some(error);
                                     }
@@ -882,6 +896,7 @@ fn poll_channels(
         let prior_live=channel.live;
         match gql.is_stream_live(&channel_id) {
             Ok(Some(live_stream)) => {
+                channel.last_live_error=None;
                 channel.live=Some(true);
                 if let Some(started_at)=live_stream.started_at {
                     channel.stream_started=Some(started_at);
@@ -894,6 +909,7 @@ fn poll_channels(
                 }
             }
             Ok(None) => {
+                channel.last_live_error=None;
                 channel.live=Some(false);
                 if prior_live==Some(true) {
                     push_event(events,MinerEvent::StreamOffline {
@@ -905,13 +921,13 @@ fn poll_channels(
             Err(error) => {
                 auth_failed |= error.is_auth();
                 let message=error.user_message();
-                let changed=channel.last_error.as_deref()!=Some(message.as_str());
-                channel.last_error=Some(message.clone());
-                if changed {
+                if channel.last_live_error.as_deref()!=Some(message.as_str()) {
                     push_event(events,MinerEvent::Warning(format!(
                         "{login} live check: {message}"
                     )));
                 }
+                channel.last_live_error=Some(message.clone());
+                channel.last_error=Some(message);
                 if first_error.is_none() {first_error=Some(error);}
             }
         }
