@@ -306,7 +306,7 @@ fn resolve_twitch_startup_token(
             Ok(Some(found))=>{
                 if !current(){return None}
                 match crate::native_auth::save_twitch_token_checked(
-                    profile,&found,current)
+                    profile,&found,||current())
                 {
                     Ok(true)=>safe_to_scrub=true,
                     Ok(false)=>return None,
@@ -339,7 +339,7 @@ fn resolve_twitch_startup_token(
         if let Some(legacy)=legacy {
             if !current(){return None}
             match crate::native_auth::save_twitch_token_checked(
-                profile,&legacy,current)
+                profile,&legacy,||current())
             {
                 Ok(true)=>safe_to_scrub=true,
                 Ok(false)=>return None,
@@ -362,7 +362,7 @@ fn resolve_twitch_startup_token(
                 profile.name()));
         }
     }
-    current().then_some(token).flatten()
+    if current(){token}else{None}
 }
 
 pub struct NativeSession {
@@ -482,10 +482,16 @@ impl NativeSession {
                         profile,twitch_auth_revision)
                 {return}
                 if let Some(token)=token {
-                    if let Err(error)=twitch_auth_miner.replace_token(&token,None) {
-                        crate::logging::warn(&format!(
+                    match twitch_auth_miner.replace_token_checked(
+                        &token,None,||
+                            crate::native_twitch_login::credential_revision_is_current(
+                                profile,twitch_auth_revision))
+                    {
+                        Ok(true)=>{},
+                        Ok(false)=>{},
+                        Err(error)=>crate::logging::warn(&format!(
                             "{} optional Twitch miner could not start: {error}",
-                            profile.name()));
+                            profile.name())),
                     }
                 }
             })
