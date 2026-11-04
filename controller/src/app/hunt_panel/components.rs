@@ -31,11 +31,19 @@ pub(super) fn draw_hunt_switch_action(
         return false;
     }
     if pending {
-        ui.add_enabled(false, egui::Button::new(tr("Switching…"))
-            .fill(WARN.linear_multiply(0.14))
-            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
-        ui.label(RichText::new(tr("Waiting for a safe opening…"))
-            .size(10.0).color(WARN));
+        let rtl=ui.layout().main_dir==egui::Direction::RightToLeft;
+        let button=|ui:&mut egui::Ui| {
+            ui.add_enabled(false, egui::Button::new(tr("Switching…"))
+                .fill(WARN.linear_multiply(0.14))
+                .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+        };
+        let status=|ui:&mut egui::Ui| {
+            ui.label(RichText::new(tr("Waiting for a safe opening…"))
+                .size(10.0).color(WARN));
+        };
+        // Keep the physical order Button → explanation even inside the
+        // right-aligned Recommendations layout.
+        if rtl { status(ui); button(ui); } else { button(ui); status(ui); }
         return false;
     }
     ui.add_enabled(live, egui::Button::new(tr("Hunt →"))).clicked()
