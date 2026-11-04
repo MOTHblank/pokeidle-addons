@@ -799,7 +799,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     forecast_rx:mpsc::Receiver<HistoryForecast>,
     background_forecast_reference:Arc<Mutex<Option<(Arc<AtlasReference>,bool)>>>,
     background_forecast_tx:mpsc::SyncSender<HistoryForecast>) {
-    let mut rejected_welcomes = 0usize;
     let mut first_session = first_session;
     let mut automation_writer = AutomationWriter::new();
     let mut pvp = PvpAutomation::default();
@@ -856,7 +855,6 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     s.native_market = market.status.clone();
                     s.native_capture_status = gameplay.status.clone();
                 });
-                rejected_welcomes = 0;
                 update(&snapshot, |s| {
                     s.phase = "Online".into();
                     s.error = None;
@@ -1458,17 +1456,10 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 }
             }
             Err(error) => {
-                let expired = error.starts_with("AUTH_REQUIRED:");
-                if error.contains("before welcome") ||
-                   error.contains("did not receive welcome") {
-                    rejected_welcomes += 1;
-                } else {
-                    rejected_welcomes = 0;
-                }
-                // Consecutive pre-welcome rejections after a valid handshake
-                // may indicate that the user's Firefox login must be renewed.
-                // Ordinary network failures NEVER launch Firefox.
-                let needs_login = expired || rejected_welcomes >= 5;
+                // Only an explicit authentication rejection proves the saved
+                // login is invalid. Missing welcomes, disconnects and network
+                // failures can happen while the same credentials remain valid.
+                let needs_login = error.starts_with("AUTH_REQUIRED:");
                 update(&snapshot, |s| {
                     s.phase = if needs_login { "NeedsLogin" } else { "Reconnecting" }.into();
                     s.error = Some(error);
