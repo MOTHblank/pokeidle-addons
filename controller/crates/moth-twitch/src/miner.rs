@@ -690,7 +690,7 @@ fn poll_channels(
             Ok(context) => {
                 channel.last_error=None;
                 channel.last_points_checked=Some(Instant::now());
-                let _prior = channel.balance.replace(context.balance);
+                channel.balance=Some(context.balance);
                 // Balance polling is deliberately not counted as mined points.
                 // A higher balance may come from a pending bonus claim, another
                 // Twitch client, or delayed account state. Only PubSub WATCH /
@@ -772,8 +772,8 @@ fn poll_channels(
         match gql.is_stream_live(&channel_id) {
             Ok(Some(live_stream)) => {
                 channel.live=Some(true);
-                if channel.stream_started.is_none() {
-                    channel.stream_started=live_stream.started_at;
+                if let Some(started_at)=live_stream.started_at {
+                    channel.stream_started=Some(started_at);
                 }
                 channel.last_error=None;
             }
