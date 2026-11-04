@@ -114,6 +114,12 @@ fn epoch_ms() -> u64 {
     u64::try_from(millis).unwrap_or(u64::MAX)
 }
 
+fn stream_started_at<'a>(stream:&'a Value,fallback:Option<&'a str>)->Option<&'a str> {
+    stream.get("createdAt").and_then(Value::as_str)
+        .filter(|at|!at.is_empty())
+        .or_else(||fallback.filter(|at|!at.is_empty()))
+}
+
 fn has_integrity_challenge(value: &Value) -> bool {
     if value.pointer("/extensions/challenge/type")
         .and_then(Value::as_str)
@@ -497,7 +503,11 @@ impl TwitchGql {
         }))
     }
 
-    pub(crate) fn stream_info(&self, login: &str) -> Result<Option<StreamInfo>, GqlError> {
+    pub(crate) fn stream_info(
+        &self,
+        login: &str,
+        fallback_started_at: Option<&str>,
+    ) -> Result<Option<StreamInfo>, GqlError> {
         let value = self.post(
             "VideoPlayerStreamInfoOverlayChannel",
             STREAM_INFO_HASH,
@@ -522,8 +532,7 @@ impl TwitchGql {
             .ok_or_else(|| GqlError::Protocol(format!(
                 "Twitch live stream id is unavailable for {login}"
             )))?;
-        let started_at=stream.get("createdAt").and_then(Value::as_str)
-            .filter(|at| !at.is_empty())
+        let started_at=stream_started_at(stream,fallback_started_at)
             .ok_or_else(|| GqlError::Protocol(format!(
                 "Twitch stream start time unavailable for {login}"
             )))?;
@@ -621,5 +630,19 @@ mod tests {
     #[test]
     fn browser_client_id_matches_twitch_web_client() {
         assert_eq!(BROWSER_CLIENT_ID,"kimne78kx3ncx6brgo4mv6wki5h1ko");
+    }
+
+    #[test]
+    fn stream_start_time_can_fall_back_to_live_query() {
+        let stream=json!({"id":"broadcast-1"});
+        assert_eq!(
+            stream_started_at(&stream,Some("2026-11-04T20:00:00Z")),
+            Some("2026-11-04T20:00:00Z")
+        );
+        let stream=json!({"id":"broadcast-1","createdAt":"2026-11-04T21:00:00Z"});
+        assert_eq!(
+            stream_started_at(&stream,Some("2026-11-04T20:00:00Z")),
+            Some("2026-11-04T21:00:00Z")
+        );
     }
 }

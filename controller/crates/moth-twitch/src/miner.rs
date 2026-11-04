@@ -392,7 +392,10 @@ fn apply_pubsub_events(
                 } else {
                     before.and_then(|old|next.checked_sub(old)).unwrap_or(0)
                 };
-                if gained>0 {
+                let moth_watch_active =
+                    channel.watch_attempts>0 || channel.last_watch.is_some();
+                let watch_reward=matches!(reason.as_str(),"WATCH"|"WATCH_STREAK");
+                if gained>0 && moth_watch_active && watch_reward {
                     channel.points_gained=channel.points_gained.saturating_add(gained);
                     if let Ok(mut current)=snapshot.lock() {
                         current.points_gained=current.points_gained.saturating_add(gained);
@@ -402,23 +405,25 @@ fn apply_pubsub_events(
                         channel:login.clone(),amount:gained,balance:next
                     });
                 }
-                match reason.as_str() {
-                    "WATCH_STREAK"=>confirm_streak(
-                        &login,channel,"PubSub WATCH_STREAK",snapshot,events
-                    ),
-                    "WATCH"=>{
-                        channel.watch_reward_count=
-                            channel.watch_reward_count.saturating_add(1);
-                        // Reference parity: a second ordinary WATCH reward
-                        // proves Twitch processed enough watch activity to
-                        // resolve the current streak even if RewardList lags.
-                        if channel.watch_reward_count>=2 {
-                            confirm_streak(
-                                &login,channel,"PubSub WATCH x2",snapshot,events
-                            );
+                if moth_watch_active {
+                    match reason.as_str() {
+                        "WATCH_STREAK"=>confirm_streak(
+                            &login,channel,"PubSub WATCH_STREAK",snapshot,events
+                        ),
+                        "WATCH"=>{
+                            channel.watch_reward_count=
+                                channel.watch_reward_count.saturating_add(1);
+                            // Reference parity: a second ordinary WATCH reward
+                            // proves Twitch processed enough watch activity to
+                            // resolve the current streak even if RewardList lags.
+                            if channel.watch_reward_count>=2 {
+                                confirm_streak(
+                                    &login,channel,"PubSub WATCH x2",snapshot,events
+                                );
+                            }
                         }
+                        _=>{}
                     }
-                    _=>{}
                 }
                 update_streamer(snapshot,&login,channel,None);
             }
@@ -685,20 +690,12 @@ fn poll_channels(
             Ok(context) => {
                 channel.last_error=None;
                 channel.last_points_checked=Some(Instant::now());
-                let prior = channel.balance.replace(context.balance);
-                if let Some(gained) = prior.and_then(|old| context.balance.checked_sub(old))
-                    .filter(|gain| *gain > 0)
-                {
-                    channel.points_gained = channel.points_gained.saturating_add(gained);
-                    if let Ok(mut current) = snapshot.lock() {
-                        current.points_gained = current.points_gained.saturating_add(gained);
-                    }
-                    push_event(events, MinerEvent::PointsGained {
-                        channel: login.clone(),
-                        amount: gained,
-                        balance: context.balance,
-                    });
-                }
+                channel.balance=Some(context.balance);
+                // Balance polling is deliberately not counted as mined points.
+                // A higher balance may come from a pending bonus claim, another
+                // Twitch client, or delayed account state. Only PubSub WATCH /
+                // WATCH_STREAK events after Moth watch activity are attributed
+                // to this miner.
 
                 if config.claim_bonuses {
                     if let (Some(channel_id), Some(claim_id)) =
@@ -775,8 +772,8 @@ fn poll_channels(
         match gql.is_stream_live(&channel_id) {
             Ok(Some(live_stream)) => {
                 channel.live=Some(true);
-                if channel.stream_started.is_none() {
-                    channel.stream_started=live_stream.started_at;
+                if let Some(started_at)=live_stream.started_at {
+                    channel.stream_started=Some(started_at);
                 }
                 channel.last_error=None;
             }
@@ -807,7 +804,7 @@ fn poll_channels(
             at.elapsed() >= Duration::from_secs(120)) {
             metadata_checks+=1;
             channel.stream_checked=Some(Instant::now());
-            match gql.stream_info(login) {
+            match gql.stream_info(login,channel.stream_started.as_deref()) {
                 Ok(Some(stream)) => {
                     let fresh_broadcast=
                         channel.broadcast_id.as_deref()!=Some(stream.broadcast_id.as_str());
@@ -1046,6 +1043,8 @@ mod priority_tests {
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
             streak_confirmed:Some(false),
+            watch_attempts:1,
+            last_watch:Some(Instant::now()),
             ..Default::default()
         });
         let mut pending=VecDeque::from([
@@ -1076,6 +1075,30 @@ mod priority_tests {
     }
 
     #[test]
+    fn unassociated_pubsub_gain_updates_balance_but_not_moth_points() {
+        let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
+        let config=MinerConfig::default();
+        let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
+        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            channel_id:Some("123".to_owned()),
+            balance:Some(100),
+            ..Default::default()
+        });
+        let mut pending=VecDeque::from([PubSubEvent::PointsEarned {
+            channel_id:"123".into(),amount:100,balance:Some(200),
+            reason:"WATCH".into()
+        }]);
+        apply_pubsub_events(
+            &gql,&config,&mut pending,&mut cache,&snapshot,&events
+        );
+        assert_eq!(cache["alpha"].balance,Some(200));
+        assert_eq!(cache["alpha"].points_gained,0);
+        assert_eq!(snapshot.lock().unwrap().points_gained,0);
+    }
+
+    #[test]
     fn pubsub_watch_streak_confirms_immediately() {
         let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
         let config=MinerConfig::default();
@@ -1085,6 +1108,8 @@ mod priority_tests {
         cache.insert("alpha".to_owned(),ChannelCache {
             channel_id:Some("123".to_owned()),
             streak_confirmed:Some(false),
+            watch_attempts:1,
+            last_watch:Some(Instant::now()),
             ..Default::default()
         });
         let mut pending=VecDeque::from([PubSubEvent::PointsEarned {

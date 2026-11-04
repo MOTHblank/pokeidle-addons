@@ -102,7 +102,7 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                     ui.label(RichText::new(format!(
                         "+{} {}",
                         channel.points_gained,
-                        label(br, "this session", "nesta sessão")
+                        label(br, "from Moth watch", "pela visualização do Moth")
                     )).size(11.0).color(GOOD));
                 }
                 open = ui.small_button("↗").on_hover_text(label(br,
@@ -278,7 +278,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 metric(&mut cols[2], label(br, "Streaks confirmed", "Sequências confirmadas"),
                     format!("{streaks_collected}/{streaks_live}"),
                     if streaks_collected > 0 {GOOD}else{MUTED});
-                metric(&mut cols[3], label(br, "Session point gains", "Ganhos na sessão"),
+                metric(&mut cols[3], label(br, "Moth watch points", "Pontos via Moth"),
                     format!("+{gained}"), if gained > 0 { GOOD } else { TEXT });
             });
             ui.add_space(5.0);
@@ -306,9 +306,15 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 label(br, "Bonus chests claimed", "Baús de bônus coletados"),
                 label(br, "Watch signals acknowledged", "Sinais de visualização aceitos")
             )).size(10.0).color(MUTED));
+            if !live_names.is_empty() && mining_names.is_empty() {
+                ui.label(RichText::new(label(br,
+                    "Live streams are detected, but no mining slot is established yet. Stream metadata/watch setup is still pending or failed; check the channel rows for errors.",
+                    "Há lives detectadas, mas nenhuma vaga de mineração foi estabelecida. Os metadados/configuração de visualização ainda estão pendentes ou falharam; confira os erros nos canais."))
+                    .size(10.0).color(WARN));
+            }
             ui.label(RichText::new(label(br,
-                "Session point gains are cumulative observed balance increases and can stay nonzero after a watch slot is released. Per-channel gains are shown below. Watch signals do not prove point credit or active PokéIdle bonuses.",
-                "Ganhos na sessão são aumentos de saldo observados acumulados e podem continuar acima de zero depois que uma vaga de visualização é liberada. Os ganhos por canal aparecem abaixo. Sinais de visualização não comprovam crédito nem bônus ativos no PokéIdle."))
+                "Moth watch points count only Twitch WATCH/WATCH_STREAK events after Moth has sent watch activity for that channel. Balance increases, pending bonus claims, and activity from other Twitch clients are not counted as Moth-mined points.",
+                "Pontos via Moth contam apenas eventos WATCH/WATCH_STREAK da Twitch após o Moth enviar atividade de visualização para o canal. Aumentos de saldo, bônus pendentes e atividade de outros clientes Twitch não são contados como pontos minerados pelo Moth."))
                 .size(9.0).color(DIM));
         });
 
