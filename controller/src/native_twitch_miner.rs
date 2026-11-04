@@ -19,6 +19,12 @@ impl TwitchMinerControl {
         }
     }
 
+    pub fn set_favorites(&self, channels: Vec<String>) {
+        if let Some(inner) = self.inner.as_ref() {
+            inner.set_favorites(channels);
+        }
+    }
+
     pub fn set_expected_login(&self, login: Option<String>) {
         if let Some(inner) = self.inner.as_ref() {
             inner.set_expected_login(login);
@@ -52,6 +58,10 @@ impl TwitchMinerSession {
             .ok();
 
         Self { miner }
+    }
+
+    pub fn set_favorites(&self, channels: Vec<String>) {
+        self.control().set_favorites(channels);
     }
 
     pub fn control(&self) -> TwitchMinerControl {
