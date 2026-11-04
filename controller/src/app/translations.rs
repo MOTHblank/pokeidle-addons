@@ -90,8 +90,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
             "Aguardando o estado dos bosses confirmado pelo servidor.",
         "Server boss state unavailable after reconnect; return requires manual review" =>
             "Estado do boss indisponível após reconectar; retorno precisa de verificação manual.",
-        "Boss Manager" => "Gerenciador de Bosses",
-        "Server-native Boss Manager" => "Gerenciador de Bosses (servidor)",
+        "Boss Farm" => "Farm de Boss",
+        "Server-native Boss Farm" => "Farm de Boss (servidor)",
         "Start this account to manage server-native boss farming" =>
             "Inicie esta conta para gerenciar o farm de bosses no servidor",
         "The game server repeats the chosen boss, heals and spends its entry tokens. Moth travels to the Pokémon Center and restores your original hunt when the run ends. It never uses Give Up automatically." =>
@@ -100,6 +100,14 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
             "Aguardando o catálogo de bosses jogáveis do servidor.",
         "No playable boss arenas are currently advertised by the server." =>
             "O servidor não disponibilizou nenhuma arena de boss jogável.",
+        "BOSSES" => "BOSSES",
+        "BOSS DETAILS" => "DETALHES DO BOSS",
+        "Type data unavailable" => "Tipos indisponíveis",
+        "No type weakness" => "Nenhuma fraqueza de tipo",
+        "Restock stays active during boss battles." =>
+            "A reposição continua ativa durante as batalhas de boss.",
+        "Restock is off for this account." =>
+            "A reposição está desativada nesta conta.",
         "Entry" => "Entrada",
         "Inventory" => "Inventário",
         "Required level" => "Nível necessário",
