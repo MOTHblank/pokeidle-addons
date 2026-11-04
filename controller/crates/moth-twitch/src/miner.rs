@@ -187,6 +187,7 @@ impl Drop for Miner {
 struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
+    points_gained: u64,
     last_watch: Option<Instant>,
     last_media_activity: Option<Instant>,
     last_watch_attempt: Option<Instant>,
@@ -392,6 +393,7 @@ fn apply_pubsub_events(
                     before.and_then(|old|next.checked_sub(old)).unwrap_or(0)
                 };
                 if gained>0 {
+                    channel.points_gained=channel.points_gained.saturating_add(gained);
                     if let Ok(mut current)=snapshot.lock() {
                         current.points_gained=current.points_gained.saturating_add(gained);
                         current.last_received=Some(Instant::now());
@@ -687,6 +689,7 @@ fn poll_channels(
                 if let Some(gained) = prior.and_then(|old| context.balance.checked_sub(old))
                     .filter(|gain| *gain > 0)
                 {
+                    channel.points_gained = channel.points_gained.saturating_add(gained);
                     if let Ok(mut current) = snapshot.lock() {
                         current.points_gained = current.points_gained.saturating_add(gained);
                     }
@@ -1062,7 +1065,14 @@ mod priority_tests {
         assert_eq!(channel.watch_reward_count,2);
         assert_eq!(channel.streak_confirmed,Some(true));
         assert_eq!(channel.balance,Some(120));
-        assert_eq!(snapshot.lock().unwrap().points_gained,20);
+        assert_eq!(channel.points_gained,20);
+        let current=snapshot.lock().unwrap();
+        assert_eq!(current.points_gained,20);
+        assert_eq!(
+            current.streamers.iter().find(|streamer|streamer.login=="alpha")
+                .map(|streamer|streamer.points_gained),
+            Some(20)
+        );
     }
 
     #[test]
@@ -1138,6 +1148,7 @@ fn update_streamer(
         Some(state) => {
             state.channel_id.clone_from(&cache.channel_id);
             state.points = cache.balance;
+            state.points_gained = cache.points_gained;
             state.last_watch_signal = cache.last_watch;
             state.last_media_activity = cache.last_media_activity;
             state.streak_confirmed=cache.streak_confirmed;
@@ -1152,6 +1163,7 @@ fn update_streamer(
             login: login.to_owned(),
             channel_id: cache.channel_id.clone(),
             points: cache.balance,
+            points_gained: cache.points_gained,
             last_watch_signal: cache.last_watch,
             last_media_activity:cache.last_media_activity,
             streak_confirmed:cache.streak_confirmed,

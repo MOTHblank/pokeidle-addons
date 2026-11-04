@@ -98,6 +98,13 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                 ui.label(RichText::new(format!("{}: {points}",
                     label(br, "Balance", "Saldo")))
                     .size(11.0).color(if channel.points.is_some() { TEXT } else { MUTED }));
+                if channel.points_gained > 0 {
+                    ui.label(RichText::new(format!(
+                        "+{} {}",
+                        channel.points_gained,
+                        label(br, "this session", "nesta sessão")
+                    )).size(11.0).color(GOOD));
+                }
                 open = ui.small_button("↗").on_hover_text(label(br,
                     "Open Twitch channel in your default browser",
                     "Abrir canal Twitch no navegador padrão")).clicked();
@@ -271,7 +278,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 metric(&mut cols[2], label(br, "Streaks confirmed", "Sequências confirmadas"),
                     format!("{streaks_collected}/{streaks_live}"),
                     if streaks_collected > 0 {GOOD}else{MUTED});
-                metric(&mut cols[3], label(br, "Points earned", "Pontos ganhos"),
+                metric(&mut cols[3], label(br, "Session point gains", "Ganhos na sessão"),
                     format!("+{gained}"), if gained > 0 { GOOD } else { TEXT });
             });
             ui.add_space(5.0);
@@ -300,8 +307,8 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 label(br, "Watch signals acknowledged", "Sinais de visualização aceitos")
             )).size(10.0).color(MUTED));
             ui.label(RichText::new(label(br,
-                "Earned points count observed balance increases only. Watch signals do not prove point credit or active PokéIdle bonuses.",
-                "Pontos ganhos contam apenas aumentos observados de saldo. Sinais de visualização não comprovam crédito nem bônus ativos no PokéIdle."))
+                "Session point gains are cumulative observed balance increases and can stay nonzero after a watch slot is released. Per-channel gains are shown below. Watch signals do not prove point credit or active PokéIdle bonuses.",
+                "Ganhos na sessão são aumentos de saldo observados acumulados e podem continuar acima de zero depois que uma vaga de visualização é liberada. Os ganhos por canal aparecem abaixo. Sinais de visualização não comprovam crédito nem bônus ativos no PokéIdle."))
                 .size(9.0).color(DIM));
         });
 
