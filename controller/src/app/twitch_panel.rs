@@ -317,15 +317,16 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         crate::native_twitch_login::cancel(profile);
                     }
                 } else if ui.button(label(br,
-                    if connected {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
-                    if connected {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
+                    if snapshot.is_some() {"Refresh Twitch login with Firefox"} else {"Sign in to Twitch with Firefox"},
+                    if snapshot.is_some() {"Renovar login Twitch pelo Firefox"} else {"Entrar na Twitch pelo Firefox"}
                 )).clicked() {
                     if let Err(error)=crate::native_twitch_login::start(profile) {
                         app.set_status(error,true);
                     }
                 }
-                if connected && !busy &&
-                    ui.small_button(label(br,"Forget login","Esquecer login")).clicked()
+                if (snapshot.is_some() ||
+                    matches!(login_status,crate::native_twitch_login::LoginStatus::Done)) &&
+                    !busy && ui.small_button(label(br,"Forget login","Esquecer login")).clicked()
                 {
                     app.forget_twitch_account(index);
                 }
