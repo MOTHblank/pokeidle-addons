@@ -163,7 +163,7 @@ impl EstimateCache {
         let cancellation=Arc::clone(&self.cancellation);
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
         self.pending=Some((generation,full,rx));
-        let _=std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("moth-hunt-forecast-cache".into())
             .spawn(move ||{
                 let mut values=std::collections::BTreeMap::new();
@@ -180,7 +180,8 @@ impl EstimateCache {
                 if cancellation.load(std::sync::atomic::Ordering::Acquire)==generation {
                     let _=tx.send(values);
                 }
-            });
+            })
+            .expect("could not start Hunt Atlas forecast worker");
     }
     pub(super) fn get(&self,slug:&str)->Option<native_atlas::Forecast>{
         self.values.get(slug).cloned().flatten()
