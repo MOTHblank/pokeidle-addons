@@ -404,24 +404,29 @@ pub(super) fn draw_overview_card(
                 }
                 if pvp_on && fresh {
                     if let Some(status) = sample.native.as_ref().map(|s| &s.native_pvp) {
-                        let info = if status.queued {
+                        let info = if status.paused {
+                            if pt_br() { "Pausado pelo jogo" } else { "Paused by game" }.to_owned()
+                        } else if status.queued {
                             if pt_br() { "Na fila" } else { "Queued" }.to_owned()
                         } else if status.awaiting_reply {
                             if pt_br() { "Entrando na fila" } else { "Joining queue" }.to_owned()
-                        } else if status.cooldown_secs > 0 {
-                            if pt_br() {
-                                format!("Espera {}s", status.cooldown_secs)
-                            } else {
-                                format!("Cooldown {}s", status.cooldown_secs)
-                            }
+                        } else if status.checking_queue {
+                            if pt_br() { "Verificando fila" } else { "Checking queue" }.to_owned()
                         } else if status.waiting_for_team {
                             if pt_br() { "Equipe PvP necessária" } else { "PvP team needed" }.to_owned()
+                        } else if let Some(level) = status.waiting_for_level {
+                            if pt_br() { format!("Exige nível {level}") }
+                            else { format!("Requires level {level}") }
+                        } else if status.cooldown_secs > 0 {
+                            if pt_br() { format!("Espera {}s", status.cooldown_secs) }
+                            else { format!("Cooldown {}s", status.cooldown_secs) }
                         } else if status.vip {
-                            "VIP".to_owned()
+                            if pt_br() { "Fila VIP do jogo" } else { "Game VIP queue" }.to_owned()
                         } else {
                             if pt_br() { "Buscando" } else { "Matchmaking" }.to_owned()
                         };
-                        let response = ui.label(RichText::new(info).size(10.0).color(MUTED));
+                        let response = ui.label(RichText::new(info)
+                            .size(10.0).color(if status.paused { WARN } else { MUTED }));
                         if let Some(warning) = status.warning.as_ref() {
                             response.on_hover_text(warning);
                         }
