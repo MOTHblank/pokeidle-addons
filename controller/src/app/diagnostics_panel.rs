@@ -167,11 +167,11 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.add(egui::TextEdit::singleline(&mut recording.draft_marker)
                             .hint_text(tr("Optional marker label")).desired_width(220.0));
                         if ui.small_button(tr("Mark event now")).clicked() {
-                            let label = recording.draft_marker.trim();
+                            let label = recording.draft_marker.trim().to_string();
                             recording.mark(if label.is_empty() {
                                 "Manual marker".to_string()
                             } else {
-                                label.to_string()
+                                label
                             });
                             recording.draft_marker.clear();
                         }
@@ -210,6 +210,31 @@ fn draw_recording_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         ui.label(RichText::new(format!(
                             "{}: {peak:.1}%", tr("Highest recorded CPU")
                         )).size(11.0).strong().color(TEXT));
+                        ui.label(RichText::new(tr(
+                            "Highest CPU intervals (nearest sampled thread, if available)"
+                        )).size(10.0).color(MUTED));
+                        let now = std::time::Instant::now();
+                        for (at, cpu) in cpu_peaks.iter().take(6) {
+                            let closest = snapshot.thread_history.iter()
+                                .filter_map(|sample| {
+                                    let gap = if sample.at >= *at {
+                                        sample.at.saturating_duration_since(*at)
+                                    } else {
+                                        at.saturating_duration_since(sample.at)
+                                    };
+                                    (gap <= std::time::Duration::from_secs(3))
+                                        .then_some((gap, sample))
+                                })
+                                .min_by_key(|(gap, _)| *gap)
+                                .and_then(|(_, sample)| sample.hottest.first());
+                            let thread = closest.map(|thread| format!(
+                                "{} (#{}) · {:.1}%", thread.name, thread.id, thread.cpu_percent
+                            )).unwrap_or_else(|| tr("No nearby thread sample").to_owned());
+                            ui.label(RichText::new(format!(
+                                "-{:.0}s · {cpu:.1}% · {thread}",
+                                now.saturating_duration_since(*at).as_secs_f64()
+                            )).size(10.0).color(MUTED));
+                        }
                     }
                     let mut top_threads = std::collections::HashMap::<u64, (String, f64)>::new();
                     for point in &snapshot.thread_history {
@@ -285,7 +310,7 @@ pub(super) fn draw_diagnostics_panel(
             ui.label(RichText::new(tr("Performance diagnostics"))
                 .size(17.0).strong().color(TEXT));
             ui.label(RichText::new(tr(
-                "Measurements run only while this page is visible and the window is focused. Closing it or switching pages stops sampling and discards its history."
+                "Live dashboard measurements stop when this page loses focus. Explicit developer recordings continue across pages and tray until you stop them."
             )).size(11.0).color(MUTED));
             ui.add_space(10.0);
             draw_recording_section(app, ui);
