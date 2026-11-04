@@ -57,13 +57,19 @@ pub struct BuyRule {
     pub max_spend_day: u64,
     pub max_purchases_session: u64,
     pub max_quantity_session: u64,
+    // 0 means unrestricted. Only verified listing data can satisfy filters.
+    pub min_potency: u64,
+    pub max_potency: u64,
+    pub min_listing_quantity: u64,
+    pub max_units_per_buy: u64,
 }
 impl Default for BuyRule {
     fn default() -> Self {
         Self { id: "new".into(), kind: "item".into(), item_id: 0,
             currency: "gold".into(), enabled: false, buy_max: 0,
             max_spend_session: 0, max_spend_day: 0,
-            max_purchases_session: 0, max_quantity_session: 0 }
+            max_purchases_session: 0, max_quantity_session: 0,
+            min_potency: 0, max_potency: 0, min_listing_quantity: 0, max_units_per_buy: 0 }
     }
 }
 impl BuyRule {
@@ -72,7 +78,9 @@ impl BuyRule {
         matches!(self.kind.as_str(), "item" | "any_item" | "pokemon_any" | "pokemon_shiny" | "pokemon_p5") &&
         matches!(self.currency.as_str(), "gold" | "orb") &&
         (self.kind != "item" || self.item_id > 0) &&
-        (self.kind != "pokemon_shiny" || self.currency == "orb")
+        (self.kind != "pokemon_shiny" || self.currency == "orb") &&
+        self.min_potency <= 5 && self.max_potency <= 5 &&
+        (self.min_potency == 0 || self.max_potency == 0 || self.min_potency <= self.max_potency)
     }
 }
 
