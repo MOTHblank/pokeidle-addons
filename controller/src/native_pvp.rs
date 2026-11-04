@@ -349,6 +349,35 @@ mod tests {
         assert_eq!(p.next(Some(true),false,None,Some(30),t+Duration::from_secs(25)),None);
     }
     #[test]
+    fn team_save_receipt_and_real_level_threshold_update_eligibility() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","time":[],"regras":{"nivelMin":35},
+            "fila":{"na":false}}),t);
+        let before = p.status(Some(true),false,None,Some(34),t);
+        assert!(before.waiting_for_team);
+        assert_eq!(before.waiting_for_level,Some(35));
+        p.on_frame(&json!({"t":"pvp","timeSalvo":[11,22]}),t);
+        let after = p.status(Some(true),false,None,Some(35),t);
+        assert!(!after.waiting_for_team);
+        assert_eq!(after.waiting_for_level,None);
+        assert_eq!(p.next(Some(true),false,None,Some(35),t),Some(PvpAction::Join));
+    }
+    #[test]
+    fn refusal_backoff_is_visible_and_never_blindly_rejoins() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","filaRecusa":{"restaMs":18000}}),t);
+        let state = p.status(Some(true),false,None,Some(50),t);
+        assert!(state.checking_queue);
+        assert_eq!(state.cooldown_secs,18);
+        assert_eq!(state.retry_secs,60);
+        assert_eq!(p.next(Some(true),false,None,Some(50),
+            t + Duration::from_secs(30)),None);
+        assert_eq!(p.next(Some(true),false,None,Some(50),
+            t + Duration::from_secs(61)),Some(PvpAction::Info));
+    }
+    #[test]
     fn disabling_only_cancels_a_queue_owned_by_this_controller() {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
