@@ -7,7 +7,7 @@ use crate::{firefox, native_auth};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -18,6 +18,19 @@ const SQLITE_ROW: c_int = 100;
 const SQLITE_DONE: c_int = 101;
 const SQLITE_OPEN_READONLY: c_int = 1;
 const SQLITE_OPEN_READWRITE: c_int = 2;
+
+static CREDENTIAL_REVISION:[AtomicU64;4]=
+    [const {AtomicU64::new(0)};4];
+
+pub fn credential_revision(profile:GameProfile)->u64 {
+    CREDENTIAL_REVISION[profile.index()].load(Ordering::Acquire)
+}
+pub fn credential_revision_is_current(profile:GameProfile,expected:u64)->bool {
+    credential_revision(profile)==expected
+}
+fn advance_credential_revision(profile:GameProfile)->u64 {
+    CREDENTIAL_REVISION[profile.index()].fetch_add(1,Ordering::AcqRel)+1
+}
 
 // Windows can link against the built-in WinSQLite3 API. On Linux, resolve
 // the distro's versioned SQLite runtime at first use. This avoids requiring a
@@ -241,6 +254,9 @@ pub fn clear_browser_session(profile: GameProfile) -> Result<(), String> {
             "Close Firefox for this account before forgetting the Twitch login.".into()
         );
     }
+    // Cancel any startup import that may already have read the old cookie
+    // before deleting it from Firefox.
+    advance_credential_revision(profile);
     clear_twitch_cookie(&config.profile_dir)
 }
 
@@ -248,16 +264,12 @@ pub fn clear_browser_session(profile: GameProfile) -> Result<(), String> {
 /// profile without opening another browser. Firefox SQLite supports concurrent
 /// read access while the profile is open; this is the same behavior used by
 /// the interactive login watcher below.
-pub fn import_existing(profile: GameProfile) -> Result<Option<String>, String> {
+pub fn read_existing(profile: GameProfile) -> Result<Option<String>, String> {
     let config = twitch_config(profile)?;
     let mut last_error=None;
     for attempt in 0..3 {
         match read_twitch_cookie(&config.profile_dir) {
-            Ok(None)=>return Ok(None),
-            Ok(Some(token))=>{
-                native_auth::save_twitch_token(profile,&token)?;
-                return Ok(Some(token));
-            }
+            Ok(result)=>return Ok(result),
             Err(error)=>{
                 last_error=Some(error);
                 if attempt<2 {thread::sleep(Duration::from_millis(150));}
@@ -323,16 +335,18 @@ fn start_mode(profile: GameProfile, fresh: bool) -> Result<(), String> {
         if matches!(job.status, LoginStatus::Running) {
             return Err("Twitch login already in progress".into());
         }
+        let revision=advance_credential_revision(profile);
         let cancelled = Arc::new(AtomicBool::new(false));
         job.status = LoginStatus::Running;
         job.cancelled = Arc::clone(&cancelled);
         job.completed_token = None;
-        cancelled
+        (cancelled,revision)
     };
+    let (cancelled,revision)=cancelled;
     let spawned = thread::Builder::new()
         .name(format!("moth-twitch-login-{}", profile.name()))
         .spawn(move || {
-            let result = login(profile, &cancelled, fresh);
+            let result = login(profile, &cancelled, fresh, revision);
             if let Ok(mut jobs) = jobs().lock() {
                 match result {
                     Ok(token) => {
@@ -366,8 +380,10 @@ fn reset_after_spawn_failure(profile: GameProfile) {
 fn twitch_config(profile: GameProfile) -> Result<Config, String> {
     Config::for_profile(profile)
 }
-fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool) -> Result<String, String> {
+fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool, revision:u64) -> Result<String, String> {
     let config = twitch_config(profile)?;
+    let current=||credential_revision_is_current(profile,revision);
+    if !current() {return Err("Twitch login cancelled".into());}
 
     if fresh {
         // Refresh means a genuinely new Twitch browser session, not simply
@@ -376,13 +392,17 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool) -> Result<St
         if firefox::find_profile_process(&config)?.is_some() {
             return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.".into());
         }
+        if !current() {return Err("Twitch login cancelled".into());}
         clear_twitch_cookie(&config.profile_dir)?;
     } else {
         // A prior Firefox visit to Twitch may already have a session. Avoid
         // opening another login window when it can be reused directly.
         if let Some(token) = read_twitch_cookie(&config.profile_dir)? {
-            if cancelled.load(Ordering::Relaxed) { return Err("Twitch login cancelled".into()); }
+            if cancelled.load(Ordering::Relaxed) || !current() {
+                return Err("Twitch login cancelled".into());
+            }
             native_auth::save_twitch_token(profile, &token)?;
+            if !current() {return Err("Twitch login cancelled".into());}
             return Ok(token);
         }
         if firefox::find_profile_process(&config)?.is_some() {
@@ -403,7 +423,11 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool) -> Result<St
         if let Ok(Some(token)) = read_twitch_cookie(&config.profile_dir) {
             // Always release the temporary browser we own, even if protected
             // credential persistence fails afterward.
-            let saved=native_auth::save_twitch_token(profile,&token);
+            let saved=if current() {
+                native_auth::save_twitch_token(profile,&token)
+            } else {
+                Err("Twitch login cancelled".into())
+            };
             let closed=firefox::stop_child(&mut browser,None);
             if let Err(error)=saved {return Err(error);}
             if let Err(error)=closed {
@@ -425,7 +449,9 @@ fn login(profile: GameProfile, cancelled: &AtomicBool, fresh: bool) -> Result<St
     let token = read_twitch_cookie(&config.profile_dir)?.ok_or_else(|| {
         "Twitch login not detected. Sign in using Firefox; Moth will import automatically.".to_owned()
     })?;
+    if !current() {return Err("Twitch login cancelled".into());}
     native_auth::save_twitch_token(profile, &token)?;
+    if !current() {return Err("Twitch login cancelled".into());}
     Ok(token)
 }
 
