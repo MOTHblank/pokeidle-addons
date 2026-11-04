@@ -93,6 +93,20 @@ impl Drop for TwitchMinerSession {
     }
 }
 
+/// Preserve the full official catalog while the miner only watches live channels.
+pub fn official_channels(payload: &Value) -> Option<Vec<String>> {
+    let official = payload.get("estado")?.get("twitch")?.get("oficiais")?.as_array()?;
+    let mut channels = official.iter().filter(|entry|
+        entry.get("bonus").and_then(Value::as_bool).unwrap_or(true)
+    ).filter_map(|entry|{
+        entry.get("login").or_else(||entry.get("nome"))
+            .and_then(Value::as_str).and_then(moth_twitch::normalize_login)
+    }).collect::<Vec<_>>();
+    channels.sort_unstable();
+    channels.dedup();
+    Some(channels)
+}
+
 pub fn official_live_channels(payload: &Value) -> Option<Vec<String>> {
     let twitch = payload.get("estado")?.get("twitch")?;
     let official = twitch.get("oficiais")?.as_array()?;
@@ -138,6 +152,16 @@ mod tests {
             "lives":[{"login":"ONE"},{"login":"two"}]
         }}});
         assert_eq!(official_live_channels(&frame).unwrap(), vec!["one"]);
+    }
+
+    #[test]
+    fn full_official_roster_includes_offline_channels() {
+        let frame=json!({"estado":{"twitch":{"oficiais":[
+            {"login":"offline"},{"login":"live","bonus":true},
+            {"login":"excluded","bonus":false}
+        ],"lives":[{"login":"live"}]}}});
+        assert_eq!(official_channels(&frame).unwrap(),vec!["live","offline"]);
+        assert_eq!(official_live_channels(&frame).unwrap(),vec!["live"]);
     }
 
     #[test]
