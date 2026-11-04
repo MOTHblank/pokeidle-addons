@@ -273,7 +273,7 @@ pub(super) fn draw_twitch_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 ui.label(RichText::new(label(br,"▶ WATCHING NOW","▶ ASSISTINDO AGORA"))
                     .size(10.0).strong().color(if mining_names.is_empty(){MUTED}else{GOOD}));
                 ui.label(RichText::new(if mining_names.is_empty() {
-                    label(br,"No watch slot selected yet","Nenhuma vaga selecionada ainda").to_owned()
+                    label(br,"No stream selected yet","Nenhuma live selecionada ainda").to_owned()
                 } else {
                     mining_names.join(" · ")
                 }).size(10.0).strong().color(if mining_names.is_empty(){MUTED}else{TEXT}));
