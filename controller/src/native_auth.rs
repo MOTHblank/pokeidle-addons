@@ -172,48 +172,9 @@ mod capture_handoff_tests {
         assert_eq!(preserve_native_capture_preferences(&firefox,Some(&no_old_settings)),firefox);
     }
 
-    #[test]
-    fn legacy_cache_requires_one_twitch_profile_probe() {
-        assert!(twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"legacy"},"twitch":null
-        })));
-        assert!(!twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"new"},"twitchProbeVersion":1,"twitch":null
-        })));
-        assert!(twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"token"},"twitch":{"token":"possibly-stale"}
-        })));
-        assert!(!twitch_profile_probe_needed(&json!({
-            "bootstrap":{"hello":"refreshed"},"twitchProbeVersion":1,
-            "twitch":{"token":"current"}
-        })));
-    }
 
-    #[test]
-    fn twitch_profile_probe_preserves_game_and_capture_state() {
-        let cached=json!({
-            "bootstrap":{"hello":"game"},
-            "cookies":[{"name":"session"}],
-            "autocatch":{"enabled":true},
-            "twitch":null
-        });
-        let updated=with_twitch_profile_probe(&cached,Some(" twitch-token "));
-        assert_eq!(updated["bootstrap"],cached["bootstrap"]);
-        assert_eq!(updated["cookies"],cached["cookies"]);
-        assert_eq!(updated["autocatch"],cached["autocatch"]);
-        assert_eq!(updated["twitch"]["token"],"twitch-token");
-        assert_eq!(updated["twitchProbeVersion"],1);
-        assert!(!twitch_profile_probe_needed(&updated));
-    }
 
-    #[test]
-    fn completed_twitch_probe_records_logged_out_profiles() {
-        let updated=with_twitch_profile_probe(
-            &json!({"bootstrap":{"hello":"game"}}),None);
-        assert!(updated["twitch"].is_null());
-        assert_eq!(updated["twitchProbeVersion"],1);
-        assert!(!twitch_profile_probe_needed(&updated));
-    }
+
 }
 
 /// Kick uses a dedicated OS-vault entry, never the PokéIdle game cache.
@@ -242,6 +203,79 @@ pub fn save_kick_token(profile: GameProfile, token: &str) -> Result<(), String> 
 }
 pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
     platform::clear_kick(profile)
+}
+
+const MAX_TWITCH_TOKEN_BYTES: usize = 2048;
+static TWITCH_WRITE:[std::sync::Mutex<()>;4]=
+    [const {std::sync::Mutex::new(())};4];
+
+fn twitch_write(profile:GameProfile)->&'static std::sync::Mutex<()> {
+    &TWITCH_WRITE[profile.index()]
+}
+
+fn check_twitch_token(token: &str) -> Result<&str, String> {
+    let token = token.trim();
+    if token.is_empty() || token.len() > MAX_TWITCH_TOKEN_BYTES ||
+        token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return Err("Invalid Twitch auth token".into());
+    }
+    Ok(token)
+}
+
+pub fn load_twitch_token(profile: GameProfile) -> Result<Option<String>, String> {
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
+    platform::load_twitch(profile)?.map(|bytes| {
+        if bytes.len() > MAX_TWITCH_TOKEN_BYTES {
+            return Err("Stored Twitch token is oversized".into());
+        }
+        let token = String::from_utf8(bytes)
+            .map_err(|_| "Stored Twitch token is invalid".to_owned())?;
+        check_twitch_token(&token).map(str::to_owned)
+    }).transpose()
+}
+
+/// Commit a Twitch token only while the caller's account-local credential
+/// generation remains current. All saves/clears share the same per-profile
+/// lock so an obsolete worker cannot overwrite a later Refresh/Forget.
+pub fn save_twitch_token_checked(
+    profile:GameProfile,
+    token:&str,
+    is_current:impl Fn()->bool,
+)->Result<bool,String> {
+    let token=check_twitch_token(token)?.to_owned();
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
+    if !is_current(){return Ok(false)}
+    platform::save_twitch(profile,token.as_bytes())?;
+    if !is_current() {
+        platform::clear_twitch(profile).map_err(|error|
+            format!("Canceled Twitch credential rollback failed: {error}"))?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+pub fn save_twitch_token(profile: GameProfile, token: &str) -> Result<(), String> {
+    save_twitch_token_checked(profile,token,||true).map(|_|())
+}
+
+pub fn clear_twitch_token(profile: GameProfile) -> Result<(), String> {
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
+    platform::clear_twitch(profile)
+}
+
+pub fn clear_twitch_token_checked(
+    profile:GameProfile,
+    is_current:impl Fn()->bool,
+)->Result<bool,String> {
+    let _guard=twitch_write(profile).lock()
+        .map_err(|_|"Twitch credential writer unavailable".to_owned())?;
+    if !is_current(){return Ok(false)}
+    platform::clear_twitch(profile)?;
+    Ok(true)
 }
 
 // UI events may toggle Auto Catch and native Restock in rapid succession.
@@ -282,66 +316,18 @@ pub fn load_for_auth(profile:GameProfile,
     Ok(cached)
 }
 
-const TWITCH_PROFILE_PROBE_VERSION: u64 = 1;
-
-/// Old encrypted PokéIdle bootstraps predate automatic Twitch profile
-/// detection. Probe every pre-marker cache exactly once, even if it contains
-/// an older token, so Firefox can refresh a stale Twitch login transparently.
-pub fn twitch_profile_probe_needed(cached: &Value) -> bool {
-    cached.get("twitchProbeVersion").and_then(Value::as_u64)
-        .unwrap_or(0) < TWITCH_PROFILE_PROBE_VERSION
-}
-
-fn with_twitch_profile_probe(cached: &Value, token: Option<&str>) -> Value {
-    let mut updated = cached.clone();
-    updated["twitchProbeVersion"] = Value::from(TWITCH_PROFILE_PROBE_VERSION);
-    updated["twitch"] = token.map(str::trim).filter(|token| !token.is_empty())
-        .map(|token| serde_json::json!({"token":token}))
-        .unwrap_or(Value::Null);
-    updated
-}
-
-/// Persist a completed automatic profile probe without touching game
-/// credentials or controller-managed capture settings.
-pub fn cache_twitch_profile_probe(
-    profile: GameProfile,
-    cached: &Value,
-    token: Option<&str>,
-    generation: &std::sync::atomic::AtomicU64,
-    expected: u64,
-) -> (Value, Option<String>) {
-    let fallback = with_twitch_profile_probe(cached, token);
-    let _guard = match preference_write(profile).lock() {
-        Ok(guard) => guard,
-        Err(_) => return (fallback, Some("Native settings writer unavailable".into())),
-    };
-    if !capture_generation_is_current(generation, expected) {
-        return (cached.clone(), Some("Twitch login detection canceled: launch changed".into()));
-    }
-    let (current, read_warning) = match load(profile) {
-        Ok(Some(current)) => (current, None),
-        Ok(None) => (cached.clone(), None),
-        Err(error) => (cached.clone(), Some(error)),
-    };
-    let updated = with_twitch_profile_probe(&current, token);
-    if !capture_generation_is_current(generation, expected) {
-        return (cached.clone(), Some("Twitch login detection canceled: launch changed".into()));
-    }
-    let saved = save(profile, &updated);
-    if saved.is_ok() && !capture_generation_is_current(generation, expected) {
-        let warning = match save(profile, &current) {
-            Ok(()) => "Twitch login detection canceled: launch changed".to_owned(),
-            Err(error) => format!(
-                "Canceled Twitch login detection rollback failed: {error}"
-            ),
-        };
-        return (cached.clone(), Some(warning));
-    }
-    let warning = match saved {
-        Ok(()) => read_warning,
-        Err(error) => Some(error),
-    };
-    (updated, warning)
+/// Remove legacy Twitch material from the PokéIdle credential cache after
+/// moving it to Twitch's dedicated protected vault. This never changes the
+/// in-memory bootstrap currently being used for a handoff.
+pub fn scrub_legacy_twitch_from_game_cache(profile: GameProfile) -> Result<(), String> {
+    let _guard=preference_write(profile).lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    let Some(mut cached)=load(profile)? else{return Ok(())};
+    let Some(object)=cached.as_object_mut() else{return Ok(())};
+    let changed=object.remove("twitch").is_some() |
+        object.remove("twitchProbeVersion").is_some();
+    if changed {save(profile,&cached)?;}
+    Ok(())
 }
 
 /// Refresh credentials and preserve Auto Catch/Restock preferences using the
@@ -365,7 +351,12 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value,
     if !capture_generation_is_current(generation,expected) {
         return (fresh.clone(),Some("Firefox login cache canceled: launch changed".into()));
     }
-    let saved=save(profile,&merged);
+    let mut persisted=merged.clone();
+    if let Some(object)=persisted.as_object_mut() {
+        object.remove("twitch");
+        object.remove("twitchProbeVersion");
+    }
+    let saved=save(profile,&persisted);
     // Stop may overtake a slow vault operation. Do not leave credentials
     // from the canceled attempt visible to a later cached native launch.
     if saved.is_ok() && !capture_generation_is_current(generation,expected) {
@@ -572,6 +563,10 @@ mod platform {
         Ok(config::data_root()?.join("native-credentials")
             .join(format!("{}.kick.dpapi", profile.name())))
     }
+    fn twitch_location(profile: GameProfile) -> Result<std::path::PathBuf, String> {
+        Ok(config::data_root()?.join("native-credentials")
+            .join(format!("{}.twitch.dpapi", profile.name())))
+    }
     // Write encrypted data beside its destination and rename it into place.
     // An interrupted write must never truncate the previous valid login.
     fn atomic_replace(path:&std::path::Path,bytes:&[u8])->Result<(),String>{
@@ -625,6 +620,25 @@ mod platform {
             Err(_) => Err("Could not remove Kick login".into()),
         }
     }
+    pub fn load_twitch(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
+        let bytes = match fs::read(twitch_location(profile)?) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err("Could not read protected Twitch login".into()),
+        };
+        crypt(&bytes, false).map(Some)
+    }
+    pub fn save_twitch(profile: GameProfile, token: &[u8]) -> Result<(), String> {
+        let cipher = crypt(token, true)?;
+        atomic_replace(&twitch_location(profile)?, &cipher)
+    }
+    pub fn clear_twitch(profile: GameProfile) -> Result<(), String> {
+        match fs::remove_file(twitch_location(profile)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("Could not remove Twitch login".into()),
+        }
+    }
     pub fn load(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let path = location(profile)?;
         let cipher = match fs::read(path) {
@@ -676,12 +690,16 @@ mod platform {
     use std::time::{Duration,Instant};
     const APP: &str = "moth-pokeidle-native";
     const KICK_APP: &str = "moth-kick-native";
+    const TWITCH_APP: &str = "moth-twitch-native";
     // User profile number is used only as an OS keyring attribute.
     fn base_args(profile: GameProfile) -> [&'static str; 4] {
         ["application", APP, "profile", profile.name()]
     }
     fn kick_args(profile: GameProfile) -> [&'static str; 4] {
         ["application", KICK_APP, "profile", profile.name()]
+    }
+    fn twitch_args(profile: GameProfile) -> [&'static str; 4] {
+        ["application", TWITCH_APP, "profile", profile.name()]
     }
     // secret-tool lookup exits with status 1 when no matching item exists.
     // An absent first-run login must not be mistaken for a broken keyring.
@@ -790,6 +808,27 @@ mod platform {
         cmd.extend(args);
         secret_tool(&cmd, None).map(|_| ())
     }
+    pub fn load_twitch(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
+        let args = twitch_args(profile);
+        let mut cmd = vec!["lookup"];
+        cmd.extend(args);
+        let mut found = secret_tool(&cmd, None)?;
+        while found.last() == Some(&b'\n') { found.pop(); }
+        if found.is_empty() { return Ok(None); }
+        Ok(Some(found))
+    }
+    pub fn save_twitch(profile: GameProfile, token: &[u8]) -> Result<(), String> {
+        let args = twitch_args(profile);
+        let mut cmd = vec!["store", "--label=Moth Twitch account login"];
+        cmd.extend(args);
+        secret_tool(&cmd, Some(token)).map(|_| ())
+    }
+    pub fn clear_twitch(profile: GameProfile) -> Result<(), String> {
+        let args = twitch_args(profile);
+        let mut cmd = vec!["clear"];
+        cmd.extend(args);
+        secret_tool(&cmd, None).map(|_| ())
+    }
     pub fn load(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let args = base_args(profile);
         let mut cmd = vec!["lookup"];
@@ -843,6 +882,13 @@ mod tests {
         assert!(check_kick_token("  ").is_err());
         assert!(check_kick_token("some token").is_err());
         assert_eq!(check_kick_token("Bearer abc.DEF").unwrap(), "abc.DEF");
+    }
+    #[test]
+    fn twitch_token_validation_rejects_whitespace_and_control_bytes() {
+        assert!(check_twitch_token("  ").is_err());
+        assert!(check_twitch_token("abc def").is_err());
+        assert!(check_twitch_token("abc\ndef").is_err());
+        assert_eq!(check_twitch_token("abc.DEF_123").unwrap(), "abc.DEF_123");
     }
     #[test]
     fn oversized_payload_is_rejected() {

@@ -94,14 +94,12 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
 }
 
 /// Reopen the selected PokéIdle Firefox profile as an ordinary browser
-/// for Kick authentication. Keep Google cookies and the rest of the profile,
-/// but do not launch a Remote Agent, BiDi, or any browser automation.
-/// The normal PokéIdle handoff must have released the Firefox profile lock.
+/// for Twitch authentication. Keep Google cookies and the rest of the profile,
+/// but do not launch a Remote Agent, BiDi, or browser automation.
+/// native_twitch_login verifies profile ownership before calling this launcher.
 pub fn launch_twitch_login(config: &Config) -> Result<Child, String> {
-    // Reuse the selected PokéIdle account's isolated browser profile so the
-    // Twitch auth cookie can be imported into that account's next native
-    // bootstrap. The caller already owns the stop/launch lifecycle, so do not
-    // add another blocking profile-process scan here.
+    // The login worker watches this profile's local Twitch auth cookie, stores
+    // it in protected storage, then closes only the process created here.
     migrate_legacy_profile(config)?;
     if !config.profile_dir.is_dir() {
         return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
@@ -117,64 +115,6 @@ fn twitch_login_command(config: &Config) -> Command {
         .arg(&config.profile_dir)
         .arg("--new-window")
         .arg("https://www.twitch.tv/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command
-}
-
-/// One-time migration probe for profiles created before the native Twitch miner.
-/// Firefox opens headlessly on about:blank with the exact account profile,
-/// exposes only the Twitch auth-token through BiDi, and is closed before
-/// native PokéIdle starts. No Twitch page or stream is loaded.
-pub fn detect_existing_twitch_login(config: &Config) -> Result<Option<String>, String> {
-    migrate_legacy_profile(config)?;
-    if !config.profile_dir.is_dir() {
-        return Ok(None);
-    }
-    ensure_debug_port_available(config.remote_debug_port)?;
-
-    logging::info(&format!(
-        "checking existing Firefox profile for Twitch login: profile={} port={}",
-        config.profile_dir.display(), config.remote_debug_port
-    ));
-    let mut child = twitch_probe_command(config)
-        .spawn().map_err(format_spawn_error)?;
-    let monitor = MonitorHandle::start(config.remote_debug_port, true);
-    let detected = monitor.twitch_auth_token(Duration::from_secs(15));
-    let cleanup = stop_child(&mut child, Some(&monitor));
-    monitor.stop();
-
-    if let Err(error) = cleanup {
-        // Never lose ownership of a temporary migration browser. A failed
-        // graceful close gets one final PID-scoped termination attempt, unless
-        // the process already exited between the cleanup error and this check.
-        let forced = match child.try_wait() {
-            Ok(Some(_)) => Ok(()),
-            _ => child.kill().and_then(|_| child.wait().map(|_| ())),
-        };
-        if let Err(force_error) = forced {
-            return Err(format!(
-                "Twitch login detection finished but temporary Firefox cleanup failed: {error}; force close failed: {force_error}"
-            ));
-        }
-        logging::warn(&format!(
-            "Temporary Twitch login detection browser required forced cleanup: {error}"
-        ));
-    }
-    detected
-}
-
-fn twitch_probe_command(config: &Config) -> Command {
-    let mut command = Command::new(&config.firefox_executable);
-    command
-        .arg("--headless")
-        .arg("--no-remote")
-        .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
-        .arg("--profile")
-        .arg(&config.profile_dir)
-        .arg("--new-window")
-        .arg("about:blank")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -773,19 +713,5 @@ mod unmonitored_login_tests {
         }));
     }
 
-    #[test]
-    fn twitch_migration_probe_is_headless_and_profile_scoped() {
-        let config = config();
-        let command = twitch_probe_command(&config);
-        let args: Vec<_> = command.get_args()
-            .map(|arg| arg.to_string_lossy().to_string()).collect();
-        assert!(args.contains(&"--headless".to_owned()));
-        assert!(args.contains(&"--no-remote".to_owned()));
-        assert!(args.contains(&format!("--remote-debugging-port={}", config.remote_debug_port)));
-        assert!(args.contains(&"--profile".to_owned()));
-        assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
-        assert!(args.contains(&"about:blank".to_owned()));
-        assert!(!args.iter().any(|arg| arg.contains("twitch.tv")));
-        assert!(!args.iter().any(|arg| arg.contains("marionette")));
-    }
+
 }

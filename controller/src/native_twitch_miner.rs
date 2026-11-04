@@ -5,91 +5,195 @@
 
 use moth_twitch::{Credentials, Miner, MinerConfig, MinerControl, MinerSnapshot};
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Default)]
+struct TwitchControlState {
+    inner: Option<MinerControl>,
+    channels: Vec<String>,
+    live_channels: Vec<String>,
+    favorites: Vec<String>,
+    expected_login: Option<String>,
+}
 
 #[derive(Clone, Default)]
 pub struct TwitchMinerControl {
-    inner: Option<MinerControl>,
+    state: Arc<Mutex<TwitchControlState>>,
 }
 
 impl TwitchMinerControl {
-    pub fn set_channels(&self, channels: Vec<String>) {
-        if let Some(inner) = self.inner.as_ref() {
+    fn attach(&self, control: Option<MinerControl>) {
+        let replay=self.state.lock().ok().map(|mut state| {
+            state.inner=control.clone();
+            control.map(|inner|(
+                inner,
+                state.channels.clone(),
+                state.live_channels.clone(),
+                state.favorites.clone(),
+                state.expected_login.clone(),
+            ))
+        }).flatten();
+        if let Some((inner,channels,live,favorites,expected_login))=replay {
             inner.set_channels(channels);
+            inner.set_live_channels(live);
+            inner.set_favorites(favorites);
+            inner.set_expected_login(expected_login);
         }
+    }
+
+    pub fn set_channels(&self, channels: Vec<String>) {
+        let inner=self.state.lock().ok().map(|mut state| {
+            state.channels=channels.clone();
+            state.inner.clone()
+        }).flatten();
+        if let Some(inner)=inner {inner.set_channels(channels);}
     }
 
     pub fn set_live_channels(&self, channels: Vec<String>) {
-        if let Some(inner)=self.inner.as_ref() {
-            inner.set_live_channels(channels);
-        }
+        let inner=self.state.lock().ok().map(|mut state| {
+            state.live_channels=channels.clone();
+            state.inner.clone()
+        }).flatten();
+        if let Some(inner)=inner {inner.set_live_channels(channels);}
     }
 
     pub fn set_favorites(&self, channels: Vec<String>) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.set_favorites(channels);
-        }
+        let inner=self.state.lock().ok().map(|mut state| {
+            state.favorites=channels.clone();
+            state.inner.clone()
+        }).flatten();
+        if let Some(inner)=inner {inner.set_favorites(channels);}
     }
 
     pub fn set_expected_login(&self, login: Option<String>) {
-        if let Some(inner) = self.inner.as_ref() {
-            inner.set_expected_login(login);
-        }
+        let inner=self.state.lock().ok().map(|mut state| {
+            state.expected_login=login.clone();
+            state.inner.clone()
+        }).flatten();
+        if let Some(inner)=inner {inner.set_expected_login(login);}
     }
 }
 
+type PhaseWake = Arc<dyn Fn() + Send + Sync>;
+
 pub struct TwitchMinerSession {
-    miner: Option<Miner>,
+    miner: Mutex<Option<Miner>>,
+    control: TwitchMinerControl,
+    phase_wake: Mutex<Option<PhaseWake>>,
+    closed: AtomicBool,
 }
 
 impl TwitchMinerSession {
-    pub fn start_optional(bootstrap: Option<&Value>) -> Self {
-        let Some(token) = bootstrap
-            .and_then(|value| value.get("token"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-        else {
-            return Self { miner: None };
+    pub fn start_optional(token: Option<&str>) -> Self {
+        let control = TwitchMinerControl::default();
+        let session = Self {
+            miner: Mutex::new(None),
+            control,
+            phase_wake: Mutex::new(None),
+            closed: AtomicBool::new(false),
         };
-
-        let miner = Credentials::token_only(token)
-            .and_then(|credentials| Miner::start(credentials, MinerConfig::default()))
-            .map_err(|error| {
+        if let Some(token) = token.map(str::trim).filter(|token| !token.is_empty()) {
+            if let Err(error) = session.replace_token(token, None) {
                 crate::logging::warn(&format!(
                     "Optional Twitch miner could not start; PokéIdle is unaffected: {error}"
                 ));
-                error
-            })
-            .ok();
+            }
+        }
+        session
+    }
 
-        Self { miner }
+    pub fn replace_token(
+        &self,
+        token:&str,
+        wake:Option<PhaseWake>,
+    )->Result<(),String> {
+        self.replace_token_checked(token,wake,||true).and_then(|applied|
+            if applied {Ok(())} else {Err("Twitch miner replacement was superseded".into())})
+    }
+
+    pub fn replace_token_checked(
+        &self,
+        token:&str,
+        wake:Option<PhaseWake>,
+        is_current:impl Fn()->bool,
+    )->Result<bool,String> {
+        if self.closed.load(Ordering::Acquire) || !is_current() {
+            return Ok(false);
+        }
+        if let Some(wake)=wake {
+            if let Ok(mut current)=self.phase_wake.lock() {
+                *current=Some(wake);
+            }
+        }
+        let credentials = Credentials::token_only(token)
+            .map_err(|error| error.to_string())?;
+        let miner = Miner::start(credentials, MinerConfig::default())
+            .map_err(|error| error.to_string())?;
+        if let Some(wake)=self.phase_wake.lock().ok().and_then(|current|current.clone()) {
+            miner.set_phase_waker(wake);
+        }
+        let new_control = miner.control();
+        if self.closed.load(Ordering::Acquire) || !is_current() {
+            miner.stop();
+            return Ok(false);
+        }
+        let mut slot = self.miner.lock()
+            .map_err(|_| "Twitch miner state unavailable".to_owned())?;
+        if self.closed.load(Ordering::Acquire) || !is_current() {
+            miner.stop();
+            return Ok(false);
+        }
+        if let Some(previous) = slot.take() {
+            previous.stop();
+        }
+        *slot = Some(miner);
+        drop(slot);
+        self.control.attach(Some(new_control));
+        Ok(true)
+    }
+
+    pub fn clear_login(&self) {
+        if let Ok(mut slot) = self.miner.lock() {
+            if let Some(previous) = slot.take() { previous.stop(); }
+        }
+        self.control.attach(None);
     }
 
     pub fn set_favorites(&self, channels: Vec<String>) {
-        self.control().set_favorites(channels);
+        self.control.set_favorites(channels);
     }
 
     pub fn control(&self) -> TwitchMinerControl {
-        TwitchMinerControl {
-            inner: self.miner.as_ref().map(Miner::control),
-        }
+        self.control.clone()
     }
 
     pub fn snapshot(&self) -> Option<MinerSnapshot> {
-        self.miner.as_ref().map(Miner::snapshot)
+        self.miner.lock().ok()
+            .and_then(|miner| miner.as_ref().map(Miner::snapshot))
     }
 
-    pub fn set_phase_waker(&self, wake:Arc<dyn Fn() + Send + Sync>) {
-        if let Some(miner)=self.miner.as_ref() {
-            miner.set_phase_waker(wake);
+    pub fn set_phase_waker(&self, wake:PhaseWake) {
+        if let Ok(mut current)=self.phase_wake.lock() {
+            *current=Some(Arc::clone(&wake));
         }
+        let active=self.miner.lock().ok().map(|miner| {
+            if let Some(miner)=miner.as_ref() {
+                miner.set_phase_waker(Arc::clone(&wake));
+                true
+            } else {
+                false
+            }
+        }).unwrap_or(false);
+        // Authentication can finish before ControllerApp adopts the native
+        // session and installs its wake callback. Publish the already-current
+        // state immediately instead of waiting for a later Twitch event.
+        if active {wake();}
     }
 
     pub fn stop(&self) {
-        if let Some(miner) = self.miner.as_ref() {
-            miner.stop();
-        }
+        self.closed.store(true,Ordering::Release);
+        self.clear_login();
     }
 }
 

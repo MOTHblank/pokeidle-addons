@@ -276,6 +276,95 @@ impl CaptureSettingsUpdater {
     }
 }
 
+fn resolve_twitch_startup_token(
+    profile:GameProfile,
+    legacy:Option<String>,
+    revision:u64,
+)->Option<String> {
+    // This function always runs off the UI/game startup path. Twitch is
+    // optional: keyring or Firefox-cookie failures are logged and never fail
+    // the PokéIdle connection itself.
+    let current=||crate::native_twitch_login::credential_revision_is_current(
+        profile,revision);
+    if !current(){return None}
+
+    let loaded=crate::native_auth::load_twitch_token(profile);
+    if !current(){return None}
+    let mut token=match loaded {
+        Ok(token)=>token,
+        Err(error)=>{
+            crate::logging::warn(&format!(
+                "{} Twitch credential lookup unavailable: {error}",profile.name()));
+            None
+        }
+    };
+    let mut safe_to_scrub=token.is_some();
+    let mut import_failed=false;
+
+    if token.is_none() {
+        match crate::native_twitch_login::read_existing(profile) {
+            Ok(Some(found))=>{
+                if !current(){return None}
+                match crate::native_auth::save_twitch_token_checked(
+                    profile,&found,||current())
+                {
+                    Ok(true)=>safe_to_scrub=true,
+                    Ok(false)=>return None,
+                    Err(error)=>{
+                        safe_to_scrub=false;
+                        crate::logging::warn(&format!(
+                            "{} Twitch login is usable now but could not be saved: {error}",
+                            profile.name()));
+                    }
+                }
+                token=Some(found);
+            }
+            Ok(None)=>{
+                // Firefox is the source of truth for migration. A missing
+                // auth-token means an old embedded credential must stay gone.
+                safe_to_scrub=true;
+            }
+            Err(error)=>{
+                import_failed=true;
+                crate::logging::warn(&format!(
+                    "{} automatic Twitch login import unavailable: {error}",
+                    profile.name()));
+            }
+        }
+    }
+
+    // Only use an embedded pre-refactor token if direct cookie migration
+    // itself was unavailable. Never resurrect it after Firefox reports logout.
+    if token.is_none() && import_failed {
+        if let Some(legacy)=legacy {
+            if !current(){return None}
+            match crate::native_auth::save_twitch_token_checked(
+                profile,&legacy,||current())
+            {
+                Ok(true)=>safe_to_scrub=true,
+                Ok(false)=>return None,
+                Err(error)=>{
+                    safe_to_scrub=false;
+                    crate::logging::warn(&format!(
+                        "{} legacy Twitch login is usable now but could not be saved: {error}",
+                        profile.name()));
+                }
+            }
+            token=Some(legacy);
+        }
+    }
+
+    if !current(){return None}
+    if safe_to_scrub {
+        if let Err(error)=crate::native_auth::scrub_legacy_twitch_from_game_cache(profile) {
+            crate::logging::warn(&format!(
+                "{} could not scrub legacy Twitch data from game credentials: {error}",
+                profile.name()));
+        }
+    }
+    if current(){token}else{None}
+}
+
 pub struct NativeSession {
     snapshot: Arc<Mutex<NativeSnapshot>>,
     created_at: Instant,
@@ -297,7 +386,7 @@ pub struct NativeSession {
     background_forecast_reference: Arc<Mutex<Option<(Arc<AtlasReference>, bool)>>>,
     phase_wake:PhaseWake,
     kick_roster_publisher:Arc<Mutex<Option<crate::native_kick::KickRosterPublisher>>>,
-    twitch_miner:TwitchMinerSession,
+    twitch_miner:Arc<TwitchMinerSession>,
 }
 impl NativeSession {
     /// Establish the verified game WebSocket before handing ownership away
@@ -305,14 +394,22 @@ impl NativeSession {
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
-        let twitch_miner = TwitchMinerSession::start_optional(
-            bootstrap.get("twitch").filter(|value| !value.is_null())
-        );
+        let legacy_twitch = bootstrap.get("twitch")
+            .and_then(|value|value.get("token"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|token|!token.is_empty())
+            .map(str::to_owned);
+        // Twitch credential resolution is deliberately deferred to its own
+        // worker. A locked OS keyring or busy Firefox cookie DB must never
+        // delay a verified PokéIdle connection.
+        let twitch_miner=Arc::new(TwitchMinerSession::start_optional(None));
         Self::spawn(profile, credentials, twitch_miner, Some(initial),
-            bootstrap.get("autocatch").cloned())
+            bootstrap.get("autocatch").cloned(), legacy_twitch)
     }
-    fn spawn(profile: GameProfile, credentials: Credentials, twitch_miner:TwitchMinerSession,
-        initial: Option<(GameSocket, Value)>, settings: Option<Value>) -> Result<Self, String> {
+    fn spawn(profile: GameProfile, credentials: Credentials, twitch_miner:Arc<TwitchMinerSession>,
+        initial: Option<(GameSocket, Value)>, settings: Option<Value>,
+        legacy_twitch:Option<String>) -> Result<Self, String> {
         let gameplay = Gameplay::new(settings.as_ref());
         let restock = Restock::new(settings.as_ref());
         let rules=MarketRules::load(profile).unwrap_or_else(|error| {
@@ -367,6 +464,42 @@ impl NativeSession {
         let kick_roster_publisher=Arc::new(Mutex::new(None));
         let worker_kick_roster_publisher=Arc::clone(&kick_roster_publisher);
         let twitch_miner_control=twitch_miner.control();
+
+        // Match Kick's credential lifecycle: Twitch vault/cookie work runs on
+        // a separate worker and can attach the miner after PokéIdle is already
+        // online. The retained control state replays roster/live/favorites.
+        let twitch_auth_miner=Arc::clone(&twitch_miner);
+        let twitch_auth_stop=Arc::clone(&stop);
+        let twitch_auth_revision=
+            crate::native_twitch_login::credential_revision(profile);
+        if let Err(error)=thread::Builder::new()
+            .name(format!("moth-twitch-auth-{}",profile.name()))
+            .spawn(move||{
+                let token=resolve_twitch_startup_token(
+                    profile,legacy_twitch,twitch_auth_revision);
+                if twitch_auth_stop.load(Ordering::Relaxed) ||
+                    !crate::native_twitch_login::credential_revision_is_current(
+                        profile,twitch_auth_revision)
+                {return}
+                if let Some(token)=token {
+                    match twitch_auth_miner.replace_token_checked(
+                        &token,None,||
+                            crate::native_twitch_login::credential_revision_is_current(
+                                profile,twitch_auth_revision))
+                    {
+                        Ok(true)=>{},
+                        Ok(false)=>{},
+                        Err(error)=>crate::logging::warn(&format!(
+                            "{} optional Twitch miner could not start: {error}",
+                            profile.name())),
+                    }
+                }
+            })
+        {
+            crate::logging::warn(&format!(
+                "{} could not start Twitch credential worker: {error}",profile.name()));
+        }
+
         let worker = thread::Builder::new().name("moth-native-game".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -557,6 +690,14 @@ impl NativeSession {
     }
     pub fn set_twitch_favorites(&self, channels: Vec<String>) {
         self.twitch_miner.set_favorites(channels);
+    }
+    pub fn refresh_twitch_token(&self, token:&str) -> Result<(), String> {
+        // The control adapter retains current roster/live/favorite state, so
+        // replacing credentials is enough; attach() replays it to the new miner.
+        self.twitch_miner.replace_token(token,None)
+    }
+    pub fn forget_twitch_login(&self) {
+        self.twitch_miner.clear_login();
     }
     pub fn twitch_miner_snapshot(&self) -> Option<moth_twitch::MinerSnapshot> {
         self.twitch_miner.snapshot()

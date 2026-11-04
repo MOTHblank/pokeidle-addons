@@ -273,7 +273,6 @@ pub struct MonitorHandle {
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
-    twitch_auth_request: Arc<Mutex<Option<mpsc::Sender<Result<Option<String>, String>>>>>,
     game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     game_restore_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
@@ -288,8 +287,6 @@ impl MonitorHandle {
         let close_worker = Arc::clone(&close_request);
         let bootstrap_request = Arc::new(Mutex::new(None));
         let bootstrap_worker = Arc::clone(&bootstrap_request);
-        let twitch_auth_request = Arc::new(Mutex::new(None));
-        let twitch_auth_worker = Arc::clone(&twitch_auth_request);
         let game_close_request = Arc::new(Mutex::new(None));
         let game_close_worker = Arc::clone(&game_close_request);
         let game_restore_request = Arc::new(Mutex::new(None));
@@ -302,12 +299,11 @@ impl MonitorHandle {
 
         thread::spawn(move || {
             monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker,
-                bootstrap_worker, twitch_auth_worker, game_close_worker,
-                game_restore_worker, pace_worker);
+                bootstrap_worker, game_close_worker, game_restore_worker, pace_worker);
         });
 
         Self { health, stop, commands, close_request, bootstrap_request,
-            twitch_auth_request, game_close_request, game_restore_request, pace }
+            game_close_request, game_restore_request, pace }
     }
 
     /// A queued command is not reported as successful until Firefox acknowledges it.
@@ -375,32 +371,6 @@ impl MonitorHandle {
             .map_err(|_| "native bootstrap timed out; check that the game and bridge are ready".to_owned())?
     }
 
-    /// Read only Twitch's auth-token cookie from the active Firefox profile.
-    /// This is used by the one-time migration probe and never exposes unrelated
-    /// cookies or requires a Twitch tab to stay open.
-    pub fn twitch_auth_token(&self, timeout: Duration) -> Result<Option<String>, String> {
-        if self.stop.load(Ordering::Relaxed) {
-            return Err("Firefox monitor has stopped".to_owned());
-        }
-        let (reply, received) = mpsc::channel();
-        let mut pending = self.twitch_auth_request.lock()
-            .map_err(|_| "Twitch login detection mailbox is unavailable".to_owned())?;
-        if pending.is_some() {
-            return Err("Twitch login detection is already pending".to_owned());
-        }
-        *pending = Some(reply);
-        drop(pending);
-        match received.recv_timeout(timeout) {
-            Ok(result) => result,
-            Err(_) => {
-                if let Ok(mut pending) = self.twitch_auth_request.lock() {
-                    pending.take();
-                }
-                Err("Twitch login detection timed out".to_owned())
-            }
-        }
-    }
-
     /// Close only the game tab; Firefox remains alive until Rust has
     /// received the server's authenticated welcome on its own connection.
     pub fn close_game_for_handoff(&self, timeout: Duration) -> Result<(), String> {
@@ -456,9 +426,6 @@ impl MonitorHandle {
             pending.take();
         }
         if let Ok(mut pending) = self.bootstrap_request.lock() {
-            pending.take();
-        }
-        if let Ok(mut pending) = self.twitch_auth_request.lock() {
             pending.take();
         }
         if let Ok(mut pending) = self.game_close_request.lock() {
@@ -673,7 +640,6 @@ fn monitor_loop(
     commands: Arc<Mutex<CommandMailbox>>,
     close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     bootstrap_request: Arc<Mutex<Option<mpsc::Sender<Result<Value, String>>>>>,
-    twitch_auth_request: Arc<Mutex<Option<mpsc::Sender<Result<Option<String>, String>>>>>,
     game_close_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     game_restore_request: Arc<Mutex<Option<mpsc::Sender<Result<(), String>>>>>,
     pace: Arc<AtomicU8>,
@@ -760,29 +726,6 @@ fn monitor_loop(
         }
         // One-shot handoff requests must use the monitor's existing BiDi
         // connection. Firefox permits only one active session per profile.
-        // Keep a Twitch migration request queued until BiDi is actually ready;
-        // unlike game bootstrap it does not require a discovered game context.
-        let twitch_reply = if session.is_some() {
-            twitch_auth_request.lock().ok().and_then(|mut pending| pending.take())
-        } else {
-            None
-        };
-        if let Some(reply) = twitch_reply {
-            let result = session.as_mut().ok_or_else(||
-                "Firefox BiDi session is not connected".to_owned()
-            ).and_then(read_twitch_auth_token);
-            let disconnected = result.as_ref().err()
-                .filter(|error| session_connection_is_closed(error))
-                .cloned();
-            let _ = reply.send(result);
-            if let Some(error) = disconnected {
-                issues.report(format!(
-                    "BiDi connection lost during Twitch login detection on port {port}: {error}"
-                ));
-                session = None;
-            }
-        }
-
         let bootstrap_reply = bootstrap_request.lock().ok()
             .and_then(|mut pending| pending.take());
         if let Some(reply) = bootstrap_reply {
@@ -1082,50 +1025,6 @@ struct Heartbeat {
     logged_in: bool,
 }
 
-/// Twitch is optional. Read only its authentication cookie from the same
-/// isolated Firefox profile; never open a chat/stream or expose unrelated
-/// browser cookies to the native worker.
-fn read_twitch_auth_token(session: &mut BrowserSession) -> Result<Option<String>, String> {
-    let id = session.next_id;
-    session.next_id += 1;
-    let response = send_and_wait(&mut session.socket, id, json!({
-        "id": id,
-        "method": "storage.getCookies",
-        "params": {}
-    }))?;
-    let cookies = response.get("result")
-        .and_then(|result| result.get("cookies"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Firefox did not return its cookie store".to_owned())?;
-    for cookie in cookies {
-        let name = cookie.get("name").and_then(Value::as_str).unwrap_or_default();
-        let domain = cookie.get("domain").and_then(Value::as_str).unwrap_or_default()
-            .trim_start_matches('.').to_ascii_lowercase();
-        if name != "auth-token" || (domain != "twitch.tv" && !domain.ends_with(".twitch.tv")) {
-            continue;
-        }
-        let Some(encoded) = cookie.get("value") else { continue };
-        let token = if encoded.get("type").and_then(Value::as_str) == Some("string") {
-            encoded.get("value").and_then(Value::as_str)
-        } else {
-            encoded.as_str()
-        };
-        let Some(token)=token.map(str::trim) else { continue };
-        if token.is_empty() || token.len() > 2048
-            || token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-        {
-            continue;
-        }
-        return Ok(Some(token.to_owned()));
-    }
-    Ok(None)
-}
-
-fn read_twitch_auth_cookie(session: &mut BrowserSession) -> Option<Value> {
-    read_twitch_auth_token(session).ok().flatten()
-        .map(|token| json!({ "token": token }))
-}
-
 /// Capture only the bridge-confirmed socket's initial hello. The storage
 /// command returns HttpOnly cookies (page JavaScript cannot access those).
 /// All sensitive results stay inside this in-process handoff.
@@ -1181,9 +1080,8 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     let autocatch = settings_response.ok()
         .and_then(|frame| frame.get("result")?.get("result")?.get("value")?
             .as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()));
-    let twitch = read_twitch_auth_cookie(session);
     Ok(json!({ "bootstrap": bootstrap, "cookies": entries,
-        "autocatch": autocatch, "twitch": twitch, "twitchProbeVersion": 1 }))
+        "autocatch": autocatch }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
