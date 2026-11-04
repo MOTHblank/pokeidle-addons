@@ -244,18 +244,27 @@ pub fn clear_browser_session(profile: GameProfile) -> Result<(), String> {
     clear_twitch_cookie(&config.profile_dir)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExistingLogin {
+    Imported(String),
+    NotFound,
+    ProfileBusy,
+}
+
 /// Import an already-existing Twitch login from this account's Firefox
-/// profile without opening a browser. Used during migration/startup.
-pub fn import_existing(profile: GameProfile) -> Result<Option<String>, String> {
+/// profile without opening a browser. The caller must distinguish a genuinely
+/// logged-out profile from a currently-open profile, where direct SQLite
+/// inspection is deliberately skipped.
+pub fn import_existing(profile: GameProfile) -> Result<ExistingLogin, String> {
     let config = twitch_config(profile)?;
     if firefox::find_profile_process(&config)?.is_some() {
-        return Ok(None);
+        return Ok(ExistingLogin::ProfileBusy);
     }
-    let token = read_twitch_cookie(&config.profile_dir)?;
-    if let Some(token) = token.as_deref() {
-        native_auth::save_twitch_token(profile, token)?;
-    }
-    Ok(token)
+    let Some(token)=read_twitch_cookie(&config.profile_dir)? else {
+        return Ok(ExistingLogin::NotFound);
+    };
+    native_auth::save_twitch_token(profile, &token)?;
+    Ok(ExistingLogin::Imported(token))
 }
 
 #[derive(Clone, Debug)]
@@ -338,6 +347,7 @@ pub fn start(profile: GameProfile) -> Result<(), String> {
 fn reset_after_spawn_failure(profile: GameProfile) {
     if let Ok(mut jobs) = jobs().lock() {
         jobs[profile.index()].status = LoginStatus::Idle;
+        jobs[profile.index()].completed_token = None;
     }
 }
 
