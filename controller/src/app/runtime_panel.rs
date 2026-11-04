@@ -100,7 +100,7 @@ pub(super) fn draw_runtime_section(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 
 pub(super) fn draw_credits(app: &mut ControllerApp, ui: &mut egui::Ui) {
-    let (latest_version, notes_url, checking, downloading, staged_version, failure) =
+    let (latest_version, _notes_url, checking, downloading, staged_version, failure) =
         match app.update_status.lock() {
             Ok(status) => (
                 status.latest_version.clone(),
@@ -249,15 +249,11 @@ pub(super) fn draw_credits(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     Err(error) => app.set_status(error, true),
                                 }
                             }
-                        } else if newer {
+                        } else if newer && !downloading {
                             let response = ui.add_enabled(
-                                !checking && !downloading,
+                                !checking,
                                 egui::Button::new(
-                                    RichText::new(if downloading {
-                                        tr("Downloading update...")
-                                    } else {
-                                        tr("Download")
-                                    }).size(9.0)
+                                    RichText::new(tr("Download")).size(9.0)
                                 ),
                             );
                             if response.clicked() {
@@ -274,13 +270,13 @@ pub(super) fn draw_credits(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     if newer {
                         ui.hyperlink_to(
                             RichText::new(tr("Release notes")).size(9.0),
-                            notes_url.as_deref().unwrap_or(update::RELEASES_URL),
+                            _notes_url.as_deref().unwrap_or(update::RELEASES_URL),
                         );
                     }
 
                     if let Some(error) = failure.as_ref() {
                         ui.label(RichText::new("!").size(10.0).strong().color(BAD))
-                            .on_hover_text(error);
+                            .on_hover_text(error.as_str());
                     }
                 });
             });
