@@ -402,28 +402,40 @@ pub(super) fn draw_overview_card(
                         app.accounts[index].auto_pvp = previous;
                     }
                 }
-                if pvp_on && fresh {
+                if fresh {
                     if let Some(status) = sample.native.as_ref().map(|s| &s.native_pvp) {
-                        let info = if status.queued {
-                            if pt_br() { "Na fila" } else { "Queued" }.to_owned()
-                        } else if status.awaiting_reply {
-                            if pt_br() { "Entrando na fila" } else { "Joining queue" }.to_owned()
-                        } else if status.cooldown_secs > 0 {
-                            if pt_br() {
-                                format!("Espera {}s", status.cooldown_secs)
+                        if pvp_on || status.cancelling {
+                            let info = if status.cancelling {
+                                if pt_br() { "Desligando PvP" } else { "Stopping PvP" }.to_owned()
+                            } else if status.paused {
+                                if pt_br() { "Pausado pelo jogo" } else { "Paused by game" }.to_owned()
+                            } else if status.queued {
+                                if pt_br() { "Na fila" } else { "Queued" }.to_owned()
+                            } else if status.awaiting_reply {
+                                if pt_br() { "Entrando na fila" } else { "Joining queue" }.to_owned()
+                            } else if status.waiting_for_team {
+                                if pt_br() { "Equipe PvP necessária" } else { "PvP team needed" }.to_owned()
+                            } else if let Some(level) = status.waiting_for_level {
+                                if pt_br() { format!("Exige nível {level}") }
+                                else { format!("Requires level {level}") }
+                            } else if status.cooldown_secs > 0 {
+                                if pt_br() { format!("Espera {}s", status.cooldown_secs) }
+                                else { format!("Cooldown {}s", status.cooldown_secs) }
+                            } else if status.retry_secs > 0 {
+                                if pt_br() { format!("Nova tentativa em {}s", status.retry_secs) }
+                                else { format!("Retry in {}s", status.retry_secs) }
+                            } else if status.checking_queue {
+                                if pt_br() { "Verificando fila" } else { "Checking queue" }.to_owned()
+                            } else if status.vip {
+                                if pt_br() { "Fila VIP do jogo" } else { "Game VIP queue" }.to_owned()
                             } else {
-                                format!("Cooldown {}s", status.cooldown_secs)
+                                if pt_br() { "Buscando" } else { "Matchmaking" }.to_owned()
+                            };
+                            let response = ui.label(RichText::new(info)
+                                .size(10.0).color(if status.paused || status.cancelling { WARN } else { MUTED }));
+                            if let Some(warning) = status.warning.as_ref() {
+                                response.on_hover_text(warning);
                             }
-                        } else if status.waiting_for_team {
-                            if pt_br() { "Equipe PvP necessária" } else { "PvP team needed" }.to_owned()
-                        } else if status.vip {
-                            "VIP".to_owned()
-                        } else {
-                            if pt_br() { "Buscando" } else { "Matchmaking" }.to_owned()
-                        };
-                        let response = ui.label(RichText::new(info).size(10.0).color(MUTED));
-                        if let Some(warning) = status.warning.as_ref() {
-                            response.on_hover_text(warning);
                         }
                     }
                 }

@@ -7,6 +7,8 @@ const INFO_INTERVAL: Duration = Duration::from_secs(150);
 const JOIN_ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const REFUSAL_BACKOFF: Duration = Duration::from_secs(60);
 const VIP_SYNC_RETRY: Duration = Duration::from_secs(20);
+// Avoid overflowing Instant if the server ever supplies a malformed timer.
+const MAX_SERVER_COOLDOWN_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Default)]
 pub struct PvpStatus {
@@ -15,7 +17,12 @@ pub struct PvpStatus {
     pub queued: bool,
     pub awaiting_reply: bool,
     pub cooldown_secs: u64,
+    pub retry_secs: u64,
     pub waiting_for_team: bool,
+    pub waiting_for_level: Option<u32>,
+    pub checking_queue: bool,
+    pub paused: bool,
+    pub cancelling: bool,
     pub warning: Option<String>,
 }
 
@@ -48,6 +55,8 @@ pub struct PvpAutomation {
     next_info_at: Option<Instant>,
     last_vip_sync: Option<(bool, Instant)>,
     vip_cancel_pending: bool,
+    vip_rejected: bool,
+    leave_sent: Option<Instant>,
     warning: Option<String>,
 }
 
@@ -57,7 +66,8 @@ impl Default for PvpAutomation {
             queue_known: false, queued: false, owned_queue: false,
             team_ready: None, min_level: None, cooldown_until: None,
             join_sent: None, next_join_at: None, next_info_at: None,
-            last_vip_sync: None, vip_cancel_pending: false, warning: None,
+            last_vip_sync: None, vip_cancel_pending: false,
+            vip_rejected: false, leave_sent: None, warning: None,
         }
     }
 }
@@ -65,7 +75,10 @@ impl Default for PvpAutomation {
 impl PvpAutomation {
     pub fn on_frame(&mut self, frame: &Value, now: Instant) {
         if frame.get("t").and_then(Value::as_str) != Some("pvp") { return; }
-        if let Some(time) = frame.get("time").and_then(Value::as_array) {
+        // The game reports the initial PvP team as 'time', but an edit
+        // acknowledgement uses 'timeSalvo'. Both are authoritative.
+        if let Some(time) = frame.get("timeSalvo").or_else(|| frame.get("time"))
+            .and_then(Value::as_array) {
             self.team_ready = Some(!time.is_empty());
         }
         if let Some(level) = frame.get("regras")
@@ -76,13 +89,21 @@ impl PvpAutomation {
         if let Some(fila) = frame.get("fila").and_then(Value::as_object) {
             if let Some(na) = fila.get("na").and_then(Value::as_bool) {
                 self.queued = na;
-                self.queue_known = true;
-                self.join_sent = None;
-                if !na { self.owned_queue = false; }
-                if na { self.warning = None; }
+                if na {
+                    self.queue_known = true;
+                    self.join_sent = None;
+                    if !self.vip_rejected { self.warning = None; }
+                } else if self.join_sent.is_some() {
+                    // A late info response may predate our pending Join.
+                    self.queue_known = false;
+                } else {
+                    self.queue_known = true;
+                    self.owned_queue = false;
+                    self.leave_sent = None;
+                }
             }
             if let Some(ms) = fila.get("cooldownMs").and_then(Value::as_u64) {
-                self.cooldown_until = Some(now + Duration::from_millis(ms));
+                self.cooldown_until = Some(now + Duration::from_millis(ms.min(MAX_SERVER_COOLDOWN_MS)));
             }
         }
         if let Some(recusa) = frame.get("filaRecusa") {
@@ -90,9 +111,10 @@ impl PvpAutomation {
             self.queue_known = true;
             self.owned_queue = false;
             self.join_sent = None;
+            self.leave_sent = None;
             self.next_join_at = Some(now + REFUSAL_BACKOFF);
             if let Some(ms) = recusa.get("restaMs").and_then(Value::as_u64) {
-                self.cooldown_until = Some(now + Duration::from_millis(ms));
+                self.cooldown_until = Some(now + Duration::from_millis(ms.min(MAX_SERVER_COOLDOWN_MS)));
             }
             self.warning = Some("PokéIdle refused the PvP queue request; checking eligibility before retrying".into());
             self.queue_known = false;
@@ -105,12 +127,22 @@ impl PvpAutomation {
             self.queue_known = false;
             self.owned_queue = false;
             self.join_sent = None;
+            self.leave_sent = None;
             self.next_info_at = None;
             self.next_join_at = None;
         }
         if frame.get("filaAutoDesligada").and_then(Value::as_bool) == Some(true) {
-            self.warning = Some("The game disabled VIP auto queue due to eligibility".into());
+            self.vip_rejected = true;
+            self.warning = Some("PokéIdle disabled VIP automatic matchmaking. Check your PvP team and trainer level, then turn Auto PvP off and on to retry.".into());
         }
+    }
+
+    /// The UI may toggle off and back on between worker ticks. Its revision
+    /// ensures this explicit rearm is observed even if the final state is on.
+    pub fn on_user_toggle(&mut self) {
+        self.vip_rejected = false;
+        self.last_vip_sync = None;
+        self.warning = None;
     }
 
     pub fn on_reconnect(&mut self) {
@@ -124,6 +156,7 @@ impl PvpAutomation {
         self.next_join_at = None;
         self.last_vip_sync = None;
         self.vip_cancel_pending = false;
+        self.leave_sent = None;
         // Preserve ownership to cancel an in-flight queue if the user disabled
         // Auto PvP while disconnected and the server restored their entry.
     }
@@ -133,14 +166,22 @@ impl PvpAutomation {
     }
 
     pub fn status(&self, preference: Option<bool>, vip: bool,
-        vip_auto: Option<bool>, now: Instant) -> PvpStatus {
+        vip_auto: Option<bool>, level: Option<u32>, now: Instant) -> PvpStatus {
         let enabled = Self::enabled(preference, vip, vip_auto);
         PvpStatus {
             enabled, vip, queued: self.queued,
             awaiting_reply: self.join_sent.is_some(),
             cooldown_secs: self.cooldown_until.map(|until|
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
+            retry_secs: self.next_join_at.map(|until|
+                until.saturating_duration_since(now).as_secs()).unwrap_or(0),
             waiting_for_team: enabled && !vip && self.team_ready == Some(false),
+            waiting_for_level: if enabled && !vip {
+                self.min_level.filter(|minimum| level.is_none_or(|lv| lv < *minimum))
+            } else { None },
+            checking_queue: enabled && !self.queue_known,
+            paused: enabled && vip && self.vip_rejected,
+            cancelling: !enabled && (self.owned_queue || self.vip_cancel_pending),
             warning: enabled.then(|| self.warning.clone()).flatten(),
         }
     }
@@ -154,20 +195,52 @@ impl PvpAutomation {
         // Turning off a queue we started must cancel it. Do not cancel a
         // player-created queue when this controller never joined it.
         if !enabled && self.owned_queue {
-            self.owned_queue = false;
-            self.join_sent = None;
-            self.next_join_at = Some(now + REFUSAL_BACKOFF);
+            // Wait for an outstanding Join acknowledgement before cancelling;
+            // the server can complete independent handlers out of order.
+            if let Some(sent) = self.join_sent {
+                if now.saturating_duration_since(sent) < JOIN_ACK_TIMEOUT {
+                    return None;
+                }
+                self.join_sent = None;
+                self.queue_known = false;
+                self.next_info_at = None;
+            }
+            // A timed-out Leave is verified with Info, not blindly repeated.
+            if let Some(sent) = self.leave_sent {
+                if now.saturating_duration_since(sent) < JOIN_ACK_TIMEOUT {
+                    return None;
+                }
+                self.leave_sent = None;
+                self.queue_known = false;
+                self.next_info_at = None;
+            }
+            if !self.queue_known {
+                if self.next_info_at.is_none_or(|due| now >= due) {
+                    self.next_info_at = Some(now + INFO_INTERVAL);
+                    return Some(PvpAction::Info);
+                }
+                return None;
+            }
+            if !self.queued {
+                self.owned_queue = false;
+                return None;
+            }
+            self.leave_sent = Some(now);
             return Some(PvpAction::Leave);
         }
         if vip {
+            if preference == Some(false) {
+                // The user must acknowledge a server refusal before retrying.
+                self.vip_rejected = false;
+            }
             // None means inherit the existing server VIP preference. Avoid
             // overriding the user's in-game setting merely by connecting.
             if let Some(wanted) = preference {
                 if wanted { self.vip_cancel_pending = false; }
-                if vip_auto != Some(wanted) &&
+                if !(wanted && self.vip_rejected) && vip_auto != Some(wanted) &&
                     self.last_vip_sync.is_none_or(|(old, sent)|
                         old != wanted || now.saturating_duration_since(sent) >= VIP_SYNC_RETRY) {
-                    if !wanted && vip_auto == Some(true) {
+                    if !wanted && vip_auto != Some(false) {
                         // Disable the server auto-join first. Cancel its
                         // currently active search only after confirmation.
                         self.vip_cancel_pending = true;
@@ -187,8 +260,9 @@ impl PvpAutomation {
                 }
                 self.vip_cancel_pending = false;
                 if self.queued {
-                    self.queued = false;
-                    self.queue_known = false;
+                    // Reuse the same verified Leave lifecycle as non-VIP.
+                    self.owned_queue = true;
+                    self.leave_sent = Some(now);
                     return Some(PvpAction::Leave);
                 }
             }
@@ -241,6 +315,11 @@ impl PvpAutomation {
             self.join_sent = None;
             self.queue_known = false;
         }
+        if action == PvpAction::Leave {
+            self.leave_sent = None;
+            self.queue_known = false;
+            self.next_info_at = None;
+        }
         self.warning = Some("Could not send PvP matchmaking request".into());
     }
 }
@@ -275,6 +354,46 @@ mod tests {
         assert_eq!(p.next(Some(true),false,None,Some(30),t+Duration::from_secs(25)),None);
     }
     #[test]
+    fn team_save_receipt_and_real_level_threshold_update_eligibility() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","time":[],"regras":{"nivelMin":35},
+            "fila":{"na":false}}),t);
+        let before = p.status(Some(true),false,None,Some(34),t);
+        assert!(before.waiting_for_team);
+        assert_eq!(before.waiting_for_level,Some(35));
+        p.on_frame(&json!({"t":"pvp","timeSalvo":[11,22]}),t);
+        let after = p.status(Some(true),false,None,Some(35),t);
+        assert!(!after.waiting_for_team);
+        assert_eq!(after.waiting_for_level,None);
+        assert_eq!(p.next(Some(true),false,None,Some(35),t),Some(PvpAction::Join));
+    }
+    #[test]
+    fn refusal_backoff_is_visible_and_never_blindly_rejoins() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","filaRecusa":{"restaMs":18000}}),t);
+        let state = p.status(Some(true),false,None,Some(50),t);
+        assert!(state.checking_queue);
+        assert_eq!(state.cooldown_secs,18);
+        assert_eq!(state.retry_secs,60);
+        assert_eq!(p.next(Some(true),false,None,Some(50),
+            t + Duration::from_secs(30)),None);
+        assert_eq!(p.next(Some(true),false,None,Some(50),
+            t + Duration::from_secs(61)),Some(PvpAction::Info));
+    }
+    #[test]
+    fn malformed_server_cooldowns_cannot_overflow_an_instant() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false,"cooldownMs":u64::MAX}}),t);
+        assert_eq!(p.status(Some(true),false,None,Some(50),t).cooldown_secs,
+            7 * 24 * 60 * 60);
+        p.on_frame(&json!({"t":"pvp","filaRecusa":{"restaMs":u64::MAX}}),t);
+        assert_eq!(p.status(Some(true),false,None,Some(50),t).cooldown_secs,
+            7 * 24 * 60 * 60);
+    }
+    #[test]
     fn disabling_only_cancels_a_queue_owned_by_this_controller() {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
@@ -283,14 +402,20 @@ mod tests {
         p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":10},
             "fila":{"na":false}}),t);
         assert_eq!(p.next(Some(true),false,None,Some(40),t),Some(PvpAction::Join));
+        // A fast toggle must not race the pending server-side Join.
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
         assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        assert!(!p.owned_queue);
     }
     #[test]
     fn vip_inherits_server_setting_and_never_client_joins() {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
         assert_eq!(p.next(None,true,Some(true),Some(30),t),Some(PvpAction::Info));
-        assert!(p.status(None,true,Some(true),t).enabled);
+        assert!(p.status(None,true,Some(true),Some(30),t).enabled);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
             Some(PvpAction::SetVipAuto(false)));
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
@@ -304,10 +429,88 @@ mod tests {
         p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
             Some(PvpAction::SetVipAuto(false)));
+        assert!(p.status(Some(false),true,Some(true),Some(30),t).cancelling);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
         assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),
             Some(PvpAction::Leave));
+        assert!(p.status(Some(false),true,Some(false),Some(30),t).cancelling);
         assert_eq!(p.next(Some(false),true,Some(false),Some(30),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        assert!(!p.status(Some(false),true,Some(false),Some(30),t).cancelling);
+    }
+    #[test]
+    fn late_info_does_not_erase_an_unconfirmed_join() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":5},
+            "fila":{"na":false}}), t);
+        assert_eq!(p.next(Some(true),false,None,Some(30),t),Some(PvpAction::Join));
+        // The earlier pvp.info is not evidence that this Join failed.
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}), t + Duration::from_secs(1));
+        assert!(p.owned_queue);
+        assert_eq!(p.next(Some(false),false,None,Some(30),
+            t + Duration::from_secs(1)),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),
+            t + Duration::from_secs(2));
+        assert_eq!(p.next(Some(false),false,None,Some(30),
+            t + Duration::from_secs(2)),Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),false,None,Some(30),
+            t + Duration::from_secs(3)),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),
+            t + Duration::from_secs(4));
+        assert!(!p.owned_queue);
+    }
+    #[test]
+    fn missing_leave_ack_queries_server_before_retry() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":1},
+            "fila":{"na":false}}), t);
+        assert_eq!(p.next(Some(true),false,None,Some(15),t),Some(PvpAction::Join));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        assert_eq!(p.next(Some(false),false,None,Some(15),t),Some(PvpAction::Leave));
+        assert_eq!(p.next(Some(false),false,None,Some(15),
+            t + Duration::from_secs(5)),None);
+        assert_eq!(p.next(Some(false),false,None,Some(15),
+            t + Duration::from_secs(16)),Some(PvpAction::Info));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),
+            t + Duration::from_secs(17));
+        assert_eq!(p.next(Some(false),false,None,Some(15),
+            t + Duration::from_secs(17)),Some(PvpAction::Leave));
+    }
+    #[test]
+    fn reconnect_checks_ownership_before_cancelling_and_preserves_manual_queue() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        p.on_reconnect();
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),None);
+        p.on_frame(&json!({"t":"pvp","fila":{"na":false}}),t);
+        p.on_frame(&json!({"t":"pvp","time":[1],"regras":{"nivelMin":1},
+            "fila":{"na":false}}),t);
+        assert_eq!(p.next(Some(true),false,None,Some(40),t),Some(PvpAction::Join));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        p.on_reconnect();
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Info));
+        p.on_frame(&json!({"t":"pvp","fila":{"na":true}}),t);
+        assert_eq!(p.next(Some(false),false,None,Some(40),t),Some(PvpAction::Leave));
+    }
+    #[test]
+    fn server_vip_refusal_pauses_retries_until_user_rearms() {
+        let t = Instant::now();
+        let mut p = PvpAutomation::default();
+        p.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
+        assert!(p.status(Some(true),true,Some(false),Some(25),t).paused);
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),Some(PvpAction::Info));
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),
+            t + Duration::from_secs(30)),None);
+        assert_eq!(p.next(Some(false),true,Some(false),Some(25),t),None);
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
+            Some(PvpAction::SetVipAuto(true)));
+        p.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
+        p.on_user_toggle(); // Off/on happened between polling ticks.
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
+            Some(PvpAction::SetVipAuto(true)));
     }
     #[test]
     fn match_and_reconnect_require_fresh_server_status_before_requeue() {
