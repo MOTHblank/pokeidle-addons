@@ -46,6 +46,9 @@ pub(super) struct AutomationState {
     pub(super) market_snatch_draft: crate::native_market::SnatchTarget,
     pub(super) market_import: String,
     pub(super) market_notice: String,
+    /// Editor-only search text. Rule IDs keep simultaneous expanded pickers independent.
+    pub(super) market_item_searches: std::collections::HashMap<String,String>,
+    pub(super) market_snatch_item_search: String,
 }
 
 pub(super) struct HuntAccountState {
@@ -127,6 +130,8 @@ impl AccountRuntime {
                 },
                 market_import: String::new(),
                 market_notice: String::new(),
+                market_item_searches: std::collections::HashMap::new(),
+                market_snatch_item_search: String::new(),
             },
             hunt: HuntAccountState {
                 offline_history: None,

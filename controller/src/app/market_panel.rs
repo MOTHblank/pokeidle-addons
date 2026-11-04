@@ -5,6 +5,9 @@ use super::*;
 use crate::native_market::{BuyRule, MarketRules};
 
 pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
+    request_item_catalog(app);
+    let item_catalog=app.inventory_catalog.clone();
+    let item_catalog_error=app.inventory_catalog_error.clone();
     let profile = app.runtimes[index].game.profile;
     if app.runtimes[index].automation.market_draft.is_none() {
         match MarketRules::load(profile) {
@@ -18,6 +21,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
     let live_status=app.runtimes[index].game.native.as_ref().map(|n|n.snapshot().native_market);
     let mut save=false;
     let mut jump_to_snatch=false;
+    let mut retry_item_catalog=false;
     egui::Frame::new().fill(PANEL).corner_radius(10.0)
         .inner_margin(egui::Margin::same(12)).show(ui,|ui|{
         ui.horizontal_wrapped(|ui|{
@@ -110,7 +114,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 ui.horizontal_wrapped(|ui|{
                     ui.checkbox(&mut rule.enabled,"")
                         .on_hover_text(tr("Include this rule when automatic buying is enabled"));
-                    let item=if rule.kind=="item" {format!(" #{}",rule.item_id)} else {String::new()};
+                    let item=if rule.kind=="item" {
+                        format!(" · {}",item_name(item_catalog.as_deref(),rule.item_id))
+                    } else {String::new()};
                     ui.label(RichText::new(format!("{}{} · {} {}/{} · {}",
                         kind_label(&rule.kind),item,tr("max"),rule.buy_max,tr("unit"),
                         if rule.currency=="orb"{tr("Gems")}else{tr("Gold")}))
@@ -122,7 +128,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 });
                 egui::CollapsingHeader::new(tr("Edit rule & limits"))
                     .id_salt(("market-rule-editor",index,rule.id.as_str()))
-                    .default_open(false)
+                    .default_open(rule.buy_max==0 || (rule.kind=="item" && rule.item_id==0))
                     .show(ui,|ui|{
                         ui.horizontal_wrapped(|ui|{
                             egui::ComboBox::from_id_salt(("native-market-kind",index,i))
@@ -142,9 +148,18 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                     ui.selectable_value(&mut rule.currency,"gold".into(),tr("Gold"));
                                     ui.selectable_value(&mut rule.currency,"orb".into(),tr("Gems"));
                                 });
-                            if rule.kind=="item"{field(ui,tr("Item ID"),&mut rule.item_id);}
                             field(ui,tr("Max unit price"),&mut rule.buy_max);
                         });
+                        if rule.kind=="item" {
+                            let search=automation.market_item_searches
+                                .entry(rule.id.clone()).or_default();
+                            draw_item_picker(
+                                ui,item_catalog.as_deref(),item_catalog_error.as_deref(),
+                                search,&mut rule.item_id,
+                                format!("market-rule-item-picker-{index}-{}",rule.id),
+                                &mut retry_item_catalog
+                            );
+                        }
                         if rule.kind.starts_with("pokemon_") {
                             ui.label(RichText::new(tr("Pokémon potency (0 = any, 1–5)"))
                                 .size(10.0).color(MUTED));
@@ -186,7 +201,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             });
             ui.add_space(4.0);
         }
-        if let Some(i)=remove {cfg.rules.remove(i);}
+        if let Some(i)=remove {
+            let removed=cfg.rules.remove(i);
+            automation.market_item_searches.remove(&removed.id);
+        }
 
         ui.add_space(8.0);
         ui.separator();
@@ -206,8 +224,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             ui.label(RichText::new(
                 tr("Enter the offer ID and the highest price you will pay per unit. Before buying, Snatch checks the seller, quantity, currency, price and unlock time. It will not buy an offer it cannot verify.")
             ).size(10.0).color(DIM));
-            ui.horizontal_wrapped(|ui|{
+            {
                 let t=&mut automation.market_snatch_draft;
+                ui.horizontal_wrapped(|ui|{
                 egui::ComboBox::from_id_salt(("snatch-kind",index))
                     .selected_text(if t.kind=="pokemon"{"Pokémon"}else{tr("Item")})
                     .show_ui(ui,|ui|{
@@ -221,8 +240,16 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         ui.selectable_value(&mut t.currency,"orb".into(),tr("Gems"));
                     });
                 field(ui,tr("Listing #"),&mut t.id);
-                if t.kind=="item" {field(ui,tr("Item ID"),&mut t.item_id);}
                 field(ui,tr("Max unit price"),&mut t.max_price);
+                });
+                if t.kind=="item" {
+                    draw_item_picker(
+                        ui,item_catalog.as_deref(),item_catalog_error.as_deref(),
+                        &mut automation.market_snatch_item_search,&mut t.item_id,
+                        format!("market-snatch-item-picker-{index}"),
+                        &mut retry_item_catalog
+                    );
+                }
                 if ui.add_enabled(cfg.snatch_targets.len()<40,
                     egui::Button::new(tr("Add to Snatch"))).clicked() {
                     let mut target=t.clone();
@@ -230,7 +257,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     if target.id==0 || target.max_price==0 ||
                         (target.kind=="item" && target.item_id==0) {
                         automation.market_notice=
-                            tr("Enter a real listing ID, item ID (for items), and maximum price.").into();
+                            tr("Choose an item (for item listings), enter a real listing ID, and set a maximum price.").into();
                     } else if cfg.snatch_targets.iter().any(|old|old.id==target.id) {
                         automation.market_notice=
                             tr("This offer is already in your Snatch list.").into();
@@ -240,7 +267,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         save=true;
                     }
                 }
-            });
+            }
             let mut remove=None;
             for (i,t) in cfg.snatch_targets.iter().enumerate() {
                 let seen=live_status.as_ref().and_then(|st|
@@ -250,7 +277,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                     ui.horizontal_wrapped(|ui|{
                         ui.label(RichText::new(format!(
                             "#{} · {} · {} · {} {} / {}",
-                            t.id,if t.kind=="pokemon"{"Pokémon"}else{tr("Item")},
+                            t.id,if t.kind=="pokemon"{"Pokémon"}else{
+                                item_name(item_catalog.as_deref(),t.item_id)
+                            },
                             if t.currency=="orb"{tr("Gems")}else{tr("Gold")},
                             tr("max"),t.max_price,tr("unit")
                         )).size(11.0).strong().color(TEXT));
@@ -292,7 +321,9 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         ui.horizontal_wrapped(|ui|{
                             ui.label(RichText::new(format!(
                                 "#{} · {} · {} {} /{} · {}x · {}",
-                                row.id,tr(&row.kind),row.price,tr(&row.currency),
+                                row.id,if row.kind=="item" {
+                                    item_name(item_catalog.as_deref(),row.item_id)
+                                } else {tr(&row.kind).to_owned()},row.price,tr(&row.currency),
                                 tr("unit"),row.quantity,tr_dynamic(row.phase.clone())
                             )).size(10.0).color(MUTED));
                             if ui.add_enabled(cfg.snatch_targets.len()<40,
@@ -342,6 +373,7 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                 match MarketRules::import_watch(&automation.market_import) {
                     Ok(imported)=>{
                         *cfg=imported;
+                        automation.market_item_searches.clear();
                         automation.market_notice=tr("Rules imported. Review and save them to use automatic buying.").into();
                     }
                     Err(error)=>automation.market_notice=format!("Import rejected: {error}"),
@@ -352,13 +384,22 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
             if ui.button(tr("Save market rules")).clicked(){save=true;}
             if ui.small_button(tr("Revert unsaved changes")).clicked(){
                 match MarketRules::load(profile) {
-                    Ok(saved)=>{*cfg=saved;automation.market_notice=tr("Reloaded saved market rules.").into();}
+                    Ok(saved)=>{
+                        *cfg=saved;
+                        automation.market_item_searches.clear();
+                        automation.market_notice=tr("Reloaded saved market rules.").into();
+                    }
                     Err(error)=>automation.market_notice=error,
                 }
             }
             ui.label(RichText::new(tr("Changes take effect only after Save.")).size(10.0).color(DIM));
         });
     });
+    if retry_item_catalog {
+        app.inventory_catalog_error=None;
+        app.inventory_catalog_busy=false;
+        request_item_catalog(app);
+    }
     if save {
         let cfg=app.runtimes[index].automation.market_draft.as_ref().cloned().unwrap_or_default();
         let result=match app.runtimes[index].game.native.as_ref() {
@@ -462,6 +503,76 @@ fn draw_market_copy_controls(app: &mut ControllerApp, ui: &mut egui::Ui, source:
     };
 }
 
+
+fn item_name(catalog:Option<&ItemCatalog>,id:u64)->String {
+    if id==0 {return tr("No item selected").to_owned()}
+    catalog.map(|c|c.name(id)).unwrap_or_else(||format!("Item #{id}"))
+}
+
+fn matching_items(catalog:&ItemCatalog,query:&str,limit:usize)->Vec<(u64,String)> {
+    let needle=query.trim().to_lowercase();
+    let mut rows=catalog.items.iter()
+        .filter(|(_,item)|needle.is_empty() || item.name.to_lowercase().contains(&needle))
+        .map(|(id,item)|(*id,item.name.clone()))
+        .collect::<Vec<_>>();
+    rows.sort_by(|a,b|a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    rows.truncate(limit);
+    rows
+}
+
+fn draw_item_picker(
+    ui:&mut egui::Ui,
+    catalog:Option<&ItemCatalog>,
+    catalog_error:Option<&str>,
+    search:&mut String,
+    selected:&mut u64,
+    id_salt:String,
+    retry:&mut bool,
+) {
+    let selected_name=item_name(catalog,*selected);
+    egui::CollapsingHeader::new(format!("{} · {}",tr("Item"),selected_name))
+        .id_salt(id_salt)
+        .default_open(*selected==0)
+        .show(ui,|ui|{
+            let Some(catalog)=catalog else {
+                if let Some(error)=catalog_error {
+                    ui.label(RichText::new(format!("{}: {error}",tr("Item catalog unavailable")))
+                        .size(10.0).color(WARN));
+                    if ui.small_button(tr("Retry item catalog")).clicked(){*retry=true;}
+                } else {
+                    ui.label(RichText::new(tr("Loading PokéIdle item catalog…"))
+                        .size(10.0).color(DIM));
+                }
+                return;
+            };
+            ui.add(egui::TextEdit::singleline(search)
+                .hint_text(tr("Search items by name…"))
+                .desired_width(f32::INFINITY));
+            let matches=matching_items(catalog,search,80);
+            if matches.is_empty() {
+                ui.label(RichText::new(tr("No matching items")).size(10.0).color(DIM));
+                return;
+            }
+            egui::ScrollArea::vertical().max_height(190.0).show(ui,|ui|{
+                for (id,name) in &matches {
+                    let active=*selected==*id;
+                    if ui.selectable_label(active,name).clicked() {
+                        *selected=*id;
+                        search.clear();
+                    }
+                }
+            });
+            if matches.len()==80 {
+                ui.label(RichText::new(tr("Showing the first 80 matches. Type more to narrow the catalog."))
+                    .size(9.0).color(DIM));
+            }
+            if *selected>0 && !catalog.items.contains_key(selected) {
+                ui.label(RichText::new(tr("The saved item is not present in the current PokéIdle catalog. Choose a replacement before saving."))
+                    .size(10.0).color(WARN));
+            }
+        });
+}
+
 fn field(ui:&mut egui::Ui,label:&str,value:&mut u64){
     ui.label(RichText::new(label).size(10.0).color(MUTED));
     ui.add(egui::DragValue::new(value).range(0..=1_000_000_000_000u64).speed(1.0));
@@ -479,4 +590,31 @@ fn new_rule(cfg:&mut MarketRules,kind:&str) {
         .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
     cfg.rules.push(BuyRule{id,kind:kind.into(),
         currency:if kind=="pokemon_shiny"{"orb"}else{"gold"}.into(),..Default::default()});
+}
+
+
+#[cfg(test)]
+mod item_picker_tests {
+    use super::*;
+
+    #[test]
+    fn item_search_is_case_insensitive_and_name_based() {
+        let catalog=crate::native_items::parse(r#"{"items":[
+            {"id":205,"name":"Revive"},{"id":206,"name":"Max Revive"},
+            {"id":70000,"name":"Bronze Boss Token"}]}"#).unwrap();
+        assert_eq!(matching_items(&catalog,"revive",80),
+            vec![(206,"Max Revive".into()),(205,"Revive".into())]);
+        assert_eq!(matching_items(&catalog,"BOSS",80),
+            vec![(70000,"Bronze Boss Token".into())]);
+        assert!(matching_items(&catalog,"205",80).is_empty());
+    }
+
+    #[test]
+    fn selected_item_uses_catalog_name_without_changing_protocol_id() {
+        let catalog=crate::native_items::parse(
+            r#"{"items":[{"id":205,"name":"Revive"}]}"#).unwrap();
+        assert_eq!(item_name(Some(&catalog),205),"Revive");
+        assert_eq!(item_name(Some(&catalog),999),"Item #999");
+        assert_eq!(item_name(Some(&catalog),0),tr("No item selected"));
+    }
 }
