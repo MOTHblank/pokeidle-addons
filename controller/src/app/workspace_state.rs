@@ -44,6 +44,7 @@ pub(super) struct WorkspaceState {
     pub(super) hunt_page: usize,
     pub(super) boss_selected: [String;4],
     pub(super) boss_leave_confirm: [bool;4],
+    pub(super) boss_leave_target: [Option<String>;4],
     pub(super) boss_history_page: [usize;4],
     pub(super) boss_history_filter: [String;4],
     pub(super) selected_details: Option<usize>,
@@ -72,6 +73,7 @@ impl Default for WorkspaceState {
             hunt_page: 0,
             boss_selected: std::array::from_fn(|_| String::new()),
             boss_leave_confirm: [false;4],
+            boss_leave_target: std::array::from_fn(|_| None),
             boss_history_page: [0;4],
             boss_history_filter: std::array::from_fn(|_| String::new()),
             selected_details: None,
@@ -104,6 +106,7 @@ impl WorkspaceState {
         self.hunt_page = 0;
         // A leave confirmation must never survive a switch between accounts.
         self.boss_leave_confirm = [false;4];
+        self.boss_leave_target = std::array::from_fn(|_| None);
     }
 }
 
@@ -115,10 +118,12 @@ mod tests {
     fn switching_accounts_discards_leave_confirmations_but_keeps_history_views() {
         let mut workspace = WorkspaceState::default();
         workspace.boss_leave_confirm = [true;4];
+        workspace.boss_leave_target[1] = Some("old-arena".into());
         workspace.boss_history_page[1] = 2;
         workspace.boss_history_filter[1] = "example".into();
         workspace.select_account(2);
         assert_eq!(workspace.boss_leave_confirm, [false;4]);
+        assert!(workspace.boss_leave_target.iter().all(Option::is_none));
         assert_eq!(workspace.boss_history_page[1], 2);
         assert_eq!(workspace.boss_history_filter[1], "example");
     }
