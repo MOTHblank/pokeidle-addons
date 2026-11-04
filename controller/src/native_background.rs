@@ -66,6 +66,31 @@ pub fn finish_game_workers_after_window() {
     }
 }
 
+/// Minimal queue metrics for the opt-in Diagnostics page. Never clone the
+/// larger market, roster, or gameplay snapshots just to read queue lengths.
+#[derive(Clone, Debug)]
+pub struct NativeDiagnosticsSnapshot {
+    pub phase: String,
+    pub capture_queued: usize,
+    pub automation_queued: usize,
+    pub automation_pending: bool,
+    pub market_pending: bool,
+    pub restock_pending: bool,
+}
+
+impl NativeDiagnosticsSnapshot {
+    fn from_state(state: &NativeSnapshot) -> Self {
+        Self {
+            phase: state.phase.clone(),
+            capture_queued: state.native_capture_queue,
+            automation_queued: state.native_automation.queued,
+            automation_pending: state.native_automation.pending_field.is_some(),
+            market_pending: state.native_market.pending.is_some(),
+            restock_pending: state.native_restock.pending,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NativeSnapshot {
     pub phase: String,
@@ -439,6 +464,13 @@ impl NativeSession {
     }
     pub fn snapshot(&self) -> NativeSnapshot {
         self.snapshot.lock().map(|status| status.clone()).unwrap_or_default()
+    }
+
+    /// On-demand and nonblocking: if the game worker owns its snapshot,
+    /// Diagnostics skips this tick rather than stalling automation or the UI.
+    pub fn diagnostics_snapshot(&self) -> Option<NativeDiagnosticsSnapshot> {
+        let state = self.snapshot.try_lock().ok()?;
+        Some(NativeDiagnosticsSnapshot::from_state(&state))
     }
     /// Allocation-free roster change token. A new session timestamp prevents
     /// old revision numbers from hiding a freshly authenticated game session.
@@ -1421,6 +1453,24 @@ mod tests {
         view.in_center=true;
         assert!(current_background_hunt(&view).is_none());
     }
+    #[test]
+    fn compact_diagnostics_reads_only_queue_metadata() {
+        let mut state = NativeSnapshot::default();
+        state.phase = "Online".into();
+        state.native_capture_queue = 7;
+        state.native_automation.queued = 3;
+        state.native_automation.pending_field = Some("potionIds".into());
+        state.native_market.pending = Some("order".into());
+        state.native_restock.pending = true;
+        let compact = NativeDiagnosticsSnapshot::from_state(&state);
+        assert_eq!(compact.phase, "Online");
+        assert_eq!(compact.capture_queued, 7);
+        assert_eq!(compact.automation_queued, 3);
+        assert!(compact.automation_pending);
+        assert!(compact.market_pending);
+        assert!(compact.restock_pending);
+    }
+
     #[test]
     fn connection_setup_has_time_for_server_handshake() {
         // A 60 ms WebSocket handshake timeout regressed otherwise valid
