@@ -3,10 +3,14 @@
 //! The miner is deliberately independent from PokéIdle authentication: a
 //! missing or expired Twitch login never prevents the game worker from running.
 
-use moth_twitch::{Credentials, Miner, MinerConfig, MinerControl, MinerSnapshot};
+use moth_twitch::{
+    Credentials, Miner, MinerConfig, MinerControl, MinerEvent, MinerEventSink, MinerSnapshot,
+};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 
 #[derive(Default)]
 struct TwitchControlState {
@@ -76,8 +80,78 @@ impl TwitchMinerControl {
 }
 
 type PhaseWake = Arc<dyn Fn() + Send + Sync>;
+type TwitchLogMessage = (String, MinerEvent);
+
+static TWITCH_LOG_SENDER: OnceLock<SyncSender<TwitchLogMessage>> = OnceLock::new();
+
+fn log_miner_event(account:&str,event:MinerEvent) {
+    let prefix=format!("{account} Twitch");
+    match event {
+        MinerEvent::Connected {login,reference_client} => crate::logging::info(&format!(
+            "{prefix} authenticated as {login} ({})",
+            if reference_client {"reference device session"} else {"Firefox compatibility session"}
+        )),
+        MinerEvent::Stopped => crate::logging::info(&format!(
+            "{prefix} miner stopped"
+        )),
+        MinerEvent::RosterUpdated {channels} => crate::logging::info(&format!(
+            "{prefix} official channel roster loaded: {channels} channel(s)"
+        )),
+        MinerEvent::PubSubConnected => crate::logging::info(&format!(
+            "{prefix} channel-points events connected"
+        )),
+        MinerEvent::StreamOnline {channel,balance} => {
+            let suffix=balance.map(|points|format!(" ({points} points)")).unwrap_or_default();
+            crate::logging::info(&format!("{prefix} online: {channel}{suffix}"));
+        }
+        MinerEvent::StreamOffline {channel} => crate::logging::info(&format!(
+            "{prefix} offline: {channel}"
+        )),
+        MinerEvent::WatchSlotStarted {channel,slot,active} => crate::logging::info(&format!(
+            "{prefix} watch slot {slot}/2 selected: {channel} ({active}/2 active)"
+        )),
+        MinerEvent::WatchSignalAccepted {channel} => crate::logging::info(&format!(
+            "{prefix} watch signal accepted: {channel}; first minute-watched acknowledgement"
+        )),
+        MinerEvent::WatchSlotStopped {channel,reason,active} => crate::logging::info(&format!(
+            "{prefix} watch slot released: {channel} ({reason}; {active}/2 active)"
+        )),
+        MinerEvent::PointsGained {channel,amount,balance} => crate::logging::info(&format!(
+            "{prefix} +{amount} watch points: {channel} (balance {balance})"
+        )),
+        MinerEvent::BonusClaimed {channel} => crate::logging::info(&format!(
+            "{prefix} bonus chest claimed: {channel}"
+        )),
+        MinerEvent::StreakConfirmed {channel,reason} => crate::logging::info(&format!(
+            "{prefix} streak confirmed: {channel} ({reason})"
+        )),
+        MinerEvent::Warning(message) => crate::logging::warn(&format!(
+            "{prefix}: {message}"
+        )),
+    }
+}
+
+fn twitch_log_sender()->SyncSender<TwitchLogMessage> {
+    TWITCH_LOG_SENDER.get_or_init(|| {
+        let (tx,rx)=mpsc::sync_channel::<TwitchLogMessage>(256);
+        if let Err(error)=thread::Builder::new()
+            .name("moth-twitch-logger".into())
+            .spawn(move || {
+                while let Ok((account,event))=rx.recv() {
+                    log_miner_event(&account,event);
+                }
+            })
+        {
+            crate::logging::warn(&format!(
+                "Twitch event logger could not start: {error}"
+            ));
+        }
+        tx
+    }).clone()
+}
 
 pub struct TwitchMinerSession {
+    account_label: String,
     miner: Mutex<Option<Miner>>,
     control: TwitchMinerControl,
     phase_wake: Mutex<Option<PhaseWake>>,
@@ -85,9 +159,10 @@ pub struct TwitchMinerSession {
 }
 
 impl TwitchMinerSession {
-    pub fn start_optional(token: Option<&str>) -> Self {
+    pub fn start_optional(account_label:impl Into<String>,token: Option<&str>) -> Self {
         let control = TwitchMinerControl::default();
         let session = Self {
+            account_label:account_label.into(),
             miner: Mutex::new(None),
             control,
             phase_wake: Mutex::new(None),
@@ -128,8 +203,14 @@ impl TwitchMinerSession {
         }
         let credentials = Credentials::token_only(token)
             .map_err(|error| error.to_string())?;
-        let miner = Miner::start(credentials, MinerConfig::default())
-            .map_err(|error| error.to_string())?;
+        let log_sender=twitch_log_sender();
+        let account_label=self.account_label.clone();
+        let event_sink:MinerEventSink=Arc::new(move |event| {
+            let _=log_sender.try_send((account_label.clone(),event));
+        });
+        let miner = Miner::start_with_sink(
+            credentials, MinerConfig::default(), Some(event_sink)
+        ).map_err(|error| error.to_string())?;
         if let Some(wake)=self.phase_wake.lock().ok().and_then(|current|current.clone()) {
             miner.set_phase_waker(wake);
         }

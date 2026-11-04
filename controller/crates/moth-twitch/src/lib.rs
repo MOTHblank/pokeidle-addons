@@ -17,7 +17,7 @@ pub use client::{
     DEFAULT_CLIENT_VERSION,
     DEVICE_FLOW_SCOPES, LINUX_FIREFOX_USER_AGENT, REFERENCE_CLIENT_ID,
 };
-pub use miner::{Miner, MinerControl};
+pub use miner::{Miner, MinerControl, MinerEventSink};
 pub use model::{
     normalize_login, Credentials, MinerConfig, MinerEvent, MinerPhase, MinerSnapshot,
     StreamerState, MAX_CHANNELS,
