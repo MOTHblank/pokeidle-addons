@@ -3,6 +3,7 @@ use crate::model::{
     normalize_channels, Credentials, MinerConfig, MinerEvent, MinerPhase, MinerSnapshot,
     StreamerState,
 };
+use crate::pubsub::{self, PubSubEvent};
 use crate::watch::WatchClient;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,9 @@ use std::time::{Duration, Instant};
 
 type PhaseWake = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 const WATCH_SLOTS: usize = 2;
+const STREAK_PRIORITY_BASE: Duration = Duration::from_secs(7 * 60);
+const STREAK_PRIORITY_EXTENDED: Duration = Duration::from_secs(20 * 60);
+const LONG_SESSION: Duration = Duration::from_secs(10 * 60 * 60);
 
 #[derive(Clone)]
 pub struct MinerControl {
@@ -179,8 +183,10 @@ struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
     last_watch: Option<Instant>,
+    last_media_activity: Option<Instant>,
     last_watch_attempt: Option<Instant>,
     watch_failures: u8,
+    watch_reward_count: u8,
     last_points_attempt: Option<Instant>,
     last_points_checked: Option<Instant>,
     last_claim_id: Option<String>,
@@ -191,6 +197,7 @@ struct ChannelCache {
     streak_confirmed: Option<bool>,
     streak_length: Option<u32>,
     watch_attempts: u32,
+    streak_priority_exhausted: bool,
     last_error: Option<String>,
 }
 
@@ -200,10 +207,19 @@ struct WatchSlot {
     login: String,
     broadcast_id: String,
     entered: Instant,
+    streak_limit: Duration,
 }
 
 fn streak_pending(channel:&ChannelCache)->bool {
-    channel.streak_confirmed!=Some(true) && channel.watch_attempts<20
+    channel.streak_confirmed!=Some(true) && !channel.streak_priority_exhausted
+}
+
+fn watch_backed_off(channel:&ChannelCache,now:Instant)->bool {
+    if channel.watch_failures<3 {return false;}
+    let steps=u64::from(channel.watch_failures.saturating_sub(2));
+    let seconds=(steps*5*60).min(30*60);
+    channel.last_watch_attempt.is_some_and(|attempt|
+        now.saturating_duration_since(attempt)<Duration::from_secs(seconds))
 }
 
 /// Hold two candidate broadcasts long enough for Twitch to issue a streak
@@ -212,14 +228,15 @@ fn streak_pending(channel:&ChannelCache)->bool {
 fn refresh_watch_slots(
     slots:&mut Vec<WatchSlot>, live:&[String],
     cache:&mut HashMap<String,ChannelCache>,favorites:&[String],
-    now:Instant,
+    now:Instant, streak_limit:Duration,
 ) {
     for slot in slots.iter() {
-        if now.saturating_duration_since(slot.entered)>=Duration::from_secs(20*60) {
+        if now.saturating_duration_since(slot.entered)>=slot.streak_limit {
             if let Some(channel)=cache.get_mut(&slot.login) {
-                // A timed-out attempt does not imply the streak was awarded.
+                // Like the reference miner, stop prioritizing an unconfirmed
+                // streak after its watch window without claiming success.
                 if channel.streak_confirmed!=Some(true) {
-                    channel.watch_attempts=20;
+                    channel.streak_priority_exhausted=true;
                 }
             }
         }
@@ -233,22 +250,16 @@ fn refresh_watch_slots(
             || channel.broadcast_id.as_deref()!=Some(slot.broadcast_id.as_str()) {
             return false;
         }
-        let backed_off=channel.watch_failures>=3
-            && channel.last_watch_attempt.is_some_and(|at|
-                now.saturating_duration_since(at)<Duration::from_secs(300));
-        if backed_off {return false;}
+        if watch_backed_off(channel,now) {return false;}
         let elapsed=now.saturating_duration_since(slot.entered);
-        if streak_pending(channel) && elapsed<Duration::from_secs(20*60) {
+        if streak_pending(channel) && elapsed<slot.streak_limit {
             return true;
         }
         !waiting_streak && elapsed<Duration::from_secs(600)
     });
     let mut candidates=live.iter().filter(|name|cache.get(*name)
         .is_some_and(|channel| {
-            channel.broadcast_id.is_some() &&
-                !(channel.watch_failures>=3 &&
-                    channel.last_watch_attempt.is_some_and(|at|
-                        now.saturating_duration_since(at)<Duration::from_secs(300)))
+            channel.broadcast_id.is_some() && !watch_backed_off(channel,now)
         })).collect::<Vec<_>>();
     candidates.sort_by(|a,b|watch_priority(a,b,cache,favorites));
     for name in candidates {
@@ -257,7 +268,7 @@ fn refresh_watch_slots(
         let Some(broadcast_id)=cache.get(name).and_then(|c|c.broadcast_id.clone())
             else {continue};
         slots.push(WatchSlot {
-            login:name.clone(),broadcast_id,entered:now
+            login:name.clone(),broadcast_id,entered:now,streak_limit
         });
     }
 }
