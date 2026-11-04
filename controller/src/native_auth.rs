@@ -244,6 +244,33 @@ pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
     platform::clear_kick(profile)
 }
 
+const MAX_TWITCH_TOKEN_BYTES: usize = 2048;
+fn check_twitch_token(token: &str) -> Result<&str, String> {
+    let token = token.trim();
+    if token.is_empty() || token.len() > MAX_TWITCH_TOKEN_BYTES ||
+        token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return Err("Invalid Twitch auth token".into());
+    }
+    Ok(token)
+}
+pub fn load_twitch_token(profile: GameProfile) -> Result<Option<String>, String> {
+    platform::load_twitch(profile)?.map(|bytes| {
+        if bytes.len() > MAX_TWITCH_TOKEN_BYTES {
+            return Err("Stored Twitch token is oversized".into());
+        }
+        let token = String::from_utf8(bytes)
+            .map_err(|_| "Stored Twitch token is invalid".to_owned())?;
+        check_twitch_token(&token).map(str::to_owned)
+    }).transpose()
+}
+pub fn save_twitch_token(profile: GameProfile, token: &str) -> Result<(), String> {
+    platform::save_twitch(profile, check_twitch_token(token)?.as_bytes())
+}
+pub fn clear_twitch_token(profile: GameProfile) -> Result<(), String> {
+    platform::clear_twitch(profile)
+}
+
 // UI events may toggle Auto Catch and native Restock in rapid succession.
 // Serialize the read-modify-encrypt-write cycle so one toggle never silently
 // overwrites the other; no credentials are exposed outside OS vault storage.
@@ -572,6 +599,10 @@ mod platform {
         Ok(config::data_root()?.join("native-credentials")
             .join(format!("{}.kick.dpapi", profile.name())))
     }
+    fn twitch_location(profile: GameProfile) -> Result<std::path::PathBuf, String> {
+        Ok(config::data_root()?.join("native-credentials")
+            .join(format!("{}.twitch.dpapi", profile.name())))
+    }
     // Write encrypted data beside its destination and rename it into place.
     // An interrupted write must never truncate the previous valid login.
     fn atomic_replace(path:&std::path::Path,bytes:&[u8])->Result<(),String>{
@@ -625,6 +656,25 @@ mod platform {
             Err(_) => Err("Could not remove Kick login".into()),
         }
     }
+    pub fn load_twitch(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
+        let bytes = match fs::read(twitch_location(profile)?) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err("Could not read protected Twitch login".into()),
+        };
+        crypt(&bytes, false).map(Some)
+    }
+    pub fn save_twitch(profile: GameProfile, token: &[u8]) -> Result<(), String> {
+        let cipher = crypt(token, true)?;
+        atomic_replace(&twitch_location(profile)?, &cipher)
+    }
+    pub fn clear_twitch(profile: GameProfile) -> Result<(), String> {
+        match fs::remove_file(twitch_location(profile)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("Could not remove Twitch login".into()),
+        }
+    }
     pub fn load(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let path = location(profile)?;
         let cipher = match fs::read(path) {
@@ -676,12 +726,16 @@ mod platform {
     use std::time::{Duration,Instant};
     const APP: &str = "moth-pokeidle-native";
     const KICK_APP: &str = "moth-kick-native";
+    const TWITCH_APP: &str = "moth-twitch-native";
     // User profile number is used only as an OS keyring attribute.
     fn base_args(profile: GameProfile) -> [&'static str; 4] {
         ["application", APP, "profile", profile.name()]
     }
     fn kick_args(profile: GameProfile) -> [&'static str; 4] {
         ["application", KICK_APP, "profile", profile.name()]
+    }
+    fn twitch_args(profile: GameProfile) -> [&'static str; 4] {
+        ["application", TWITCH_APP, "profile", profile.name()]
     }
     // secret-tool lookup exits with status 1 when no matching item exists.
     // An absent first-run login must not be mistaken for a broken keyring.
@@ -790,6 +844,27 @@ mod platform {
         cmd.extend(args);
         secret_tool(&cmd, None).map(|_| ())
     }
+    pub fn load_twitch(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
+        let args = twitch_args(profile);
+        let mut cmd = vec!["lookup"];
+        cmd.extend(args);
+        let mut found = secret_tool(&cmd, None)?;
+        while found.last() == Some(&b'\n') { found.pop(); }
+        if found.is_empty() { return Ok(None); }
+        Ok(Some(found))
+    }
+    pub fn save_twitch(profile: GameProfile, token: &[u8]) -> Result<(), String> {
+        let args = twitch_args(profile);
+        let mut cmd = vec!["store", "--label=Moth Twitch account login"];
+        cmd.extend(args);
+        secret_tool(&cmd, Some(token)).map(|_| ())
+    }
+    pub fn clear_twitch(profile: GameProfile) -> Result<(), String> {
+        let args = twitch_args(profile);
+        let mut cmd = vec!["clear"];
+        cmd.extend(args);
+        secret_tool(&cmd, None).map(|_| ())
+    }
     pub fn load(profile: GameProfile) -> Result<Option<Vec<u8>>, String> {
         let args = base_args(profile);
         let mut cmd = vec!["lookup"];
@@ -843,6 +918,13 @@ mod tests {
         assert!(check_kick_token("  ").is_err());
         assert!(check_kick_token("some token").is_err());
         assert_eq!(check_kick_token("Bearer abc.DEF").unwrap(), "abc.DEF");
+    }
+    #[test]
+    fn twitch_token_validation_rejects_whitespace_and_control_bytes() {
+        assert!(check_twitch_token("  ").is_err());
+        assert!(check_twitch_token("abc def").is_err());
+        assert!(check_twitch_token("abc\ndef").is_err());
+        assert_eq!(check_twitch_token("abc.DEF_123").unwrap(), "abc.DEF_123");
     }
     #[test]
     fn oversized_payload_is_rejected() {
