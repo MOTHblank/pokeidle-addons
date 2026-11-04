@@ -21,6 +21,42 @@ impl RateSource {
     }
 }
 
+pub(super) fn draw_hunt_switch_action(
+    ui:&mut egui::Ui,current:bool,pending:bool,live:bool,
+)->bool {
+    if current {
+        ui.add_enabled(false, egui::Button::new(tr("Current"))
+            .fill(GOOD.linear_multiply(0.12))
+            .stroke(Stroke::new(1.0, GOOD.linear_multiply(0.6))));
+        return false;
+    }
+    if pending {
+        ui.add_enabled(false, egui::Button::new(tr("Switching…"))
+            .fill(WARN.linear_multiply(0.14))
+            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+        ui.label(RichText::new(tr("Waiting for a safe opening…"))
+            .size(10.0).color(WARN));
+        return false;
+    }
+    ui.add_enabled(live, egui::Button::new(tr("Hunt →"))).clicked()
+}
+
+pub(super) fn request_hunt_with_feedback(
+    native:&NativeSession,slug:&str,error:&mut Option<String>,
+    pending:&mut Option<String>,
+) {
+    match native.send_command(GameCommand::Hunt(slug.to_owned())) {
+        Ok(()) => {
+            *error=None;
+            *pending=Some(slug.to_owned());
+        }
+        Err(message) => {
+            *pending=None;
+            *error=Some(message);
+        }
+    }
+}
+
 pub(super) fn rate_label(ranking: HuntRanking) -> &'static str {
     match ranking {
         HuntRanking::TrainerXp | HuntRanking::PokemonXp => tr("XP/h"),
