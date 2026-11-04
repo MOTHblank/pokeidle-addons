@@ -1,6 +1,7 @@
 //! Server-native boss farming, safe hunt round trips and a bounded loot journal.
-//! Boss repetition/healing is entirely owned by PokéIdle; we only send the
-//! selected boss key once after a confirmed trip to the Pokémon Center.
+//! Boss repetition/healing is entirely owned by PokéIdle. Boss entry itself
+//! is routed through the same destination navigator Hunt Atlas uses, so hunt,
+//! Center and boss switches share one server-timed travel path.
 use crate::config::{data_root, GameProfile};
 use crate::native_gameplay::GameCommand;
 use crate::native_hunt_navigation::HuntNavigator;
@@ -372,7 +373,7 @@ impl BossManager {
         }
     }
     pub fn start(&mut self, key: &str, repeat: bool, hunt: &HuntView,
-                 navigator: &mut HuntNavigator, _now: Instant) -> Result<(), String> {
+                 navigator: &mut HuntNavigator, now: Instant) -> Result<(), String> {
         if self.trip.is_some() { return Err("A boss trip is already in progress".into()); }
         if self.view.auto || self.view.arena.is_some() {
             return Err("A boss encounter or server repetition is already active".into());
@@ -408,11 +409,11 @@ impl BossManager {
         });
         self.view.original_hunt = original;
         self.view.warning = None;
-        self.view.phase = "Waiting for a safe boss switch opening".into();
-        // Boss entry is a destination change, not a Center trip. Replace any
-        // older pending navigation and wait on the exact same server gate used
-        // by Hunt Atlas before sending the boss command.
-        navigator.cancel();
+        self.view.phase = "Switching to boss when the Hunt Atlas travel gate opens".into();
+        // This is now a real HuntNavigator destination. It gets the same
+        // server gate, retry cadence, cancellation and blocked-travel signal
+        // as a Hunt Atlas hunt change.
+        navigator.boss(key.to_owned(), repeat, now);
         Ok(())
     }
     pub fn stop(&mut self, navigator: &mut HuntNavigator,
