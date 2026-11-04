@@ -384,7 +384,7 @@ pub(super) fn draw_diagnostics_panel(
             let mut export_requested = false;
             let (sample, history, last_frame_ms, slowest_frame_ms,
                 recorded_frames, mean_frame_ms, p95_frame_ms,
-                preflight_ms, panel_ms, process_probe_ms, network_probe_ms,
+                preflight_ms, panel_ms, process_probe_ms, thread_probe_ms, network_probe_ms,
                 paused, refresh_network) = {
                 let sampler = app.diagnostics.get_or_insert_with(DiagnosticsSampler::default);
                 ui.horizontal(|ui| {
@@ -408,8 +408,8 @@ pub(super) fn draw_diagnostics_panel(
                     sampler.last_frame_ms, sampler.slowest_frame_ms,
                     sampler.recorded_frames, sampler.mean_frame_ms(), sampler.p95_frame_ms(),
                     sampler.last_preflight_ms, sampler.last_panel_ms,
-                    sampler.last_process_probe_ms, sampler.last_network_probe_ms,
-                    sampler.paused, refresh_network)
+                    sampler.last_process_probe_ms, sampler.last_thread_probe_ms,
+                    sampler.last_network_probe_ms, sampler.paused, refresh_network)
             };
 
             // Snapshot Kick accounting on exactly the same two-second tick.
@@ -598,6 +598,9 @@ pub(super) fn draw_diagnostics_panel(
                                 .unwrap_or_else(|| "—".into()), MUTED);
                         runtime_chip(ui, tr("Process probe"),
                             &process_probe_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
+                        runtime_chip(ui, tr("Thread probe (async)"),
+                            &thread_probe_ms.map(|ms| format!("{ms:.2} ms"))
                                 .unwrap_or_else(|| "—".into()), MUTED);
                         runtime_chip(ui, tr("Diagnostics refresh"),
                             &network_probe_ms.map(|ms| format!("{ms:.2} ms"))
