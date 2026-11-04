@@ -205,7 +205,7 @@ pub fn clear_kick_token(profile: GameProfile) -> Result<(), String> {
     platform::clear_kick(profile)
 }
 
-const MAX_TWITCH_TOKEN_BYTES: usize = 2048;
+const MAX_TWITCH_TOKEN_BYTES: usize = 2304;
 static TWITCH_WRITE:[std::sync::Mutex<()>;4]=
     [const {std::sync::Mutex::new(())};4];
 
