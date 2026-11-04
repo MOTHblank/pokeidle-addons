@@ -76,7 +76,15 @@ pub struct BossView {
     pub original_hunt: Option<String>,
     pub warning: Option<String>,
     pub storage_warning: Option<String>,
+    /// Shared with the disk writer; available without waiting for the game socket.
+    pub write_status: Arc<Mutex<LootWriteStatus>>,
     pub log: Arc<Vec<BossLoot>>,
+}
+
+#[derive(Default, Debug)]
+pub struct LootWriteStatus {
+    pub unsaved: bool,
+    pub warning: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,6 +150,19 @@ fn save_log(path: &PathBuf, entries: &[BossLoot]) -> Result<(), String> {
 /// Never overwrite a journal that could not be read. Damaged JSON is moved
 /// aside before a new journal is allowed to use the original path.
 fn load_log(path: &PathBuf) -> Result<(Vec<BossLoot>, Option<String>), String> {
+    // On Windows reading a directory can succeed with empty bytes. Never
+    // quarantine or rename anything except an actual regular journal file.
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
+            return Ok((Vec::new(), None)),
+        Err(error) => return Err(format!(
+            "Boss loot journal metadata unavailable (original preserved): {error}"
+        )),
+    };
+    if !metadata.file_type().is_file() {
+        return Err("Boss loot journal path is not a regular file (original preserved)".into());
+    }
     let data = match fs::read(path) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound =>
@@ -176,7 +197,9 @@ fn load_log(path: &PathBuf) -> Result<(Vec<BossLoot>, Option<String>), String> {
 }
 struct LootWriter {
     entries: Arc<Mutex<Vec<BossLoot>>>,
-    wake: mpsc::SyncSender<()>,
+    wake: Option<mpsc::SyncSender<()>>,
+    worker: Option<thread::JoinHandle<()>>,
+    status: Arc<Mutex<LootWriteStatus>>,
 }
 impl LootWriter {
     fn start(profile: GameProfile, nick: &str) -> Result<(Self, Vec<BossLoot>, Option<String>), String> {
@@ -189,29 +212,83 @@ impl LootWriter {
             .collect::<Vec<_>>().into_iter().rev().collect();
         let entries = Arc::new(Mutex::new(existing.clone()));
         let writer_entries = Arc::clone(&entries);
+        let status = Arc::new(Mutex::new(LootWriteStatus::default()));
+        let writer_status = Arc::clone(&status);
         let (wake, rx) = mpsc::sync_channel(1);
-        thread::Builder::new().name("moth-boss-loot".into()).spawn(move || {
+        let worker = thread::Builder::new().name("moth-boss-loot".into()).spawn(move || {
             let _lease = lease;
-            while rx.recv().is_ok() {
-                // A burst of victories creates one latest-state write, not a
-                // growing queue of serialized snapshots on the game worker.
+            let mut pending = false;
+            let mut disconnected = false;
+            let mut failures = 0u8;
+            loop {
+                if !pending {
+                    if rx.recv().is_err() { break; }
+                    pending = true;
+                }
+                // Coalesce all victory notifications; the full document is
+                // serialized only by this worker, never by the game socket.
                 while rx.try_recv().is_ok() {}
-                let snapshot = writer_entries.lock().map(|entries| entries.clone());
-                if let Ok(entries) = snapshot {
-                    if let Err(error) = save_log(&path, &entries) {
+                let result = writer_entries.lock()
+                    .map_err(|_| "Boss loot snapshot lock poisoned".to_owned())
+                    .and_then(|entries| save_log(&path, &entries));
+                match result {
+                    Ok(()) => {
+                        if let Ok(mut state) = writer_status.lock() {
+                            state.unsaved = false;
+                            state.warning = None;
+                        }
+                        pending = false;
+                        failures = 0;
+                    }
+                    Err(error) => {
                         crate::logging::warn(&error);
+                        if let Ok(mut state) = writer_status.lock() {
+                            state.unsaved = true;
+                            state.warning = Some(format!(
+                                "Boss loot could not be saved; retrying: {error}"
+                            ));
+                        }
+                        failures = failures.saturating_add(1);
+                        // A closed game worker must not hang application exit
+                        // indefinitely on a permanently read-only filesystem.
+                        if disconnected && failures >= 3 { break; }
+                        if disconnected {
+                            thread::sleep(Duration::from_millis(250));
+                        } else {
+                            let seconds = 1u64 << failures.min(5);
+                            if let Err(mpsc::RecvTimeoutError::Disconnected) =
+                                rx.recv_timeout(Duration::from_secs(seconds)) {
+                                disconnected = true;
+                            }
+                        }
+                        // Keep the latest snapshot pending even without any
+                        // new victories; retry a failed write automatically.
                     }
                 }
             }
         }).map_err(|e| format!("Could not start boss loot writer: {e}"))?;
-        Ok((Self { entries, wake }, existing, load_warning))
+        Ok((Self { entries, wake: Some(wake), worker: Some(worker), status },
+            existing, load_warning))
     }
     fn append(&self, item: BossLoot) {
         if let Ok(mut entries) = self.entries.lock() {
             entries.push(item);
             if entries.len() > MAX_LOOT { entries.remove(0); }
+            if let Ok(mut state) = self.status.lock() { state.unsaved = true; }
+            if let Some(wake) = self.wake.as_ref() { let _ = wake.try_send(()); }
         }
-        let _ = self.wake.try_send(());
+    }
+}
+impl Drop for LootWriter {
+    fn drop(&mut self) {
+        // Dropped only on the game worker. Close the queue and join its final
+        // bounded persistence attempt before that worker is considered done.
+        self.wake.take();
+        if let Some(worker) = self.worker.take() {
+            if worker.join().is_err() {
+                crate::logging::warn("Boss loot writer panicked during shutdown");
+            }
+        }
     }
 }
 
@@ -233,8 +310,10 @@ impl BossManager {
                     "Boss loot journal is unavailable; new drops will not survive restart".into()))
             }
         };
+        let write_status = writer.as_ref()
+            .map(|writer| Arc::clone(&writer.status)).unwrap_or_default();
         Self { view: BossView {
-            log: Arc::new(log), storage_warning, ..Default::default()
+            log: Arc::new(log), storage_warning, write_status, ..Default::default()
         }, trip: None, writer }
     }
     pub fn publish(&self, shared: &Arc<Mutex<BossView>>) {
@@ -1044,8 +1123,15 @@ mod tests {
 
     #[test]
     fn unreadable_journal_is_not_replaced_by_empty_history() {
-        // Reading a directory as a journal fails; new persistence must not start.
-        assert!(load_log(&std::env::temp_dir()).is_err());
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap_or_default().as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "moth-boss-directory-test-{}-{stamp}", std::process::id()));
+        let journal = root.join("journal.json");
+        fs::create_dir_all(&journal).unwrap();
+        assert!(load_log(&journal).is_err());
+        assert!(journal.is_dir(), "the invalid journal path must not be renamed");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

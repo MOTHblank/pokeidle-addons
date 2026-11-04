@@ -1512,6 +1512,7 @@ pub fn run() -> Result<(), String> {
     // Window is gone, but the controller process stays alive long enough to
     // finish each already-running browser close (including Stop mid-handoff).
     finish_firefox_shutdown_after_window();
+    crate::native_background::finish_game_workers_after_window();
     result.map_err(|error| format!("could not start controller UI: {error}"))
 }
 

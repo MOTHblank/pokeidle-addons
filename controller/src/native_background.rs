@@ -19,7 +19,7 @@ use crate::native_automation::{AutomationWriter, AutomationStatus};
 use crate::native_market::{MarketBuyer, MarketRules, MarketStatus};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tungstenite::{client_tls, http::header, Message};
@@ -36,6 +36,35 @@ const CONNECTION_STALE_AFTER: Duration = Duration::from_secs(90);
 // Historical models are optional. Reference data is loaded only after a user
 // opens Hunt Atlas, and just one current-hunt simulation runs per interval.
 const BACKGROUND_FORECAST_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+// A stopped NativeSession has only set its cancellation flag; its socket and
+// journal workers may still be closing. Keep their handles through window
+// teardown so a final journal flush is not cut short by process exit.
+static GAME_WORKERS: OnceLock<Mutex<Vec<thread::JoinHandle<()>>>> = OnceLock::new();
+fn track_game_worker(worker: thread::JoinHandle<()>) {
+    let registry = GAME_WORKERS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut handles = registry.lock().unwrap_or_else(|e| e.into_inner());
+    let mut index = 0;
+    while index < handles.len() {
+        if handles[index].is_finished() {
+            let _ = handles.swap_remove(index).join();
+        } else {
+            index += 1;
+        }
+    }
+    handles.push(worker);
+}
+pub fn finish_game_workers_after_window() {
+    if let Some(registry) = GAME_WORKERS.get() {
+        let handles = std::mem::take(
+            &mut *registry.lock().unwrap_or_else(|e| e.into_inner()));
+        for handle in handles {
+            if handle.join().is_err() {
+                crate::logging::warn("Native game worker panicked during shutdown");
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct NativeSnapshot {
@@ -285,7 +314,7 @@ impl NativeSession {
         let worker_phase_wake=Arc::clone(&phase_wake);
         let kick_roster_publisher=Arc::new(Mutex::new(None));
         let worker_kick_roster_publisher=Arc::clone(&kick_roster_publisher);
-        thread::Builder::new().name("moth-native-game".to_owned())
+        let worker = thread::Builder::new().name("moth-native-game".to_owned())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     session_loop(profile, credentials, Arc::clone(&worker_snapshot),
@@ -308,6 +337,7 @@ impl NativeSession {
                 }
             })
             .map_err(|error| format!("Could not start the PokéIdle connection: {error}"))?;
+        track_game_worker(worker);
         Ok(Self {
             snapshot, created_at: Instant::now(), profile, twitch, stop, command_tx, auto_catch, restock_enabled,
             capture_config, market_rules, market_rules_revision, session_reset, hunts, boss, history, forecast_tx,
