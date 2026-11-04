@@ -146,7 +146,7 @@ pub enum MinerEvent {
     StreamOnline { channel: String, balance: Option<u64> },
     StreamOffline { channel: String },
     WatchSlotStarted { channel: String, slot: usize, active: usize },
-    WatchActive { channel: String },
+    WatchSignalAccepted { channel: String },
     WatchSlotStopped { channel: String, reason: String, active: usize },
     PointsGained { channel: String, amount: u64, balance: u64 },
     BonusClaimed { channel: String },
