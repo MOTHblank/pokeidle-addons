@@ -98,7 +98,10 @@ impl TwitchGql {
     }
 
     pub(crate) fn verify_login(&self) -> Result<(), GqlError> {
-        self.lookup_channel_id(&self.credentials.username).map(|_| ())
+        match self.credentials.username.as_deref() {
+            Some(username) => self.lookup_channel_id(username).map(|_| ()),
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn lookup_channel_id(&self, login: &str) -> Result<String, GqlError> {
