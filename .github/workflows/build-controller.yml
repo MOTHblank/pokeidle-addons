@@ -1,24 +1,14 @@
 name: Build e release do Moth Controller (Windows e Linux)
 
 on:
-  # Release da nova versão por alteração do Cargo.toml em master.
-  # Mudanças no lockfile e notas também reexecutam builds pendentes.
-  # O envio da tag correspondente pode iniciar a publicação; o token não
-  # dispara uma segunda execução quando a release cria a tag.
+  # Release automática somente quando Cargo.toml muda em master.
+  # Alterações comuns de código não executam testes/builds de release.
+  # Retries/publicações extraordinárias devem usar workflow_dispatch.
   push:
     branches: [master]
     paths:
       - 'controller/Cargo.toml'
-      - 'controller/Cargo.lock'
-      - 'controller/build.rs'
-      - 'controller/icon.rs'
-      - 'controller/src/**'
-      - 'controller/windows/**'
-      - 'controller/linux/**'
-      - 'LICENSE'
-      - '.github/release-notes/v*.md'
-      # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
-      - '.github/workflows/build-controller.yml'
+      - '.github/release-request.txt'
     tags:
       - 'v*.*.*'
   # Execução manual gera artefatos; publicação é opcional e só no master.
@@ -34,8 +24,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: controller-release-${{ github.ref }}
-  cancel-in-progress: true
+  # Release requests are serialized instead of cancelling an in-flight build.
+  group: controller-release
+  cancel-in-progress: false
 
 jobs:
   versao:
@@ -55,7 +46,6 @@ jobs:
         env:
           REQUEST_PUBLISH: ${{ inputs.publish_release || false }}
           PREVIOUS_MASTER_SHA: ${{ github.event.before || '' }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="$(grep -m1 '^version = "' controller/Cargo.toml | cut -d '"' -f 2)"
@@ -83,13 +73,16 @@ jobs:
             if [[ "$version" != "$previous" ]]; then
               echo "Versão alterada: $previous -> $version. Publicação habilitada."
               publish=true
-            elif gh release view "$tag" >/dev/null 2>&1; then
-              echo "Release $tag já existe; apenas validando os binários."
-            else
-              # Um ajuste ao workflow permite recuperar a publicação depois
-              # de uma execução que falhou, sem inventar uma nova versão.
-              echo "Release $tag ainda não publicada; nova tentativa habilitada."
+            elif git diff --name-only "$PREVIOUS_MASTER_SHA" "$GITHUB_SHA" -- .github/release-request.txt | grep -q .; then
+              requested="$(tr -d '[:space:]' < .github/release-request.txt 2>/dev/null || true)"
+              if [[ "$requested" != "$tag" ]]; then
+                echo "::error::Pedido de release '$requested' não corresponde à versão atual ($tag)."
+                exit 1
+              fi
+              echo "Retry explícito solicitado para $tag."
               publish=true
+            else
+              echo "Cargo.toml mudou sem alterar a versão; nenhuma release será executada."
             fi
           elif [[ "$REQUEST_PUBLISH" == true ]]; then
             if [[ "$GITHUB_REF" != refs/heads/master ]]; then
@@ -313,14 +306,9 @@ jobs:
             exit 1
           fi
 
-          # A deleted release can leave its old Git tag in place. Release
-          # assets are built from this run, so the tag MUST point to this
-          # exact source revision (including hotfixes), not a stale binary.
-          latest_master="$(gh api "repos/$GITHUB_REPOSITORY/branches/master" --jq '.commit.sha')"
-          if [[ "$GITHUB_SHA" != "$latest_master" ]]; then
-            echo "::error::Master advanced after this build; refusing to publish a stale release."
-            exit 1
-          fi
+          # Release assets and the tag belong to the exact commit that
+          # explicitly requested this release. Later master commits must not
+          # invalidate or cancel that immutable release snapshot.
           # A missing tag yields a JSON 404 body from gh api, even with --jq.
           # Parse the response with jq separately so errors never become a tag SHA.
           tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>/dev/null || true)"
