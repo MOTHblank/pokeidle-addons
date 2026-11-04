@@ -1498,6 +1498,28 @@ impl Drop for ControllerApp {
 }
 
 impl eframe::App for ControllerApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe 0.36 calls logic even when the native window is hidden.
+        // Keep lifecycle/event processing here so tray mode never depends on
+        // painting a frame just to drain worker completions.
+        self.refresh_processes();
+        self.inspect_notification_transitions();
+        self.sync_pokeidle_kick_streamers();
+        if self.account_setup_checked_at
+            .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
+            .unwrap_or(true)
+        {
+            self.refresh_account_setup();
+        }
+        let background = self.controller_in_background(ctx);
+        self.sync_monitor_paces(background);
+        if background {
+            // Hidden/unfocused windows may not execute ui(), so keep a very
+            // cheap control-plane heartbeat alive without requesting paints.
+            ctx.request_repaint_after(UI_BACKGROUND_REPAINT_INTERVAL);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.restore_existing_window(ui.ctx());
         self.handle_window_close(ui.ctx());
@@ -1517,19 +1539,10 @@ impl eframe::App for ControllerApp {
                 let hidden = false;
                 should_sample(true, hidden, ui.ctx().input(|input| input.viewport().focused))
             }).then(Instant::now);
-        self.refresh_processes();
-        self.inspect_notification_transitions();
-        self.sync_pokeidle_kick_streamers();
         // Drain replies from requests made on the previous UI frame before
         // resetting the current frame's Pokémon sprite usage.
         self.visuals.poll(ui.ctx());
         self.visuals.begin_frame();
-        if self.account_setup_checked_at
-            .map(|when| when.elapsed() >= Duration::from_secs(5 * 60))
-            .unwrap_or(true)
-        {
-            self.refresh_account_setup();
-        }
 
         let diagnostics_preflight = diagnostics_frame_start.map(|start| start.elapsed());
         // Native workers publish state independently of the display timer.
@@ -1700,9 +1713,6 @@ impl eframe::App for ControllerApp {
         if self.workspace.panel_tab != PanelTab::Accounts {
             self.save_dirty_account_names();
         }
-        // Apply the persisted preference immediately to all Firefox monitors.
-        // Native game connections are never throttled.
-        self.sync_monitor_paces(self.controller_in_background(ui.ctx()));
         if let (Some(start), Some(sampler)) = (frame_start, self.diagnostics.as_mut()) {
             sampler.record_frame(start.elapsed(), diagnostics_preflight, diagnostics_panel_elapsed);
         }
