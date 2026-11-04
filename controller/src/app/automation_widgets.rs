@@ -26,7 +26,8 @@ pub(super) fn resource_chip(ui: &mut egui::Ui, text: &str) {
         .corner_radius(7.0)
         .inner_margin(Margin::symmetric(9, 6))
         .show(ui, |ui| {
-            ui.label(RichText::new(compact_text(text, 24)).size(10.0).color(TEXT));
+            ui.label(RichText::new(compact_text(text, 24)).size(10.0).color(TEXT))
+                .on_hover_text(text);
         });
 }
 
