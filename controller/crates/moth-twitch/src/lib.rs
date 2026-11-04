@@ -7,6 +7,7 @@
 mod gql;
 mod miner;
 mod model;
+mod pubsub;
 mod streak;
 mod watch;
 
