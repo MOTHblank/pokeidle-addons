@@ -558,8 +558,8 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
             "Reduz a atualização da janela e o monitoramento do Firefox enquanto outro aplicativo estiver em foco.",
         "Reduces window redraws and Firefox monitoring while hidden in the system tray." =>
             "Reduz a atualização da janela e o monitoramento do Firefox enquanto estiver oculto na bandeja.",
-        "PokéIdle, Twitch and automation run independently of these display and Firefox monitoring settings." =>
-            "PokéIdle, Twitch e automações funcionam independentemente destas configurações de exibição e monitoramento do Firefox.",
+        "PokéIdle and automation run independently of these display and Firefox monitoring settings." =>
+            "PokéIdle e automações funcionam independentemente destas configurações de exibição e monitoramento do Firefox.",
         "Current refresh mode" => "Modo atual de atualização",
         "Reduced background updates" => "Atualizações reduzidas em segundo plano",
         "Normal updates" => "Atualizações normais",
