@@ -381,18 +381,7 @@ impl DiagnosticsSampler {
     }
 
     pub(crate) fn export_report(&self) -> Result<std::path::PathBuf, String> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let root = crate::config::data_root()?.join("Diagnostics");
-        std::fs::create_dir_all(&root)
-            .map_err(|error| format!("Could not create diagnostics directory: {error}"))?;
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("Invalid system clock: {error}"))?.as_millis();
-        let path = root.join(format!("diagnostics-{stamp}.json"));
-        let bytes = serde_json::to_vec_pretty(&self.report_json())
-            .map_err(|error| format!("Could not serialize diagnostics: {error}"))?;
-        std::fs::write(&path, bytes)
-            .map_err(|error| format!("Could not save diagnostics report: {error}"))?;
-        Ok(path)
+        write_report(&self.report_json())
     }
 
     pub(crate) fn mean_frame_ms(&self) -> Option<f64> {
@@ -408,6 +397,23 @@ impl DiagnosticsSampler {
         let index = (values.len() * 95).div_ceil(100).saturating_sub(1);
         values.get(index).copied()
     }
+}
+
+/// Shared explicit-export path for foreground and background recordings.
+/// No file is ever written by a sampling timer or passive UI rendering.
+pub(crate) fn write_report(report: &serde_json::Value) -> Result<std::path::PathBuf, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let root = crate::config::data_root()?.join("Diagnostics");
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("Could not create diagnostics directory: {error}"))?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("Invalid system clock: {error}"))?.as_millis();
+    let path = root.join(format!("diagnostics-{stamp}.json"));
+    let bytes = serde_json::to_vec_pretty(report)
+        .map_err(|error| format!("Could not serialize diagnostics: {error}"))?;
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("Could not save diagnostics report: {error}"))?;
+    Ok(path)
 }
 
 #[cfg(target_os = "linux")]
