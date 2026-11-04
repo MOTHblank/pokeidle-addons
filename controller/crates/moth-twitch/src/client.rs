@@ -37,6 +37,16 @@ pub fn random_hex(byte_length: usize) -> String {
     output
 }
 
+pub(crate) fn random_u64_inclusive(min:u64,max:u64)->u64 {
+    if max<=min {return min;}
+    let mut bytes=[0u8;8];
+    if getrandom::fill(&mut bytes).is_err() {
+        return min;
+    }
+    let value=u64::from_le_bytes(bytes);
+    min+value%(max-min+1)
+}
+
 pub(crate) fn extract_twilight_build_id(page: &str) -> Option<String> {
     let marker = "window.__twilightBuildID";
     let tail = page.get(page.find(marker)? + marker.len()..)?;
