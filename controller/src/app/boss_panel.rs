@@ -9,6 +9,13 @@ use std::collections::BTreeMap;
 
 const BOSS_HISTORY_PAGE_SIZE: usize = 15;
 
+// Favor hover-revealed full names over horizontal overflow on small windows.
+fn boss_name_limit(width: f32) -> usize {
+    if width < 240.0 { 16 }
+    else if width < 340.0 { 24 }
+    else { 42 }
+}
+
 fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
     let page_count = count.div_ceil(BOSS_HISTORY_PAGE_SIZE).max(1);
     *page = (*page).min(page_count - 1);
@@ -117,7 +124,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .find(|entry| entry.key == *selected)
                             .map(|entry| entry.name.as_str())
                             .unwrap_or("—");
-                        let max_chars = if ui.available_width() < 340.0 { 24 } else { 42 };
+                        let max_chars = boss_name_limit(ui.available_width());
                         egui::ComboBox::from_id_salt(("boss-choice", index))
                             .selected_text(compact_text(selected_name, max_chars))
                             .show_ui(ui, |ui| {
@@ -457,7 +464,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             let selected_name = boss_names
                                 .get(filter.as_str()).map(String::as_str)
                                 .unwrap_or(tr("All bosses"));
-                            let max_chars = if ui.available_width() < 340.0 { 24 } else { 42 };
+                            let max_chars = boss_name_limit(ui.available_width());
                             egui::ComboBox::from_id_salt(("boss-history-filter", index))
                                 .selected_text(compact_text(selected_name, max_chars))
                                 .show_ui(ui, |ui| {
@@ -495,11 +502,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 ).clicked() {
                                     *page -= 1;
                                 }
-                                ui.label(
-                                    RichText::new(format!("{} / {page_count}", *page + 1))
-                                        .size(10.0)
-                                        .color(MUTED),
-                                );
                                 if ui.add_enabled(
                                     *page + 1 < page_count,
                                     egui::Button::new(tr("Next →")),
@@ -513,7 +515,10 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         let range = history_range(page, count);
                         let first = if count == 0 { 0 } else { range.start + 1 };
                         ui.label(
-                            RichText::new(format!("{first}–{} / {count}", range.end))
+                            RichText::new(format!(
+                                "{first}–{} / {count} · {} / {page_count}",
+                                range.end, *page + 1,
+                            ))
                                 .size(10.0)
                                 .color(DIM),
                         );
@@ -524,9 +529,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     .color(DIM),
                             );
                         }
-                        // Display the already-selected range. A page button
-                        // changes the next frame's range; no stale indices
-                        // are used in the current frame.
+                        // Both navigation and row selection use this
+                        // frame's final, clamped page index.
                         for result in &filtered[range] {
                             let drops = if result.drops.is_empty() {
                                 tr("No items").to_owned()
@@ -538,9 +542,10 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     format!("{} ×{}", name, drop.quantity)
                                 }).collect::<Vec<_>>().join(" · ")
                             };
+                            let name_limit = boss_name_limit(ui.available_width());
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(
-                                    RichText::new(compact_text(&result.boss, 42))
+                                    RichText::new(compact_text(&result.boss, name_limit))
                                         .size(11.0)
                                         .strong()
                                         .color(TEXT),
@@ -589,7 +594,14 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+    use super::{boss_name_limit, history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+
+    #[test]
+    fn boss_names_use_compact_labels_in_narrow_workspaces() {
+        assert_eq!(boss_name_limit(180.0), 16);
+        assert_eq!(boss_name_limit(280.0), 24);
+        assert_eq!(boss_name_limit(480.0), 42);
+    }
 
     #[test]
     fn history_pages_are_bounded_and_clamped() {
