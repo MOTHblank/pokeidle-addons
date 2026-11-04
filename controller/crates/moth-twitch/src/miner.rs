@@ -951,6 +951,75 @@ mod priority_tests {
     }
 
     #[test]
+    fn pubsub_watch_rewards_confirm_streak_like_reference() {
+        let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
+        let config=MinerConfig::default();
+        let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
+        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            channel_id:Some("123".to_owned()),
+            streak_confirmed:Some(false),
+            ..Default::default()
+        });
+        let mut pending=VecDeque::from([
+            PubSubEvent::PointsEarned {
+                channel_id:"123".into(),amount:10,balance:Some(110),
+                reason:"WATCH".into()
+            },
+            PubSubEvent::PointsEarned {
+                channel_id:"123".into(),amount:10,balance:Some(120),
+                reason:"WATCH".into()
+            },
+        ]);
+        apply_pubsub_events(
+            &gql,&config,&mut pending,&mut cache,&snapshot,&events
+        );
+        let channel=&cache["alpha"];
+        assert_eq!(channel.watch_reward_count,2);
+        assert_eq!(channel.streak_confirmed,Some(true));
+        assert_eq!(channel.balance,Some(120));
+        assert_eq!(snapshot.lock().unwrap().points_gained,20);
+    }
+
+    #[test]
+    fn pubsub_watch_streak_confirms_immediately() {
+        let gql=TwitchGql::new(Credentials::token_only("token").unwrap()).unwrap();
+        let config=MinerConfig::default();
+        let snapshot=Arc::new(Mutex::new(MinerSnapshot::default()));
+        let events=Arc::new(Mutex::new(VecDeque::new()));
+        let mut cache=HashMap::new();
+        cache.insert("alpha".to_owned(),ChannelCache {
+            channel_id:Some("123".to_owned()),
+            streak_confirmed:Some(false),
+            ..Default::default()
+        });
+        let mut pending=VecDeque::from([PubSubEvent::PointsEarned {
+            channel_id:"123".into(),amount:450,balance:Some(1450),
+            reason:"WATCH_STREAK".into()
+        }]);
+        apply_pubsub_events(
+            &gql,&config,&mut pending,&mut cache,&snapshot,&events
+        );
+        assert_eq!(cache["alpha"].streak_confirmed,Some(true));
+    }
+
+    #[test]
+    fn watch_backoff_grows_from_five_to_thirty_minutes() {
+        let now=Instant::now();
+        let channel=ChannelCache {
+            watch_failures:3,last_watch_attempt:Some(now),..Default::default()
+        };
+        assert!(watch_backed_off(&channel,now+Duration::from_secs(4*60+59)));
+        assert!(!watch_backed_off(&channel,now+Duration::from_secs(5*60)));
+        let channel=ChannelCache {
+            watch_failures:8,last_watch_attempt:Some(now),..Default::default()
+        };
+        assert!(watch_backed_off(&channel,now+Duration::from_secs(29*60)));
+        assert!(!watch_backed_off(&channel,now+Duration::from_secs(30*60)));
+    }
+
+    #[test]
     fn completed_streaks_follow_favorite_order() {
         let mut cache=HashMap::new();
         for name in ["star","other"] {
