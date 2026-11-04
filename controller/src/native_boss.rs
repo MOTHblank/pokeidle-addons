@@ -23,6 +23,9 @@ pub struct BossEntry {
     pub token_id: u64,
     pub token_name: String,
     pub tokens_per_entry: u64,
+    /// Authoritative battle types from bossesJogaveis, with bossesCatalogo
+    /// as a welcome-time fallback for older payload shapes.
+    pub types: Vec<String>,
 }
 impl BossEntry {
     /// shared/bosses-lendarios.mjs v1.398.1: the catalog's minimum
@@ -53,6 +56,11 @@ impl BossEntry {
             token_name: entry.get("nome").and_then(Value::as_str)
                 .unwrap_or("Boss Token").to_owned(),
             tokens_per_entry,
+            types: ["type1", "type2"].into_iter().filter_map(|field|
+                raw.get(field).and_then(Value::as_str)
+                    .map(str::trim).filter(|kind| !kind.is_empty())
+                    .map(str::to_ascii_uppercase)
+            ).collect(),
         })
     }
 }
@@ -442,7 +450,24 @@ impl BossManager {
     pub fn ingest(&mut self, frame: &Value) {
         if frame.get("t").and_then(Value::as_str) == Some("welcome") {
             if let Some(available) = frame.get("bossesJogaveis").and_then(Value::as_array) {
-                self.view.catalog = available.iter().filter_map(BossEntry::parse).collect();
+                let gallery = frame.get("bossesCatalogo").and_then(Value::as_array);
+                self.view.catalog = available.iter().filter_map(BossEntry::parse).map(|mut boss| {
+                    // Current upstream sends type1/type2 on the playable
+                    // boss record. Keep the gallery fallback because the
+                    // browser client intentionally supports both shapes.
+                    if boss.types.is_empty() {
+                        if let Some(meta) = gallery.and_then(|rows| rows.iter().find(|row|
+                            row.get("key").and_then(Value::as_str) == Some(boss.key.as_str())
+                        )) {
+                            boss.types = ["type1", "type2"].into_iter().filter_map(|field|
+                                meta.get(field).and_then(Value::as_str)
+                                    .map(str::trim).filter(|kind| !kind.is_empty())
+                                    .map(str::to_ascii_uppercase)
+                            ).collect();
+                        }
+                    }
+                    boss
+                }).collect();
                 self.view.catalog_ready = true;
             }
         }
@@ -777,6 +802,25 @@ mod tests {
         view.items = Arc::new([(500,5)].into());
         view
     }
+    #[test]
+    fn playable_boss_types_use_server_payload_and_catalog_fallback() {
+        let mut direct=manager();
+        direct.ingest(&json!({"t":"welcome","bossesJogaveis":[{
+            "key":"kyogre","nome":"Kyogre","type1":"water",
+            "entrada":{"itemId":500,"qtd":1}
+        }],"estado":{"boss":{"auto":false,"arena":null}}}));
+        assert_eq!(direct.view.catalog[0].types,vec!["WATER"]);
+
+        let mut fallback=manager();
+        fallback.ingest(&json!({"t":"welcome",
+            "bossesCatalogo":[{"key":"regice","type1":"ICE"}],
+            "bossesJogaveis":[{
+                "key":"regice","nome":"Regice",
+                "entrada":{"itemId":500,"qtd":1}
+            }],"estado":{"boss":{"auto":false,"arena":null}}}));
+        assert_eq!(fallback.view.catalog[0].types,vec!["ICE"]);
+    }
+
     #[test]
     fn effective_boss_level_scales_with_trainer_without_changing_unlock_gate() {
         let catalog=serde_json::json!({"key":"regice","nome":"Regice",

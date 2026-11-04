@@ -2,9 +2,15 @@
 //! Reuse the controller's themed cards, badges, resource chips and detail rows.
 use super::{
     automation_badge, compact_text, detail_stat_line, draw_native_missing_panel, egui,
-    request_item_catalog, resource_chip, tr, ControllerApp, GameCommand,
-    RichText, Stroke, ACCENT, BORDER, DIM, MUTED, PANEL, PANEL_ALT, TEXT, WARN,
+    native_atlas, request_item_catalog, resource_chip, tr, AtlasReference,
+    ControllerApp, GameCommand, RichText, Stroke, ACCENT, BORDER, DIM, MUTED,
+    PANEL, PANEL_ALT, TEXT, WARN,
 };
+use super::hunt_panel::components::{
+    atlas_type_multiplier, atlas_type_name, atlas_types_for_active, draw_atlas_matchup,
+};
+use crate::native_boss::{BossEntry, BossView};
+use crate::native_hunts::HuntView;
 use std::collections::BTreeMap;
 
 const BOSS_HISTORY_PAGE_SIZE: usize = 15;
@@ -39,6 +45,265 @@ fn loot_age(now: u64, at: u64) -> String {
     }
 }
 
+
+const TYPE_ORDER: [&str; 18] = [
+    "NORMAL", "FIRE", "WATER", "ELECTRIC", "GRASS", "ICE", "FIGHTING",
+    "POISON", "GROUND", "FLYING", "PSYCHIC", "BUG", "ROCK", "GHOST",
+    "DRAGON", "DARK", "STEEL", "FAIRY",
+];
+
+fn ensure_boss_combat_reference(app: &mut ControllerApp) {
+    if app.hunt_reference.is_none() && app.hunt_reference_error.is_none() &&
+        !app.hunt_reference_busy {
+        app.hunt_reference_busy = true;
+        let tx = app.hunt_reference_tx.clone();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(native_atlas::load)
+                .unwrap_or_else(|_| Err(tr("Pokémon data unavailable").into()));
+            let _ = tx.send(result);
+        });
+    }
+}
+
+fn boss_type_label(entry: &BossEntry) -> String {
+    if entry.types.is_empty() {
+        return tr("Type data unavailable").to_owned();
+    }
+    entry.types.iter().map(|kind| atlas_type_name(kind))
+        .collect::<Vec<_>>().join(" · ")
+}
+
+fn draw_boss_selector(
+    ui: &mut egui::Ui,
+    entry: &BossEntry,
+    selected: bool,
+    hunt: &HuntView,
+) -> bool {
+    let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
+    let attempts = tokens / entry.tokens_per_entry.max(1);
+    let fight_level = entry.fight_level(hunt.trainer_level)
+        .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
+    let card = egui::Frame::new()
+        .fill(if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
+        .stroke(Stroke::new(1.0, if selected { ACCENT } else { BORDER }))
+        .corner_radius(8.0)
+        .inner_margin(egui::Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(entry.name.chars().take(2)
+                        .collect::<String>().to_uppercase())
+                        .size(11.0).strong().color(ACCENT),
+                );
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(&entry.name).strong().size(12.0).color(TEXT));
+                    ui.label(
+                        RichText::new(boss_type_label(entry))
+                            .size(9.0)
+                            .color(MUTED),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {} · {} {} × {}",
+                            tr("Boss combat level"), fight_level,
+                            tr("Entry"), entry.tokens_per_entry, entry.token_name,
+                        ))
+                        .size(9.0)
+                        .color(MUTED),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(attempts.to_string()).size(12.0).strong().color(TEXT));
+                        ui.label(RichText::new(tr("Possible entries")).size(9.0).color(MUTED));
+                    });
+                });
+            });
+        });
+    let clicked = ui.interact(
+        card.response.rect,
+        ui.id().with(("boss-selector", &entry.key)),
+        egui::Sense::click(),
+    ).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+    ui.add_space(5.0);
+    clicked
+}
+
+fn draw_boss_weaknesses(
+    ui: &mut egui::Ui,
+    reference: Option<&AtlasReference>,
+    types: &[String],
+) {
+    if types.is_empty() { return; }
+    let Some(reference) = reference else {
+        ui.label(RichText::new(tr("Loading Pokémon data...")).size(10.0).color(MUTED));
+        return;
+    };
+    let weaknesses = TYPE_ORDER.iter().filter_map(|kind| {
+        let multiplier = atlas_type_multiplier(reference, kind, types)?;
+        (multiplier > 1.0 + f64::EPSILON).then_some((*kind, multiplier))
+    }).collect::<Vec<_>>();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tr("Weak to")).size(10.0).color(MUTED));
+        if weaknesses.is_empty() {
+            ui.label(RichText::new(tr("No type weakness")).size(10.0).color(DIM));
+        } else {
+            for (kind, multiplier) in weaknesses {
+                resource_chip(ui, &format!(
+                    "{} {:.0}×", atlas_type_name(kind), multiplier,
+                ));
+            }
+        }
+    });
+}
+
+fn draw_boss_details(
+    ui: &mut egui::Ui,
+    entry: &BossEntry,
+    view: &BossView,
+    hunt: &HuntView,
+    live: bool,
+    reference: Option<&AtlasReference>,
+    restock_enabled: bool,
+    action: &mut Option<GameCommand>,
+) {
+    let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
+    let attempts = tokens / entry.tokens_per_entry.max(1);
+    let level = hunt.trainer_level;
+    let has_level = level.is_some_and(|current| current >= entry.min_level);
+    let has_tokens = tokens >= entry.tokens_per_entry;
+
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(9.0)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(entry.name.chars().take(2)
+                        .collect::<String>().to_uppercase())
+                        .size(16.0).strong().color(ACCENT),
+                );
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(&entry.name).size(14.0).strong().color(TEXT));
+                    ui.horizontal_wrapped(|ui| {
+                        for kind in &entry.types {
+                            ui.label(RichText::new(atlas_type_name(kind)).size(10.0).color(ACCENT));
+                        }
+                        if entry.types.is_empty() {
+                            ui.label(RichText::new(tr("Type data unavailable")).size(10.0).color(DIM));
+                        }
+                    });
+                });
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                let current = level.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
+                resource_chip(ui, &format!("{}: {}", tr("Trainer level"), current));
+                resource_chip(ui, &format!("{}: {}", tr("Required level"), entry.min_level));
+                if let Some(fight_level) = entry.fight_level(level) {
+                    resource_chip(ui, &format!("{}: {}", tr("Boss combat level"), fight_level));
+                }
+                resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
+            });
+            ui.add_space(5.0);
+            detail_stat_line(
+                ui, tr("Entry"),
+                &format!("{} × {}", entry.tokens_per_entry, entry.token_name),
+            );
+            detail_stat_line(
+                ui, tr("Inventory"),
+                &format!("{} × {}", tokens, entry.token_name),
+            );
+            draw_boss_weaknesses(ui, reference, &entry.types);
+
+            ui.add_space(8.0);
+            let lead_types = reference.map(|guide| atlas_types_for_active(hunt, guide))
+                .unwrap_or_default();
+            draw_atlas_matchup(
+                ui,
+                reference,
+                &lead_types,
+                &entry.types,
+                hunt.active_pokemon.as_ref().map(|pokemon| pokemon.name.as_str())
+                    .unwrap_or(tr("Your Pokémon")),
+                &entry.name,
+                tr("Against your active Pokémon"),
+            );
+
+            ui.add_space(7.0);
+            ui.label(RichText::new(tr(
+                "Bosses now fight at your trainer level (minimum: their unlock level). Its combat stats scale with that level, so old fixed-level farming expectations no longer apply. Entry tokens and drop tiers still follow the original boss."
+            )).size(10.0).color(MUTED));
+            ui.label(
+                RichText::new(if restock_enabled {
+                    tr("Restock stays active during boss battles.")
+                } else {
+                    tr("Restock is off for this account.")
+                })
+                .size(10.0)
+                .color(if restock_enabled { ACCENT } else { MUTED }),
+            );
+
+            let ready = live
+                && view.state_known
+                && !view.busy
+                && !view.auto
+                && view.arena.is_none()
+                && has_level
+                && has_tokens;
+            ui.add_space(9.0);
+            let compact_actions = ui.available_width() < 340.0;
+            ui.horizontal_wrapped(|ui| {
+                let farm_label = if compact_actions {
+                    tr("Auto farm")
+                } else {
+                    tr("Farm until tokens run out")
+                };
+                if ui.add_enabled(
+                    ready,
+                    egui::Button::new(RichText::new(farm_label).strong())
+                        .fill(if ready { ACCENT.linear_multiply(0.32) } else { PANEL_ALT })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if ready { ACCENT.linear_multiply(0.65) } else { BORDER },
+                        ))
+                        .corner_radius(8.0),
+                ).on_hover_text(tr("Farm until tokens run out")).clicked() {
+                    *action = Some(GameCommand::BossStart {
+                        key: entry.key.clone(),
+                        repeat: true,
+                    });
+                }
+                if ui.add_enabled(ready, egui::Button::new(tr("Fight once"))).clicked() {
+                    *action = Some(GameCommand::BossStart {
+                        key: entry.key.clone(),
+                        repeat: false,
+                    });
+                }
+            });
+            if !ready {
+                let reason = if !live {
+                    tr("Game disconnected. Boss controls will become available after reconnection.").to_owned()
+                } else if !view.state_known {
+                    tr("Waiting for authoritative server boss state.").to_owned()
+                } else if view.busy || view.auto || view.arena.is_some() {
+                    tr("Finish the current boss run before starting another.").to_owned()
+                } else if level.is_none() {
+                    tr("Trainer level is not available yet.").to_owned()
+                } else if !has_level {
+                    tr("Trainer level is below the boss requirement.").to_owned()
+                } else {
+                    tr("Not enough boss entry tokens.").to_owned()
+                };
+                ui.label(RichText::new(reason).size(10.0).color(MUTED));
+            }
+        });
+}
+
 pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let index = app.workspace.automation_account;
     if app.runtimes[index].game.native.is_none() {
@@ -50,12 +315,15 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
 
     request_item_catalog(app);
-    let (view, hunt, live) = {
+    ensure_boss_combat_reference(app);
+    let (view, hunt, live, restock_enabled) = {
         let native = app.runtimes[index].game.native.as_ref().expect("checked above");
+        let snapshot = native.snapshot();
         (
             native.boss_snapshot(),
             native.hunt_snapshot(),
-            native.snapshot().phase == "Online",
+            snapshot.phase == "Online",
+            snapshot.native_restock.enabled,
         )
     };
     let now = SystemTime::now()
@@ -65,12 +333,12 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
     let mut action = None;
 
     egui::ScrollArea::vertical()
-        .id_salt(("boss-manager", index))
+        .id_salt(("boss-farm", index))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Server-native Boss Manager"))
+                RichText::new(tr("Server-native Boss Farm"))
                     .size(15.0)
                     .strong()
                     .color(TEXT),
@@ -89,154 +357,102 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
             ui.add_space(10.0);
 
-            // Keep selection and its requirements together. Missing catalog
-            // data must not hide status or persisted loot farther down.
-            egui::Frame::new()
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(10.0)
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(tr("Choose boss"))
-                            .size(13.0)
-                            .strong()
-                            .color(TEXT),
-                    );
-                    if !view.catalog_ready {
+            // Hunt Atlas-style master/detail selection: boss cards on the
+            // left, selected combat and entry information on the right.
+            if !view.catalog_ready {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .corner_radius(10.0)
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
                         ui.label(
                             RichText::new(tr("Waiting for the server's playable boss catalog."))
-                                .size(10.0)
-                                .color(MUTED),
+                                .size(10.0).color(MUTED),
                         );
-                    } else if view.catalog.is_empty() {
+                    });
+            } else if view.catalog.is_empty() {
+                egui::Frame::new()
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, BORDER))
+                    .corner_radius(10.0)
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
                         ui.label(
                             RichText::new(tr("No playable boss arenas are currently advertised by the server."))
-                                .size(10.0)
-                                .color(MUTED),
+                                .size(10.0).color(MUTED),
                         );
-                    } else {
-                        let selected = &mut app.workspace.boss_selected[index];
-                        if !view.catalog.iter().any(|entry| entry.key == *selected) {
-                            *selected = view.catalog[0].key.clone();
-                        }
-                        let selected_name = view.catalog.iter()
-                            .find(|entry| entry.key == *selected)
-                            .map(|entry| entry.name.as_str())
-                            .unwrap_or("—");
-                        let max_chars = boss_name_limit(ui.available_width());
-                        egui::ComboBox::from_id_salt(("boss-choice", index))
-                            .selected_text(compact_text(selected_name, max_chars))
-                            .show_ui(ui, |ui| {
-                                for entry in &view.catalog {
-                                    ui.selectable_value(
-                                        &mut *selected,
-                                        entry.key.clone(),
-                                        compact_text(&entry.name, max_chars),
-                                    ).on_hover_text(&entry.name);
-                                }
-                            })
-                            .response
-                            .on_hover_text(selected_name);
-
-                        if let Some(entry) = view.catalog.iter().find(|entry| entry.key == *selected) {
-                            let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
-                            let attempts = tokens / entry.tokens_per_entry.max(1);
-                            let level = hunt.trainer_level;
-                            let has_level = level.is_some_and(|current| current >= entry.min_level);
-                            let has_tokens = tokens >= entry.tokens_per_entry;
-
-                            ui.add_space(7.0);
-                            ui.horizontal_wrapped(|ui| {
-                                let current = level
-                                    .map(|value| value.to_string())
-                                    .unwrap_or_else(|| "—".into());
-                                resource_chip(ui, &format!("{}: {}", tr("Trainer level"), current));
-                                resource_chip(ui, &format!("{}: {}", tr("Required level"), entry.min_level));
-                                if let Some(fight_level) = entry.fight_level(level) {
-                                    resource_chip(ui, &format!("{}: {}", tr("Boss combat level"), fight_level));
-                                }
-                                resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
-                            });
+                    });
+            } else {
+                let reference = app.hunt_reference.clone();
+                let selected = &mut app.workspace.boss_selected[index];
+                if !view.catalog.iter().any(|entry| entry.key == *selected) {
+                    *selected = view.catalog[0].key.clone();
+                }
+                let desktop = ui.available_width() >= 880.0;
+                if desktop {
+                    let gap = ui.spacing().item_spacing.x;
+                    let total_width = ui.available_width();
+                    let list_width = (total_width * 0.36).clamp(290.0, 430.0);
+                    let details_width = (total_width - list_width - gap).max(0.0);
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(list_width);
+                            ui.label(
+                                RichText::new(tr("BOSSES"))
+                                    .size(10.0).strong().color(DIM),
+                            );
                             ui.add_space(5.0);
-                            detail_stat_line(
-                                ui, tr("Entry"),
-                                &format!("{} × {}", entry.tokens_per_entry, entry.token_name),
-                            );
-                            detail_stat_line(
-                                ui, tr("Inventory"),
-                                &format!("{} × {}", tokens, entry.token_name),
-                            );
-                            ui.label(RichText::new(tr(
-                                "Bosses now fight at your trainer level (minimum: their unlock level). Its combat stats scale with that level, so old fixed-level farming expectations no longer apply. Entry tokens and drop tiers still follow the original boss."
-                            )).size(10.0).color(MUTED));
-
-                            let ready = live
-                                && view.state_known
-                                && !view.busy
-                                && !view.auto
-                                && view.arena.is_none()
-                                && has_level
-                                && has_tokens;
-                            ui.add_space(9.0);
-                            let compact_actions = ui.available_width() < 340.0;
-                            ui.horizontal_wrapped(|ui| {
-                                let farm_label = if compact_actions {
-                                    tr("Auto farm")
-                                } else {
-                                    tr("Farm until tokens run out")
-                                };
-                                if ui.add_enabled(
-                                    ready,
-                                    egui::Button::new(
-                                        RichText::new(farm_label).strong(),
-                                    )
-                                    .fill(if ready {
-                                        ACCENT.linear_multiply(0.32)
-                                    } else {
-                                        PANEL_ALT
-                                    })
-                                    .stroke(Stroke::new(1.0, if ready {
-                                        ACCENT.linear_multiply(0.65)
-                                    } else {
-                                        BORDER
-                                    }))
-                                    .corner_radius(8.0),
-                                ).on_hover_text(tr("Farm until tokens run out")).clicked() {
-                                    action = Some(GameCommand::BossStart {
-                                        key: entry.key.clone(),
-                                        repeat: true,
-                                    });
+                            for entry in &view.catalog {
+                                if draw_boss_selector(
+                                    ui, entry, *selected == entry.key, &hunt,
+                                ) {
+                                    *selected = entry.key.clone();
                                 }
-                                if ui.add_enabled(
-                                    ready,
-                                    egui::Button::new(tr("Fight once")),
-                                ).clicked() {
-                                    action = Some(GameCommand::BossStart {
-                                        key: entry.key.clone(),
-                                        repeat: false,
-                                    });
-                                }
-                            });
-                            if !ready {
-                                let reason = if !live {
-                                    tr("Game disconnected. Boss controls will become available after reconnection.").to_owned()
-                                } else if !view.state_known {
-                                    tr("Waiting for authoritative server boss state.").to_owned()
-                                } else if view.busy || view.auto || view.arena.is_some() {
-                                    tr("Finish the current boss run before starting another.").to_owned()
-                                } else if level.is_none() {
-                                    tr("Trainer level is not available yet.").to_owned()
-                                } else if !has_level {
-                                    tr("Trainer level is below the boss requirement.").to_owned()
-                                } else {
-                                    tr("Not enough boss entry tokens.").to_owned()
-                                };
-                                ui.label(RichText::new(reason).size(10.0).color(MUTED));
                             }
+                        });
+                        ui.vertical(|ui| {
+                            ui.set_width(details_width);
+                            ui.label(
+                                RichText::new(tr("BOSS DETAILS"))
+                                    .size(10.0).strong().color(DIM),
+                            );
+                            ui.add_space(5.0);
+                            if let Some(entry) = view.catalog.iter()
+                                .find(|entry| entry.key == *selected) {
+                                draw_boss_details(
+                                    ui, entry, &view, &hunt, live,
+                                    reference.as_deref(), restock_enabled, &mut action,
+                                );
+                            }
+                        });
+                    });
+                } else {
+                    ui.label(
+                        RichText::new(tr("BOSSES"))
+                            .size(10.0).strong().color(DIM),
+                    );
+                    ui.add_space(5.0);
+                    for entry in &view.catalog {
+                        if draw_boss_selector(ui, entry, *selected == entry.key, &hunt) {
+                            *selected = entry.key.clone();
                         }
                     }
-                });
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(tr("BOSS DETAILS"))
+                            .size(10.0).strong().color(DIM),
+                    );
+                    ui.add_space(5.0);
+                    if let Some(entry) = view.catalog.iter()
+                        .find(|entry| entry.key == *selected) {
+                        draw_boss_details(
+                            ui, entry, &view, &hunt, live,
+                            reference.as_deref(), restock_enabled, &mut action,
+                        );
+                    }
+                }
+            }
 
             ui.add_space(10.0);
             egui::Frame::new()

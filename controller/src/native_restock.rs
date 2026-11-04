@@ -807,6 +807,22 @@ mod tests {
             json!({"t":"shop.buy","kind":"item","id":70070,"qty":1}));
     }
     #[test]
+    fn boss_combat_state_does_not_pause_restock() {
+        let now = Instant::now();
+        let mut r = configured();
+        welcome(&mut r, now);
+        // Boss state is deliberately irrelevant to Restock. Keep enough
+        // balls, make the configured potion low, and verify the same shop
+        // request is produced while an arena is active.
+        r.ingest(r#"{"t":"estado","estado":{
+            "boss":{"auto":true,"autoKey":"kyogre","arena":{"key":"kyogre"}},
+            "gold":190,"balls":{"4":30},"items":{"200":1}
+        }}"#, now);
+        assert_eq!(r.next(now).unwrap().wire(),
+            json!({"t":"shop.buy","kind":"item","id":200,"qty":11}));
+    }
+
+    #[test]
     fn no_spend_below_gold_reserve_or_when_disabled() {
         let now = Instant::now();
         let mut r = configured();

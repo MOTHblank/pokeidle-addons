@@ -7,7 +7,7 @@ mod models_panel;
 
 // Each module owns its calculation or view state; rendering only coordinates them.
 mod forecast_cache;
-mod components;
+pub(super) mod components;
 mod explorer;
 mod recommendations;
 mod comparison;
