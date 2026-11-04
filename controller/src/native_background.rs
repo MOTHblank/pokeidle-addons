@@ -293,7 +293,7 @@ impl NativeSession {
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
         let credentials = Credentials::parse(&bootstrap)?;
         let initial = open_session(&credentials)?;
-        let twitch = TwitchSession::start_optional(bootstrap.get("twitch"));
+        let twitch = TwitchSession::start_optional(bootstrap.get("twitch").filter(|value| !value.is_null()));
         Self::spawn(profile, credentials, twitch, Some(initial), bootstrap.get("autocatch").cloned())
     }
     fn spawn(profile: GameProfile, credentials: Credentials, twitch: TwitchSession,
