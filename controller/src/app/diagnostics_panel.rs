@@ -29,31 +29,80 @@ fn history_chart(
     egui::Frame::new().fill(PANEL).stroke(egui::Stroke::new(1.0, BORDER))
         .corner_radius(8.0).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.label(RichText::new(title).size(11.0).strong().color(TEXT));
-            let values: Vec<f64> = samples.iter().filter_map(metric).collect();
-            let peak = values.iter().copied().fold(0.0_f64, f64::max);
-            let max_scale = peak.max(1.0);
-            ui.label(RichText::new(format!(
-                "{}: {peak:.1} {unit}", tr("Observed peak")
-            )).size(10.0).color(MUTED));
+            let peak = samples.iter().filter_map(metric).fold(None::<f64>, |best, value| {
+                if !value.is_finite() { return best; }
+                Some(best.unwrap_or(value).max(value))
+            });
+            ui.label(RichText::new(match peak {
+                Some(value) => format!("{}: {value:.1} {unit}", tr("Observed peak")),
+                None => format!("{}: —", tr("Observed peak")),
+            }).size(10.0).color(MUTED));
             let width = ui.available_width().max(120.0);
-            let (rect, _) = ui.allocate_exact_size(
-                egui::vec2(width, 76.0), egui::Sense::hover()
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(width, 86.0), egui::Sense::hover()
             );
             ui.painter().rect_filled(rect, 6.0, PANEL_ALT);
-            if values.len() < 2 {
+            let first = samples.iter().find_map(|point| point.at);
+            let last = samples.iter().rev().find_map(|point| point.at);
+            let (Some(first), Some(last), Some(peak)) = (first, last, peak) else {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
                     tr("Collecting samples"), egui::FontId::proportional(11.0), DIM);
                 return;
+            };
+            let span = last.saturating_duration_since(first).as_secs_f32().max(0.001);
+            let scale = peak.max(1.0);
+            let x_for = |at: std::time::Instant| -> f32 {
+                rect.left() + 6.0 + (rect.width() - 12.0)
+                    * (at.saturating_duration_since(first).as_secs_f32() / span).clamp(0.0, 1.0)
+            };
+            let mut segment: Vec<egui::Pos2> = Vec::new();
+            let flush = |segment: &mut Vec<egui::Pos2>| {
+                if segment.len() >= 2 {
+                    ui.painter().add(egui::Shape::line(
+                        std::mem::take(segment), egui::Stroke::new(1.8, color)
+                    ));
+                } else if let Some(point) = segment.pop() {
+                    ui.painter().circle_filled(point, 2.5, color);
+                }
+            };
+            for point in samples {
+                let value = metric(point).filter(|v| v.is_finite());
+                if let (Some(at), Some(value)) = (point.at, value) {
+                    segment.push(egui::pos2(
+                        x_for(at),
+                        rect.bottom() - 6.0 - (rect.height() - 12.0)
+                            * (value.max(0.0) / scale) as f32
+                    ));
+                } else {
+                    // A missing value, failed read, or Resume gap must not
+                    // be connected to its neighbors by an invented line.
+                    flush(&mut segment);
+                }
             }
-            let points: Vec<egui::Pos2> = values.iter().enumerate().map(|(i, value)| {
-                let x = rect.left() + 6.0 + (rect.width() - 12.0)
-                    * i as f32 / (values.len() - 1) as f32;
-                let y = rect.bottom() - 6.0 - (rect.height() - 12.0)
-                    * (*value / max_scale) as f32;
-                egui::pos2(x, y)
-            }).collect();
-            ui.painter().add(egui::Shape::line(points,
-                egui::Stroke::new(1.8, color)));
+            flush(&mut segment);
+            if let Some(pointer) = response.hover_pos() {
+                let nearest = samples.iter().filter_map(|point|
+                    point.at.map(|at| (at, metric(point)))
+                ).min_by(|a, b| {
+                    (x_for(a.0) - pointer.x).abs()
+                        .total_cmp(&(x_for(b.0) - pointer.x).abs())
+                });
+                if let Some((at, value)) = nearest {
+                    let label = value.filter(|v| v.is_finite())
+                        .map(|v| format!("{v:.2} {unit}"))
+                        .unwrap_or_else(|| tr("Unavailable").into());
+                    response.on_hover_text_at_pointer(format!(
+                        "{title}: {label} · {:.0} s {}", last.saturating_duration_since(at).as_secs_f64(),
+                        tr("before latest sample")
+                    ));
+                }
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("-{:.0}s", span)).size(9.0).color(DIM));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(tr("Latest sample")).size(9.0).color(DIM));
+                });
+            });
         });
 }
 
@@ -81,7 +130,10 @@ pub(super) fn draw_diagnostics_panel(
             }
 
             // Allocate the sampler only on the first active foreground frame.
-            let (sample, history, last_frame_ms, slowest_frame_ms, recorded_frames, paused, refresh_network) = {
+            let (sample, history, last_frame_ms, slowest_frame_ms,
+                recorded_frames, mean_frame_ms, p95_frame_ms,
+                preflight_ms, panel_ms, process_probe_ms, network_probe_ms,
+                paused, refresh_network) = {
                 let sampler = app.diagnostics.get_or_insert_with(DiagnosticsSampler::default);
                 ui.horizontal(|ui| {
                     let mut paused = sampler.paused;
@@ -89,19 +141,23 @@ pub(super) fn draw_diagnostics_panel(
                         sampler.set_paused(paused);
                     }
                     if ui.small_button(tr("Reset samples")).clicked() {
-                        *sampler = DiagnosticsSampler::default();
+                        sampler.reset();
                     }
                 });
                 let refresh_network = sampler.sample_if_due();
                 (sampler.current, sampler.history.iter().copied().collect::<Vec<_>>(),
                     sampler.last_frame_ms, sampler.slowest_frame_ms,
-                    sampler.recorded_frames, sampler.paused, refresh_network)
+                    sampler.recorded_frames, sampler.mean_frame_ms(), sampler.p95_frame_ms(),
+                    sampler.last_preflight_ms, sampler.last_panel_ms,
+                    sampler.last_process_probe_ms, sampler.last_network_probe_ms,
+                    sampler.paused, refresh_network)
             };
 
             // Snapshot Kick accounting on exactly the same two-second tick.
             // Pausing the panel also freezes this cache; there is no per-frame
             // polling of every Kick channel.
             if refresh_network {
+                let probe_start = std::time::Instant::now();
                 let mut network = HlsNetworkSample::default();
                 for (index, runtime) in app.runtimes.iter().enumerate() {
                     if let Some(kick) = runtime.kick.kick_monitor.as_ref() {
@@ -117,7 +173,10 @@ pub(super) fn draw_diagnostics_panel(
                         });
                     }
                 }
-                app.diagnostics.as_mut().expect("active diagnostics").network = Some(network);
+                let sampler = app.diagnostics.as_mut().expect("active diagnostics");
+                sampler.network = Some(network);
+                sampler.last_network_probe_ms =
+                    Some(probe_start.elapsed().as_secs_f64() * 1000.0);
             }
             let network = app.diagnostics.as_ref()
                 .and_then(|sampler| sampler.network.as_ref())
@@ -177,9 +236,32 @@ pub(super) fn draw_diagnostics_panel(
                             } else { "—".into() }, MUTED);
                         runtime_chip(ui, tr("Observed UI passes"),
                             &recorded_frames.to_string(), MUTED);
+                        runtime_chip(ui, tr("Average UI pass"),
+                            &mean_frame_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
+                        runtime_chip(ui, tr("UI P95"),
+                            &p95_frame_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
+                    });
+                    ui.add_space(7.0);
+                    ui.label(RichText::new(tr("Observed UI stages"))
+                        .size(11.0).strong().color(TEXT));
+                    ui.horizontal_wrapped(|ui| {
+                        runtime_chip(ui, tr("UI preparation"),
+                            &preflight_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
+                        runtime_chip(ui, tr("Main panel"),
+                            &panel_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
+                        runtime_chip(ui, tr("Process probe"),
+                            &process_probe_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
+                        runtime_chip(ui, tr("Kick probe"),
+                            &network_probe_ms.map(|ms| format!("{ms:.2} ms"))
+                                .unwrap_or_else(|| "—".into()), MUTED);
                     });
                     ui.label(RichText::new(tr(
-                        "Measures controller UI update work while diagnostics is active, not game-worker execution or frames per second."
+                        "UI pass includes preparation, rendering and housekeeping; it is not GPU frame time or game-worker CPU. Probe timings expose diagnostics overhead."
                     )).size(10.0).color(DIM));
                 });
 
