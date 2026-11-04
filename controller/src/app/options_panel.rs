@@ -275,7 +275,7 @@ fn updates(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
         }
         description(ui,
-            "The verified update closes Moth, stops active accounts, replaces the application executable, then reopens Moth.");
+            "The verified update closes Moth, stops active accounts, installs the new version, then reopens Moth.");
     } else if newer {
         description(ui,
             "Downloading never interrupts active accounts. Installation only starts after you choose to restart.");
