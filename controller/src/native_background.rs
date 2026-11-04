@@ -1517,6 +1517,21 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                                 }
                                 hunt_intel.ingest_value(&frame, received_at);
                                 pvp.on_frame(&frame, received_at);
+                                if frame.get("t").and_then(Value::as_str) == Some("pvp") {
+                                    if let Some(reason) = frame.get("filaRecusa")
+                                        .and_then(|refusal| refusal.get("msg"))
+                                        .and_then(Value::as_str) {
+                                        crate::logging::warn(&format!(
+                                            "{}: Auto PvP queue refused by PokéIdle: {reason}",
+                                            profile.label()));
+                                    }
+                                    if frame.get("filaAutoDesligada")
+                                        .and_then(Value::as_bool) == Some(true) {
+                                        crate::logging::warn(&format!(
+                                            "{}: PokéIdle disabled VIP Auto PvP; direct matchmaking fallback remains active",
+                                            profile.label()));
+                                    }
+                                }
                                 boss_manager.ingest(&frame);
                                 if frame.get("t").and_then(Value::as_str) == Some("welcome") ||
                                     frame.get("estado").and_then(|s| s.get("boss")).is_some() ||
