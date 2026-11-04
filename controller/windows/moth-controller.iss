@@ -49,7 +49,7 @@ Filename: "{app}\Moth Controller.exe"; Description: "Launch Moth Controller"; Fl
 Filename: "{app}\Moth Controller.exe"; Flags: nowait; Check: IsMothUpdate
 
 [Code]
-function IsMothUpdate(): Boolean;
+function IsMothUpdate: Boolean;
 begin
-  Result := CompareText(ExpandConstant('{param:MOTHUPDATE|0}'), '1') = 0;
+  Result := ExpandConstant('{param:MOTHUPDATE|0}') = '1';
 end;
