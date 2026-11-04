@@ -77,7 +77,8 @@ pub struct StreamerState {
     pub login: String,
     pub channel_id: Option<String>,
     pub points: Option<u64>,
-    /// Point increases observed for this channel during the current miner session.
+    /// Twitch WATCH/WATCH_STREAK points attributed to Moth watch activity
+    /// for this channel during the current miner session.
     pub points_gained: u64,
     /// A successful telemetry HTTP acknowledgement, not confirmed reward credit.
     pub last_watch_signal: Option<Instant>,
@@ -106,6 +107,7 @@ pub struct MinerSnapshot {
     pub desired: usize,
     pub active: usize,
     pub watch_signals: u64,
+    /// Confirmed Twitch WATCH/WATCH_STREAK points attributable to Moth.
     pub points_gained: u64,
     pub bonuses_claimed: u64,
     pub reference_client: bool,
