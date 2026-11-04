@@ -18,6 +18,21 @@ pub(crate) struct PerformanceSample {
     pub(crate) threads: Option<u32>,
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct HlsAccountSample {
+    pub(crate) account: String,
+    pub(crate) bytes: u64,
+    pub(crate) last_minute: u64,
+    pub(crate) channels: usize,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct HlsNetworkSample {
+    pub(crate) rows: Vec<HlsAccountSample>,
+    pub(crate) bytes: u64,
+    pub(crate) last_minute: u64,
+}
+
 #[derive(Clone, Copy)]
 struct ProcessCounters {
     cpu_ns: u128,
@@ -32,6 +47,7 @@ pub(crate) struct DiagnosticsSampler {
     previous: Option<(Instant, ProcessCounters)>,
     pub(crate) current: Option<PerformanceSample>,
     pub(crate) history: VecDeque<PerformanceSample>,
+    pub(crate) network: Option<HlsNetworkSample>,
     pub(crate) paused: bool,
     pub(crate) last_frame_ms: Option<f64>,
     pub(crate) slowest_frame_ms: f64,
@@ -58,17 +74,19 @@ impl DiagnosticsSampler {
         self.paused = paused;
     }
 
-    pub(crate) fn sample_if_due(&mut self) {
-        if self.paused { return; }
+    // True only on a due sampling tick. Callers may update other cached
+    // metrics on that same tick; never re-read them on intermediate UI frames.
+    pub(crate) fn sample_if_due(&mut self) -> bool {
+        if self.paused { return false; }
         let now = Instant::now();
         if self.last_read.is_some_and(|at| now.duration_since(at) < SAMPLE_INTERVAL) {
-            return;
+            return false;
         }
         self.last_read = Some(now);
         let Some(counters) = read_process_counters() else {
             self.previous = None;
             self.current = None;
-            return;
+            return true;
         };
         let cpu_percent = self.previous
             .and_then(|(previous_at, previous)| cpu_usage_percent(
@@ -84,6 +102,7 @@ impl DiagnosticsSampler {
         self.current = Some(point);
         self.history.push_back(point);
         if self.history.len() > MAX_HISTORY { self.history.pop_front(); }
+        true
     }
 
     pub(crate) fn record_frame(&mut self, elapsed: Duration) {
@@ -248,7 +267,7 @@ mod tests {
     #[test]
     fn pause_does_not_sample_or_record_frames() {
         let mut sampler = DiagnosticsSampler { paused: true, ..DiagnosticsSampler::default() };
-        sampler.sample_if_due();
+        assert!(!sampler.sample_if_due());
         sampler.record_frame(Duration::from_millis(17));
         assert!(sampler.current.is_none());
         assert_eq!(sampler.recorded_frames, 0);
