@@ -170,6 +170,10 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss fight active" => "Batalha de boss ativa",
         "Boss cancelled; returning to saved hunt" =>
             "Boss cancelado; retornando à hunt salva",
+        "Boss cancelled; checking Center travel" =>
+            "Boss cancelado; verificando viagem ao Centro Pokémon",
+        "Cancelled boss Center travel was never confirmed" =>
+            "A ida ao Centro Pokémon após cancelar o boss não foi confirmada",
         "Waiting for Pokémon Center confirmation after Give Up" =>
             "Aguardando confirmação do Centro Pokémon após desistir",
         "Pokémon Center was not confirmed after three Give Up attempts. Navigation is paused; check game state or cancel the destination." =>
