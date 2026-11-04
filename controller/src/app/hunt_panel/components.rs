@@ -285,7 +285,7 @@ pub(super) fn draw_atlas_encounter(
     });
 }
 
-pub(super) fn atlas_type_multiplier(
+pub(in crate::app) fn atlas_type_multiplier(
     reference:&AtlasReference,attack:&str,defenders:&[String]
 )->Option<f64>{
     if defenders.is_empty(){return None}
@@ -308,7 +308,7 @@ pub(super) fn atlas_type_multiplier(
 /// Neutral does not mean missing: hide 1× results by default so advantages,
 /// immunities and weaknesses remain readable above the fold.
 
-pub(super) fn atlas_type_name(kind:&str)->&str {
+pub(in crate::app) fn atlas_type_name(kind:&str)->&str {
     if !pt_br(){return kind}
     match kind.to_ascii_uppercase().as_str(){
         "NORMAL"=>"Normal","FIRE"=>"Fogo","WATER"=>"Água",
@@ -408,7 +408,7 @@ pub(super) fn draw_atlas_type_direction(
     });
 }
 
-pub(super) fn atlas_types_for_active(
+pub(in crate::app) fn atlas_types_for_active(
     view:&HuntView,reference:&AtlasReference
 )->Vec<String>{
     let Some(pokemon)=view.active_pokemon.as_ref()else{return Vec::new()};
@@ -417,7 +417,7 @@ pub(super) fn atlas_types_for_active(
         .map(|species|species.types.clone()).unwrap_or_default()
 }
 
-pub(super) fn draw_atlas_matchup(
+pub(in crate::app) fn draw_atlas_matchup(
     ui:&mut egui::Ui,reference:Option<&AtlasReference>,
     lead_types:&[String],target_types:&[String],
     lead_name:&str,target_name:&str,target_context:&str,
