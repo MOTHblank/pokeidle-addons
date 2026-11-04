@@ -329,6 +329,7 @@ fn draw_boss_status_card(
         .corner_radius(10.0)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(tr("Boss status"))
@@ -468,6 +469,7 @@ fn draw_boss_history_card(
         .corner_radius(10.0)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.label(
                 RichText::new(tr("Boss victories & loot"))
                     .size(13.0)
