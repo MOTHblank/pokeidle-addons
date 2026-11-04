@@ -134,6 +134,14 @@ impl PvpAutomation {
         }
     }
 
+    /// The UI may toggle off and back on between worker ticks. Its revision
+    /// ensures this explicit rearm is observed even if the final state is on.
+    pub fn on_user_toggle(&mut self) {
+        self.vip_rejected = false;
+        self.last_vip_sync = None;
+        self.warning = None;
+    }
+
     pub fn on_reconnect(&mut self) {
         self.queue_known = false;
         self.queued = false;
@@ -448,6 +456,10 @@ mod tests {
         assert_eq!(p.next(Some(true),true,Some(false),Some(25),
             t + Duration::from_secs(30)),None);
         assert_eq!(p.next(Some(false),true,Some(false),Some(25),t),None);
+        assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
+            Some(PvpAction::SetVipAuto(true)));
+        p.on_frame(&json!({"t":"pvp","filaAutoDesligada":true}),t);
+        p.on_user_toggle(); // Off/on happened between polling ticks.
         assert_eq!(p.next(Some(true),true,Some(false),Some(25),t),
             Some(PvpAction::SetVipAuto(true)));
     }
