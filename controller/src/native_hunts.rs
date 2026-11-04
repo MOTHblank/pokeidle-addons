@@ -95,6 +95,10 @@ pub struct PokemonInfo {
     pub id: u64,
     pub species_id: Option<u64>,
     pub name: String,
+    /// Team position from PokéIdle. None means the Pokémon is in the Center/depot.
+    pub slot: Option<u64>,
+    /// The starter ignores the normal trainer-level usability ceiling.
+    pub starter: bool,
     pub level: u32,
     pub xp: Option<u64>,
     pub xp_level: Option<u64>,
@@ -656,6 +660,14 @@ impl HuntIntel {
         });
         if let Some(name) = value.get("nome").or_else(|| value.get("name")).and_then(Value::as_str) {
             existing.name = name.to_owned();
+        }
+        // An explicit null slot is authoritative: the Pokémon left the active
+        // team. Missing slot on a partial pkMud patch preserves membership.
+        if let Some(raw) = value.get("slot") {
+            existing.slot = raw.as_u64();
+        }
+        if let Some(starter) = value.get("starter").and_then(Value::as_bool) {
+            existing.starter = starter;
         }
         // Game roster frames may use pokeId while wild frames use speciesId.
         // Both are Pokédex IDs; the owned id is an account-local instance ID.
@@ -1688,7 +1700,8 @@ mod tests {
             "area":"Forest","regiao":"Kanto","nivel":120,
             "especies":[{"pokeId":123,"pontos":90},{"pokeId":16,"pontos":10}]}],
             "estado":{"huntSlug":"route-1","activeId":99,"level":850,"xp":1000,
-                "pokemons":[{"id":99,"nome":"Scizor","level":851,"xp":2000,"quality":1.3,
+                "pokemons":[{"id":99,"nome":"Scizor","slot":0,"starter":true,
+                    "level":851,"xp":2000,"quality":1.3,
                     "nota":9.4,"looktype":131,"lookShiny":132,
                     "ivs":{"atk":31,"speed":28}}]}}).to_string(),at);
         assert_eq!(m.view.hunts.len(),1);
@@ -1697,10 +1710,20 @@ mod tests {
         assert_eq!(m.view.active_pokemon.as_ref().unwrap().grade,Some(9.4));
         assert_eq!(m.view.active_pokemon.as_ref().unwrap().looktype,Some(131));
         assert_eq!(m.view.active_pokemon.as_ref().unwrap().shiny_looktype,Some(132));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().slot,Some(0));
+        assert!(m.view.active_pokemon.as_ref().unwrap().starter);
         m.ingest(&json!({"t":"estado","estado":{"pkMud":[{"id":99,"xp":2400}],
             "evento":{"xpTreinadorPct":30.0},"guildBonusPct":5.0}}).to_string(),
             at+Duration::from_secs(2));
         assert_eq!(m.view.active_pokemon.as_ref().unwrap().xp,Some(2400));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().slot,Some(0),
+            "partial patches must preserve team membership");
+        m.ingest(&json!({"t":"estado","estado":{"pkMud":[
+            {"id":99,"slot":null,"starter":false}
+        ]}}).to_string(), at+Duration::from_secs(3));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().slot,None,
+            "explicit slot null must remove the Pokémon from the team");
+        assert!(!m.view.active_pokemon.as_ref().unwrap().starter);
         assert_eq!(m.view.bonuses.trainer_event_pct,30.0);
     }
     #[test]
