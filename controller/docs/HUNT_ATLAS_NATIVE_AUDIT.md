@@ -188,6 +188,13 @@ No visual runtime acceptance is asserted by this document.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
+- All 989 upstream spreadsheet move overrides (11,250 attacks) are bundled from
+  `shared/golpes-planilhas.mjs`. The reference applies them after the public
+  creature catalogs, using the official power-to-cooldown curve. Megas no
+  longer receive a fabricated 600-power/30-second signature move: the 94
+  upstream Mega species have their actual movesets, including Mega Glimmora,
+  while Mega Zygarde now uses Complete Zygarde as its base. Newly introduced
+  legendary/Ogerpon form identities and branched evolution edges are retained.
 - The 20% Sacrifice XP boost is included for both XP streams only when the
   authoritative `automation.sacrificio.ate` expiry is active, and causes the
   forecast cache to invalidate when its state changes.
