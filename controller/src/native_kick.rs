@@ -34,6 +34,14 @@ pub struct KickSnapshot {
     pub last_checked: Option<Instant>,
     pub error: Option<String>,
 }
+/// Lightweight data for the opt-in Diagnostics screen. Existing viewers,
+/// channel metadata and worker telemetry are never cloned by this probe.
+#[derive(Clone, Copy, Debug)]
+pub struct KickDiagnosticsSnapshot {
+    pub bandwidth: BandwidthUsage,
+    pub channels: usize,
+}
+
 impl Default for KickSnapshot {
     fn default() -> Self {
         Self {
@@ -238,6 +246,14 @@ impl KickMonitor {
     }
     /// Stable, allocation-free cache key for this monitor instance.
     pub fn identity(&self) -> Instant {self.created_at}
+    /// Called only on a live diagnostics tick. A busy lock skips the reading;
+    /// sampling must never delay an active Kick worker.
+    pub fn diagnostics_snapshot(&self) -> Option<KickDiagnosticsSnapshot> {
+        let channels = self.snapshot.try_lock().ok()?.channels.len();
+        let bandwidth = self.bandwidth.diagnostics_usage()?;
+        Some(KickDiagnosticsSnapshot { bandwidth, channels })
+    }
+
     pub fn snapshot(&self) -> KickSnapshot {
         let mut state = self.snapshot.lock().map(|s| s.clone()).unwrap_or_default();
         state.auth_denied = self.auth.denied();
