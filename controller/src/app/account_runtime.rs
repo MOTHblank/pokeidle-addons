@@ -56,7 +56,7 @@ pub(super) struct HuntAccountState {
     pub(super) offline_history: Option<crate::native_history::HistorySnapshot>,
     /// Immediate UI acknowledgement for a Hunt click. The authoritative
     /// server pending/current state replaces or clears this on the next snapshot.
-    pub(super) hunt_action_pending: Option<String>,
+    pub(super) hunt_action_pending: Option<(String, Instant)>,
     pub(super) hunt_action_error: Option<String>,
     pub(super) hunt_estimate_cache: hunt_panel::EstimateCache,
     pub(super) hunt_rankings: hunt_panel::RankingsCache,
