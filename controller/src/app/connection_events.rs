@@ -510,15 +510,9 @@ impl ControllerApp {
                     self.adopt_native_session(event.index, session);
                     self.runtimes[event.index].capture.capture_draft=None;
                     self.runtimes[event.index].automation.automation_draft=AutomationDraft::default();
-                    self.set_status(if event.twitch_auto_detected {
-                        format!(
-                            "{}: PokéIdle connected · existing Twitch login detected automatically",
-                            self.account_name(profile))
-                    } else {
-                        format!(
-                            "{}: PokéIdle connected with your saved login",
-                            self.account_name(profile))
-                    }, false);
+                    self.set_status(format!(
+                        "{}: PokéIdle connected with your saved login",
+                        self.account_name(profile)), false);
                 },
                 Ok(None) => {
                     self.runtimes[event.index].session.require_browser_login = true;
