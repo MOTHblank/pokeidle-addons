@@ -94,14 +94,12 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
 }
 
 /// Reopen the selected PokéIdle Firefox profile as an ordinary browser
-/// for Kick authentication. Keep Google cookies and the rest of the profile,
-/// but do not launch a Remote Agent, BiDi, or any browser automation.
-/// The normal PokéIdle handoff must have released the Firefox profile lock.
+/// for Twitch authentication. Keep Google cookies and the rest of the profile,
+/// but do not launch a Remote Agent, BiDi, or browser automation.
+/// native_twitch_login verifies profile ownership before calling this launcher.
 pub fn launch_twitch_login(config: &Config) -> Result<Child, String> {
-    // Reuse the selected PokéIdle account's isolated browser profile so the
-    // Twitch auth cookie can be imported into that account's next native
-    // bootstrap. The caller already owns the stop/launch lifecycle, so do not
-    // add another blocking profile-process scan here.
+    // The login worker watches this profile's local Twitch auth cookie, stores
+    // it in protected storage, then closes only the process created here.
     migrate_legacy_profile(config)?;
     if !config.profile_dir.is_dir() {
         return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
