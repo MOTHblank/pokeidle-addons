@@ -1,6 +1,5 @@
 use serde_json::Value;
 use std::cmp::Ordering;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -380,14 +379,18 @@ pub fn maybe_run_update_helper() -> bool {
             .next()
             .and_then(|value| value.into_string().ok())
             .and_then(|value| value.parse::<u32>().ok());
-        let result = match (target, checksum, parent_pid) {
+        let result = match (target.as_ref(), checksum.as_deref(), parent_pid) {
             (Some(target), Some(checksum), Some(parent_pid)) => {
-                run_update_helper(&target, &checksum, parent_pid)
+                run_update_helper(target, checksum, parent_pid)
             }
             _ => Err("invalid update helper arguments".into()),
         };
         if let Err(error) = result {
             write_helper_error(&error);
+            // A failed update must not strand the user with Moth closed.
+            if let Some(target) = target.as_ref().filter(|path| path.exists()) {
+                let _ = Command::new(target).spawn();
+            }
         }
     }
     true
@@ -399,13 +402,9 @@ fn parent_process_alive(parent_pid: u32) -> bool {
     let mut command = Command::new("tasklist.exe");
     command.creation_flags(0x08000000);
     let output = command
-        .args([
-            "/FI",
-            &format!("PID eq {parent_pid}"),
-            "/FO",
-            "CSV",
-            "/NH",
-        ])
+        .arg("/FI")
+        .arg(format!("PID eq {parent_pid}"))
+        .args(["/FO", "CSV", "/NH"])
         .output();
     let Ok(output) = output else {
         // If tasklist itself is unavailable, the file replacement loop below
