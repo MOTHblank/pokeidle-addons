@@ -77,6 +77,8 @@ pub struct StreamerState {
     pub login: String,
     pub channel_id: Option<String>,
     pub points: Option<u64>,
+    /// Point increases observed for this channel during the current miner session.
+    pub points_gained: u64,
     /// A successful telemetry HTTP acknowledgement, not confirmed reward credit.
     pub last_watch_signal: Option<Instant>,
     /// Last time the HLS media playlist and listed segments were successfully touched.
