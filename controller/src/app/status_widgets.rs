@@ -5,7 +5,7 @@ use super::{egui, tr, Align, Color32, Health, Layout, Margin, RichText, Stroke,
 pub(super) fn status_chip(ui: &mut egui::Ui, name: &str, state: &str, good: bool) -> egui::Response {
     let waiting = [
         tr("Connecting"), tr("Reconnecting"), tr("Sign-in required"),
-        tr("Waiting for login"), tr("Waiting for Twitch sign-in"),
+        tr("Waiting for login"),
     ].contains(&state);
     let color = if good { GOOD } else if waiting { WARN } else { DIM };
     ui.label(
