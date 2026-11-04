@@ -15,14 +15,14 @@ Acompanhe suas caçadas, configure automações e mantenha as sessões funcionan
 - **Hunt Atlas:** compare caçadas, estimativas de experiência, chances de captura e níveis de Outland.
 - **Automações:** configure captura automática, reposição de Poké Bolas, poções e revives, além de regras de compra no mercado.
 - **Contas:** organize até quatro perfis e acompanhe suas sessões do PokéIdle.
-- **Twitch:** exibe o vínculo e os bônus de pontos do canal informados pelo próprio jogo (XP, Capture Boost e Secret Lure), sem abrir chats nem manter conexão IRC.
+- **Twitch:** minerador Rust nativo opcional para os canais oficiais ao vivo informados pelo PokéIdle, com crédito de tempo assistido e coleta de bônus periódicos de pontos; não abre chats nem mantém IRC. Os bônus do jogo (XP, Capture Boost e Secret Lure) continuam dependendo do resgate de recompensas de pontos do canal.
 - **Kick:** sessões nativas independentes por conta, com tráfego HLS de baixo bitrate, presença via WebSocket da Kick e leitura do saldo real de pontos (ganho mostrado apenas quando confirmado por aumento de saldo).
 
 ## Como começar
 
 1. [**Baixe o Moth Controller**](https://github.com/MOTHblank/pokeidle-addons/releases/latest) e abra o aplicativo.
 2. Acesse **Contas** e configure os perfis que deseja utilizar.
-3. Entre no **PokéIdle** quando solicitado. Se sua conta Twitch estiver vinculada no jogo, o Moth Controller apenas lê os bônus de pontos do canal já resgatados.
+3. Entre no **PokéIdle** quando solicitado. Para minerar pontos da Twitch, use o login opcional do **Minerador Twitch** em **Contas**; ele nunca é necessário para iniciar o PokéIdle.
 4. Use o **Painel** para acompanhar suas contas, **Automações** para configurar as automações e **Hunt Atlas** para encontrar as melhores caçadas para seus objetivos.
 
 **Navegador recomendado:** [Firefox Developer Edition](https://www.mozilla.org/pt-BR/firefox/developer/).

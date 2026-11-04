@@ -17,6 +17,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "gif
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+moth-twitch = { path = "crates/moth-twitch" }
 
 [build-dependencies]
 winresource = { version = "=0.1.34", default-features = false }

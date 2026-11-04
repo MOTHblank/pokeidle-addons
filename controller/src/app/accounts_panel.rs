@@ -66,6 +66,10 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
     let health = app.runtimes[index].game.health();
     let running = app.runtimes[index].game.is_running();
     let game_phase = app.runtimes[index].game.native.as_ref().map(|session| session.snapshot().phase);
+    let twitch_miner = app.runtimes[index].game.native.as_ref()
+        .and_then(|session| session.twitch_miner_snapshot());
+    let twitch_miner_online = twitch_miner.as_ref()
+        .is_some_and(|state| state.phase == moth_twitch::MinerPhase::Online);
     let game_online = game_phase.as_deref() == Some("Online")
         || (running && health.telemetry_is_fresh() && health.logged_in);
     let connecting = app.runtimes[index].session.native_verifying || app.runtimes[index].session.native_handoff_busy
@@ -127,9 +131,33 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
             else if connecting { tr("Connecting") }
             else if running { tr("Waiting for login") }
             else { tr("Not signed in") };
+        let twitch_miner_label = match twitch_miner.as_ref().map(|state| state.phase) {
+            Some(moth_twitch::MinerPhase::Online) => tr("Active"),
+            Some(moth_twitch::MinerPhase::Connecting) |
+            Some(moth_twitch::MinerPhase::Reconnecting) => tr("Reconnecting"),
+            Some(moth_twitch::MinerPhase::NeedsLogin) => tr("Optional sign-in"),
+            Some(moth_twitch::MinerPhase::Failed) => tr("Error"),
+            Some(moth_twitch::MinerPhase::Stopped) => tr("Stopped"),
+            None => tr("Optional sign-in"),
+        };
         ui.horizontal_wrapped(|ui| {
             status_chip(ui, "PokéIdle", game_label, game_online);
+            status_chip(ui, tr("Twitch miner"), twitch_miner_label, twitch_miner_online);
         });
+        if let Some(state)=twitch_miner.as_ref() {
+            if twitch_miner_online {
+                ui.label(RichText::new(if pt_br() {
+                    format!("{} / {} canais · +{} pontos · {} bônus",
+                        state.active,state.desired,state.points_gained,state.bonuses_claimed)
+                } else {
+                    format!("{} / {} channels · +{} points · {} bonuses",
+                        state.active,state.desired,state.points_gained,state.bonuses_claimed)
+                }).size(10.0).color(DIM));
+            }
+            if let Some(error)=state.error.as_deref() {
+                ui.label(RichText::new(error).size(10.0).color(WARN));
+            }
+        }
         if let Some(error) = app.runtimes[index].session.native_error.as_deref() {
             ui.label(RichText::new(tr_dynamic(localize_status(error.to_owned()))).size(10.0).color(WARN));
         }
@@ -187,6 +215,7 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 if setup.profile_ready { tr("Ready") } else { tr("Created on first launch") },
                 setup.profile_ready);
             status_chip(ui, "PokéIdle login", game_label, game_online);
+            status_chip(ui, tr("Twitch miner"), twitch_miner_label, twitch_miner_online);
             ui.add_space(7.0);
             if game_online {
                 ui.label(RichText::new(tr(
@@ -198,9 +227,17 @@ fn draw_account_manager_card(app: &mut ControllerApp, ui: &mut egui::Ui,
                 )).size(10.0).color(MUTED));
             }
             ui.add_space(6.0);
-            if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
-                app.profile_action(profile, ProfileAction::GoogleSignIn);
-            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(tr("PokéIdle / Google sign-in (unmonitored)")).clicked() {
+                    app.profile_action(profile, ProfileAction::GoogleSignIn);
+                }
+                if ui.button(tr("Twitch miner sign-in (optional)")).clicked() {
+                    app.profile_action(profile, ProfileAction::TwitchMiner);
+                }
+            });
+            ui.label(RichText::new(tr(
+                "Twitch mining is optional and never blocks PokéIdle startup."
+            )).size(10.0).color(MUTED));
         });
         if changed {
             let trimmed = app.accounts[index].name.trim();
