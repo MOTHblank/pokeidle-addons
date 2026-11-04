@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOG_LOCK: Mutex<()> = Mutex::new(());
-static MAX_LOG_BYTES: AtomicU64 = AtomicU64::new(16 * 1024 * 1024);
-static RETENTION_DAYS: AtomicU64 = AtomicU64::new(30);
+static MAX_LOG_BYTES: AtomicU64 = AtomicU64::new(8 * 1024 * 1024);
+static RETENTION_DAYS: AtomicU64 = AtomicU64::new(7);
 static WRITE_COUNT: AtomicU64 = AtomicU64::new(0);
 
 fn archive(path: &Path) -> PathBuf { path.with_extension("log.1") }
