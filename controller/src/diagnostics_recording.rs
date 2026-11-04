@@ -148,8 +148,10 @@ impl RecordingSession {
     }
 
     pub(crate) fn export_report(&self) -> Result<std::path::PathBuf, String> {
+        // Serialize/export an owned snapshot without holding the sampler
+        // mutex, so explicit disk writes never stall subsequent OS samples.
         let snapshot = self.sampler.lock()
-            .map_err(|_| "Diagnostic recorder data unavailable".to_owned())?;
+            .map_err(|_| "Diagnostic recorder data unavailable".to_owned())?.clone();
         let mut report = snapshot.report_json();
         let now = Instant::now();
         report["recording_duration_ms"] = serde_json::json!(self.elapsed().as_millis());
