@@ -10,7 +10,9 @@ const RELEASE_API_URL: &str =
     "https://api.github.com/repos/MOTHblank/pokeidle-addons/releases/latest";
 pub const RELEASES_URL: &str = "https://github.com/MOTHblank/pokeidle-addons/releases/latest";
 #[cfg(windows)]
-const WINDOWS_UPDATE_ASSET: &str = "Moth-Controller-Portable-windows-x86_64.exe";
+fn windows_update_asset(tag: &str) -> String {
+    format!("Moth-Controller-Portable-{tag}-windows-x86_64.exe")
+}
 
 #[derive(Clone, Debug)]
 struct ReleaseInfo {
@@ -149,8 +151,9 @@ fn fetch_latest_release() -> Result<ReleaseInfo, String> {
                     .map(str::to_string)
             })
         };
-        let checksum_name = format!("{WINDOWS_UPDATE_ASSET}.sha256");
-        (find(WINDOWS_UPDATE_ASSET), find(&checksum_name))
+        let asset_name = windows_update_asset(&tag);
+        let checksum_name = format!("{asset_name}.sha256");
+        (find(&asset_name), find(&checksum_name))
     };
 
     Ok(ReleaseInfo {
