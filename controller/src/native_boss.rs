@@ -230,7 +230,7 @@ impl LootWriter {
                 while rx.try_recv().is_ok() {}
                 let result = writer_entries.lock()
                     .map_err(|_| "Boss loot snapshot lock poisoned".to_owned())
-                    .and_then(|entries| save_log(&path, &entries));
+                    .and_then(|entries| save_log(&path, entries.as_slice()));
                 match result {
                     Ok(()) => {
                         if let Ok(mut state) = writer_status.lock() {
@@ -244,9 +244,7 @@ impl LootWriter {
                         crate::logging::warn(&error);
                         if let Ok(mut state) = writer_status.lock() {
                             state.unsaved = true;
-                            state.warning = Some(format!(
-                                "Boss loot could not be saved; retrying: {error}"
-                            ));
+                            state.warning = Some(error.clone());
                         }
                         failures = failures.saturating_add(1);
                         // A closed game worker must not hang application exit
@@ -255,10 +253,21 @@ impl LootWriter {
                         if disconnected {
                             thread::sleep(Duration::from_millis(250));
                         } else {
-                            let seconds = 1u64 << failures.min(5);
-                            if let Err(mpsc::RecvTimeoutError::Disconnected) =
-                                rx.recv_timeout(Duration::from_secs(seconds)) {
-                                disconnected = true;
+                            // New victories must not defeat the backoff and
+                            // cause repeated disk writes on the game worker.
+                            let deadline = Instant::now() +
+                                Duration::from_secs(1u64 << failures.min(5));
+                            loop {
+                                let remaining = deadline.saturating_duration_since(Instant::now());
+                                if remaining.is_zero() { break; }
+                                match rx.recv_timeout(remaining) {
+                                    Ok(()) => {}, // coalesce without an early retry
+                                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                        disconnected = true;
+                                        break;
+                                    }
+                                }
                             }
                         }
                         // Keep the latest snapshot pending even without any

@@ -3,6 +3,8 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Boss loot could not be saved; retrying" =>
+            "Não foi possível salvar o loot do boss; tentando novamente",
         "Game disconnected. Boss controls will become available after reconnection." => "Jogo desconectado. Os controles de boss voltarão após reconectar.",
         "Cancelling boss travel; checking server location" =>
             "Cancelando a viagem do boss; verificando a localização no servidor",

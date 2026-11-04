@@ -132,7 +132,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             }
             if let Ok(status) = view.write_status.lock() {
                 if let Some(error) = status.warning.as_deref() {
-                    ui.colored_label(super::WARN, error);
+                    ui.colored_label(super::WARN, format!(
+                        "{}: {}", tr("Boss loot could not be saved; retrying"), error));
                 }
             }
             ui.label(format!("{}: {}",tr("Confirmed boss victories recorded"),view.log.len()));
