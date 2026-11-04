@@ -187,6 +187,69 @@ impl DiagnosticsSampler {
         self.last_panel_ms = panel.map(|t| t.as_secs_f64() * 1000.0);
     }
 
+    /// Report creation is an explicit user action, never an automatic save.
+    /// Account names, credentials, network URLs and game state are excluded.
+    fn report_json(&self) -> serde_json::Value {
+        let now = Instant::now();
+        serde_json::json!({
+            "schema": "moth-controller-diagnostics-v1",
+            "version": env!("CARGO_PKG_VERSION"),
+            "sampling_interval_ms": SAMPLE_INTERVAL.as_millis(),
+            "cpu_units": "percent_of_one_logical_cpu",
+            "process_samples": self.history.iter().map(|point| serde_json::json!({
+                "age_ms": point.at.map(|at| now.saturating_duration_since(at).as_millis()),
+                "cpu_percent": point.cpu_percent,
+                "resident_bytes": point.resident_bytes,
+                "peak_bytes": point.peak_bytes,
+                "threads": point.threads,
+            })).collect::<Vec<_>>(),
+            "ui": {
+                "frame_pass_samples_ms": self.ui_frames.iter().copied().collect::<Vec<_>>(),
+                "frame_passes_total": self.recorded_frames,
+                "last_preflight_ms": self.last_preflight_ms,
+                "last_panel_ms": self.last_panel_ms,
+                "last_process_probe_ms": self.last_process_probe_ms,
+                "last_diagnostics_refresh_ms": self.last_network_probe_ms,
+            },
+            "kick_hls": self.network.as_ref().map(|network| serde_json::json!({
+                "session_bytes": network.bytes,
+                "last_minute_bytes": network.last_minute,
+            })),
+            "worker_queues": self.operational.as_ref().map(|ops| serde_json::json!({
+                "game": ops.game.iter().map(|game| serde_json::json!({
+                    "profile_slot": game.slot + 1,
+                    "phase": game.phase,
+                    "capture_queued": game.capture_queued,
+                    "automation_queued": game.automation_queued,
+                    "automation_pending": game.automation_pending,
+                    "market_pending": game.market_pending,
+                    "restock_pending": game.restock_pending,
+                })).collect::<Vec<_>>(),
+                "kick_channels": ops.kick_channels.map(|pool| serde_json::json!({
+                    "workers": pool.workers, "idle": pool.idle, "pending": pool.pending,
+                })),
+                "kick_hls": ops.kick_hls.map(|pool| serde_json::json!({
+                    "workers": pool.workers, "idle": pool.idle, "pending": pool.pending,
+                })),
+            })),
+        })
+    }
+
+    pub(crate) fn export_report(&self) -> Result<std::path::PathBuf, String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let root = crate::config::data_root()?.join("Diagnostics");
+        std::fs::create_dir_all(&root)
+            .map_err(|error| format!("Could not create diagnostics directory: {error}"))?;
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("Invalid system clock: {error}"))?.as_millis();
+        let path = root.join(format!("diagnostics-{stamp}.json"));
+        let bytes = serde_json::to_vec_pretty(&self.report_json())
+            .map_err(|error| format!("Could not serialize diagnostics: {error}"))?;
+        std::fs::write(&path, bytes)
+            .map_err(|error| format!("Could not save diagnostics report: {error}"))?;
+        Ok(path)
+    }
+
     pub(crate) fn mean_frame_ms(&self) -> Option<f64> {
         (!self.ui_frames.is_empty()).then(||
             self.ui_frames.iter().sum::<f64>() / self.ui_frames.len() as f64
