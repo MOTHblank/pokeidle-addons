@@ -298,7 +298,7 @@ fn draw_boss_details(
                 } else if !view.state_known {
                     tr("Waiting for authoritative server boss state.").to_owned()
                 } else if view.busy && !view.auto && view.arena.is_none() {
-                    tr("Returning to the Pokémon Center before boss entry.").to_owned()
+                    tr("Returning to Pokémon Center before boss entry").to_owned()
                 } else if view.busy || view.auto || view.arena.is_some() {
                     tr("Finish the current boss run before starting another.").to_owned()
                 } else if level.is_none() {
