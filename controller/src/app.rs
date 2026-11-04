@@ -3,6 +3,7 @@ use crate::icon;
 use crate::config::{AccountConfig, Config, GameProfile, KickStreamPreferences, UiOptions};
 use crate::preferences::AppPreferences;
 use crate::settings_backup::SettingsBackup;
+use crate::single_instance::{RestoreSignal, SingleInstance};
 use crate::{alerts, startup};
 use crate::firefox;
 use crate::kick::KickStream;
@@ -1081,8 +1082,10 @@ pub struct ControllerApp {
     kick_token_rx: Receiver<KickTokenLoadedEvent>,
     ui_options: UiOptions,
     preferences: AppPreferences,
+    restore_signal: Arc<RestoreSignal>,
     last_alert: [Option<Instant>; 4],
     last_native_phase: [Option<String>; 4],
+    disconnection_alerts: [alerts::DisconnectAlertState; 4],
     last_notification_inspection: Option<Instant>,
     hunt_reference: Option<Arc<AtlasReference>>,
     hunt_reference_error: Option<String>,
@@ -1116,7 +1119,7 @@ pub struct ControllerApp {
 }
 
 impl ControllerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, restore_signal: Arc<RestoreSignal>) -> Self {
         let preferences = AppPreferences::load().unwrap_or_else(|error| {
             logging::warn(&format!("application options load failed: {error}"));
             AppPreferences::default()
@@ -1192,8 +1195,10 @@ impl ControllerApp {
                 UiOptions::default()
             }),
             preferences,
+            restore_signal,
             last_alert: [None; 4],
             last_native_phase: std::array::from_fn(|_| None),
+            disconnection_alerts: [alerts::DisconnectAlertState::default(); 4],
             last_notification_inspection: None,
             hunt_reference: None,
             hunt_reference_error: None,
@@ -1315,22 +1320,24 @@ impl ControllerApp {
         self.last_notification_inspection = Some(now);
         for index in 0..self.runtimes.len() {
             let game = &self.runtimes[index].game;
-            if game.stopping {
-                self.last_native_phase[index] = None;
-                continue;
-            }
-            let phase = game.native.as_ref().map(|native| native.snapshot().phase);
+            let phase = if game.stopping { None }
+                else { game.native.as_ref().map(|native| native.snapshot().phase) };
             let was_online = self.last_native_phase[index].as_deref() == Some("Online");
             let changed = self.last_native_phase[index].as_deref() != phase.as_deref();
-            if changed {
-                if phase.as_deref() == Some("NeedsLogin") {
-                    alerts::maybe_notify("sign-in required", true,
-                        self.preferences, &mut self.last_alert);
-                } else if was_online && matches!(phase.as_deref(),
-                    Some("Offline" | "Reconnecting")) {
-                    alerts::maybe_notify("connection lost", true,
-                        self.preferences, &mut self.last_alert);
-                }
+            if changed && phase.as_deref() == Some("NeedsLogin") {
+                alerts::maybe_notify_kind(alerts::AlertKind::Auth,
+                    self.preferences, &mut self.last_alert);
+            }
+            // A dropped native session can leave no process handles at all.
+            // Keep observing a previously-online account until the user
+            // explicitly Stops it or it recovers.
+            let still_active = !game.stopping && (game.native.is_some()
+                || game.child.is_some() || game.orphaned_pid.is_some()
+                || was_online || self.disconnection_alerts[index].pending());
+            if self.disconnection_alerts[index].observe(
+                was_online, phase.as_deref(), still_active, now) {
+                alerts::maybe_notify_kind(alerts::AlertKind::Disconnect,
+                    self.preferences, &mut self.last_alert);
             }
             self.last_native_phase[index] = phase;
         }
@@ -1345,6 +1352,18 @@ impl ControllerApp {
                 || session.cached_native_busy || session.native_handoff_busy
                 || runtime.kick.kick_monitor.is_some()
         })
+    }
+
+    fn restore_existing_window(&mut self, ctx: &egui::Context) {
+        if !self.restore_signal.take() { return; }
+        #[cfg(windows)]
+        self.tray_hidden.store(false, Ordering::Release);
+        // Use viewport commands rather than recreating the native window or
+        // restarting any authenticated account workers.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
     }
 
     fn handle_window_close(&mut self, ctx: &egui::Context) {
@@ -1442,6 +1461,7 @@ impl Drop for ControllerApp {
 
 impl eframe::App for ControllerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.restore_existing_window(ui.ctx());
         self.handle_window_close(ui.ctx());
         // Explicit developer capture may follow other pages, but ordinary
         // diagnostics never starts it or leaves any background worker.
@@ -1718,7 +1738,8 @@ fn configure_style(ctx: &egui::Context) {
     });
 }
 
-pub fn run() -> Result<(), String> {
+pub fn run(instance: SingleInstance) -> Result<(), String> {
+    let restore_signal = instance.signal();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Moth · PokéIdle")
@@ -1736,12 +1757,17 @@ pub fn run() -> Result<(), String> {
     let result = eframe::run_native(
         "Moth · PokéIdle",
         options,
-        Box::new(|cc| Ok(Box::new(ControllerApp::new(cc)))),
+        Box::new(move |cc| {
+            restore_signal.attach_context(&cc.egui_ctx);
+            Ok(Box::new(ControllerApp::new(cc, Arc::clone(&restore_signal))))
+        }),
     );
     // Window is gone, but the controller process stays alive long enough to
     // finish each already-running browser close (including Stop mid-handoff).
     finish_firefox_shutdown_after_window();
     crate::native_background::finish_game_workers_after_window();
+    // Do not permit a second controller until cleanup has really finished.
+    drop(instance);
     result.map_err(|error| format!("could not start controller UI: {error}"))
 }
 

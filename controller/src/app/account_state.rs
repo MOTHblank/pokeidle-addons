@@ -84,13 +84,16 @@ impl ControllerApp {
             backup
         };
         let previous = SettingsBackup::from_active(
-            self.preferences, self.ui_options, &self.accounts);
+            self.preferences, self.ui_options, &self.accounts).with_saved_kick()?;
         if backup.app.start_with_windows != previous.app.start_with_windows {
             startup::set_start_with_windows(backup.app.start_with_windows)?;
         }
         let result = (|| {
             Config::save_accounts(&backup.accounts)?;
             Config::save_ui_options(&backup.ui)?;
+            if let Some(kick) = backup.kick.as_ref() {
+                Config::save_kick_channels(&kick.channels, &kick.preferences)?;
+            }
             backup.app.save()?;
             Ok::<(), String>(())
         })();
@@ -98,11 +101,22 @@ impl ControllerApp {
             // Best effort rollback of all three persisted settings files.
             let _ = Config::save_accounts(&previous.accounts);
             let _ = Config::save_ui_options(&previous.ui);
+            if let Some(kick) = previous.kick.as_ref() {
+                let _ = Config::save_kick_channels(&kick.channels, &kick.preferences);
+            }
             let _ = previous.app.save();
             if backup.app.start_with_windows != previous.app.start_with_windows {
                 let _ = startup::set_start_with_windows(previous.app.start_with_windows);
             }
             return Err(format!("Could not restore settings (rollback attempted): {error}"));
+        }
+        // All four slots are offline, so replace the local Kick editor
+        // state without racing live monitor workers or queued automation.
+        if let Some(kick) = backup.kick.as_ref() {
+            for (index, runtime) in self.runtimes.iter_mut().enumerate() {
+                runtime.kick.kick_channels_input = kick.channels[index].clone();
+                runtime.kick.kick_stream_preferences = kick.preferences[index].clone();
+            }
         }
         self.accounts = backup.accounts;
         self.ui_options = backup.ui;

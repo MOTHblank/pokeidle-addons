@@ -52,6 +52,36 @@ Em **Contas**, configure seus perfis e faça login no PokéIdle e na Twitch quan
   apenas dados HLS Kick já contabilizados.
 - **Abrir no Firefox:** abre o jogo no navegador para interação manual.
 
+## Opções globais, instância única e backups
+
+O Moth Controller aceita **uma única instância por sessão do Windows** ou
+**por diretório de dados no Linux**. Abrir o programa novamente restaura e
+focaliza a janela existente (inclusive quando está minimizada ou oculta na
+bandeja), sem abrir um segundo conjunto de contas, processos Firefox ou
+conexões de jogo. O segundo processo termina após enviar esse pedido.
+No Linux, uma trava de arquivo evita instâncias simultâneas e um socket Unix
+local envia o pedido de restauração. No Windows, o controle usa mutex e evento
+nativos; nenhum componente extra precisa ser instalado. O listener fica
+bloqueado no sistema operacional quando ocioso, sem polling periódico.
+
+Em **Opções → Geral**, inicialização automática de contas e inicialização com
+o Windows são controles independentes, desativados por padrão. O fechamento
+para a bandeja e início oculto aparecem somente no Windows. O botão Fechar
+pode exigir confirmação quando existem contas ativas.
+
+Em **Opções → Notificações**, alertas são opcionais e limitados por frequência.
+Desconexões transitórias não geram alerta imediato: é preciso uma queda
+persistente de pelo menos 90 segundos para uma conta previamente online.
+Expiração de autenticação pode ser informada imediatamente.
+
+Em **Opções → Dados e registros**, o backup JSON inclui configurações locais
+do aplicativo, opções de UI, nomes/ativação das contas, canais Kick, favoritos
+e limites de streams. Configurações Auto Catch/Restock protegidas no cofre do
+SO e regras de automação mantidas pelo servidor **não** são copiadas, assim
+como credenciais, tokens ou cookies. A restauração exibe prévia e exige que
+as contas estejam paradas; backups antigos sem o bloco Kick preservam as
+configurações atuais dos streams.
+
 ## Kick — tela dedicada em Contas
 
 Acesse **Contas → Kick**. Os quatro perfis aparecem em um seletor compacto:
