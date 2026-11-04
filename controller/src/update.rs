@@ -70,6 +70,17 @@ pub fn check_now(status: &SharedUpdateStatus) -> Result<bool, String> {
                             "GitHub release check completed; latest version is {}",
                             release.tag
                         ));
+                        if state.staged_version.as_deref() != Some(release.tag.as_str()) {
+                            #[cfg(windows)]
+                            if let Some(path) = state.staged_path.take() {
+                                let _ = std::fs::remove_file(path);
+                            }
+                            #[cfg(windows)]
+                            {
+                                state.staged_sha256 = None;
+                            }
+                            state.staged_version = None;
+                        }
                         state.latest_version = Some(release.tag.clone());
                         state.release_notes_url = Some(release.notes_url.clone());
                         state.release = Some(release);
@@ -217,6 +228,20 @@ pub fn download_update(_status: &SharedUpdateStatus) -> Result<bool, String> {
 }
 
 #[cfg(windows)]
+fn cleanup_old_update_files(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else { return; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else { continue; };
+        let is_update = name.starts_with("moth-controller-") &&
+            (name.ends_with("-update.exe") || name.ends_with("-update.exe.download"));
+        if is_update {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(windows)]
 fn download_release(release: &ReleaseInfo) -> Result<(PathBuf, String), String> {
     let asset_url = release.asset_url.as_deref().ok_or("missing update asset")?;
     let checksum_url = release
@@ -226,6 +251,9 @@ fn download_release(release: &ReleaseInfo) -> Result<(PathBuf, String), String> 
     let directory = crate::config::data_root()?.join("Updates");
     std::fs::create_dir_all(&directory)
         .map_err(|error| format!("could not create update staging folder: {error}"))?;
+    // A Windows helper cannot delete its own running image after a successful
+    // replacement. Remove leftovers from previous updates before staging a new one.
+    cleanup_old_update_files(&directory);
 
     let safe_tag = release
         .tag

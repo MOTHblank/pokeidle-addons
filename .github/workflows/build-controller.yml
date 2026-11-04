@@ -13,6 +13,9 @@ on:
       - 'controller/build.rs'
       - 'controller/icon.rs'
       - 'controller/src/**'
+      - 'controller/windows/**'
+      - 'controller/linux/**'
+      - 'LICENSE'
       - '.github/release-notes/v*.md'
       # Permite nova tentativa quando corrigimos o workflow de uma release pendente.
       - '.github/workflows/build-controller.yml'
