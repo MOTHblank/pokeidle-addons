@@ -173,7 +173,10 @@ impl TwitchGql {
             .ok_or_else(|| GqlError::Protocol(format!(
                 "Channel points are unavailable for {login}"
             )))?;
-        let balance = points.get("balance").and_then(Value::as_u64).unwrap_or(0);
+        let balance = points.get("balance").and_then(Value::as_u64)
+            .ok_or_else(|| GqlError::Protocol(format!(
+                "Twitch did not return a confirmed point balance for {login}"
+            )))?;
         let available_claim_id = points.pointer("/availableClaim/id")
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
@@ -236,9 +239,12 @@ impl TwitchGql {
         {
             return Err(GqlError::Protocol(format!("Twitch bonus claim failed: {message}")));
         }
-        if let Some(status) = value.pointer("/data/claimCommunityPoints/status")
-            .and_then(Value::as_str)
-        {
+        let claimed = value.pointer("/data/claimCommunityPoints")
+            .filter(|response| !response.is_null())
+            .ok_or_else(|| GqlError::Protocol(
+                "Twitch did not acknowledge the bonus claim".into()
+            ))?;
+        if let Some(status) = claimed.get("status").and_then(Value::as_str) {
             if !matches!(status, "SUCCESS" | "ALREADY_CLAIMED") {
                 return Err(GqlError::Protocol(format!(
                     "Twitch bonus claim returned {status}"
