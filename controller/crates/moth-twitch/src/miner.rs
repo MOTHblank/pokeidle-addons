@@ -236,6 +236,9 @@ fn run(
         cache.retain(|channel, _| channels.binary_search(channel).is_ok());
         if let Ok(mut current) = snapshot.lock() {
             current.desired = channels.len();
+            if channels.is_empty() {
+                current.active = 0;
+            }
             current.streamers.retain(|streamer| channels.binary_search(&streamer.login).is_ok());
         }
 
