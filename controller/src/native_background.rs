@@ -545,6 +545,9 @@ impl NativeSession {
         // A worker can expire while its initial handoff is still in flight.
         if self.snapshot().phase=="NeedsLogin" { wake(); }
     }
+    pub fn set_twitch_favorites(&self, channels: Vec<String>) {
+        self.twitch_miner.set_favorites(channels);
+    }
     pub fn twitch_miner_snapshot(&self) -> Option<moth_twitch::MinerSnapshot> {
         self.twitch_miner.snapshot()
     }
