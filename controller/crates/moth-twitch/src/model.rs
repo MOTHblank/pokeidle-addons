@@ -84,6 +84,8 @@ pub struct StreamerState {
     pub streak_checked: Option<Instant>,
     pub streak_watch_attempts: u32,
     pub live: bool,
+    /// This channel occupies one of the miner's two persistent watch slots.
+    pub watching: bool,
     pub last_update: Option<Instant>,
     pub error: Option<String>,
 }
