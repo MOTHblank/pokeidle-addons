@@ -16,6 +16,8 @@ pub struct PvpStatus {
     pub awaiting_reply: bool,
     pub cooldown_secs: u64,
     pub waiting_for_team: bool,
+    pub waiting_for_level: Option<u32>,
+    pub checking_queue: bool,
     pub paused: bool,
     pub warning: Option<String>,
 }
@@ -149,7 +151,7 @@ impl PvpAutomation {
     }
 
     pub fn status(&self, preference: Option<bool>, vip: bool,
-        vip_auto: Option<bool>, now: Instant) -> PvpStatus {
+        vip_auto: Option<bool>, level: Option<u32>, now: Instant) -> PvpStatus {
         let enabled = Self::enabled(preference, vip, vip_auto);
         PvpStatus {
             enabled, vip, queued: self.queued,
@@ -157,6 +159,10 @@ impl PvpAutomation {
             cooldown_secs: self.cooldown_until.map(|until|
                 until.saturating_duration_since(now).as_secs()).unwrap_or(0),
             waiting_for_team: enabled && !vip && self.team_ready == Some(false),
+            waiting_for_level: if enabled && !vip {
+                self.min_level.filter(|minimum| level.is_none_or(|lv| lv < *minimum))
+            } else { None },
+            checking_queue: enabled && !self.queue_known,
             paused: enabled && vip && self.vip_rejected,
             warning: enabled.then(|| self.warning.clone()).flatten(),
         }
@@ -344,7 +350,7 @@ mod tests {
         let t=Instant::now();
         let mut p=PvpAutomation::default();
         assert_eq!(p.next(None,true,Some(true),Some(30),t),Some(PvpAction::Info));
-        assert!(p.status(None,true,Some(true),t).enabled);
+        assert!(p.status(None,true,Some(true),Some(30),t).enabled);
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),
             Some(PvpAction::SetVipAuto(false)));
         assert_eq!(p.next(Some(false),true,Some(true),Some(30),t),None);
