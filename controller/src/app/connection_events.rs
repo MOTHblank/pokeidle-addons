@@ -160,6 +160,9 @@ impl ControllerApp {
             if state.kick_token_revision != event.revision { continue; }
             state.kick_token_loading = false;
             state.kick_token_checked = true;
+            // The roster sync has a five-second fallback throttle, but a
+            // freshly loaded login must be eligible for immediate auto-start.
+            self.runtimes[event.index].kick.kick_sync_checked = None;
             match event.result {
                 Ok(Some(token)) => {
                     state.kick_token_cached = Some(token);

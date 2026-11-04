@@ -243,15 +243,15 @@ impl ControllerApp {
         }
         self.persist_kick_channels(index);
     }
-    /// Keyring I/O can wait for a locked Secret Service session. Never invoke
-    /// it from construction, a foreground UI frame, or the Kick auto-start.
+    /// Keyring lookups can wait for a locked Secret Service session. Never
+    /// invoke a lookup from construction, a UI frame, or Kick auto-start.
     fn queue_kick_token_load(&mut self, index: usize) {
+        let profile = self.runtimes[index].game.profile;
+        let tx = self.kick_token_tx.clone();
         let state = &mut self.runtimes[index].kick;
         if state.kick_token_loading || state.kick_token_checked { return; }
         state.kick_token_loading = true;
         let revision = state.kick_token_revision;
-        let tx = self.kick_token_tx.clone();
-        let profile = self.runtimes[index].game.profile;
         if let Err(error) = std::thread::Builder::new()
             .name(format!("moth-kick-keyring-{}", profile.name()))
             .spawn(move || {
