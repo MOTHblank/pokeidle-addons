@@ -44,8 +44,8 @@ impl Default for AppPreferences {
             notify_boss: true,
             quiet_notifications: false,
             check_updates_on_start: true,
-            log_max_megabytes: 16,
-            log_retention_days: 30,
+            log_max_megabytes: 8,
+            log_retention_days: 7,
         }
     }
 }
@@ -156,6 +156,8 @@ mod tests {
         assert!(!preferences.notifications_enabled);
         assert!(!preferences.close_to_tray);
         assert!(preferences.check_updates_on_start);
+        assert_eq!(preferences.log_max_megabytes, 8);
+        assert_eq!(preferences.log_retention_days, 7);
     }
 
     #[test]
