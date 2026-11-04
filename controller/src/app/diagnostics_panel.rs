@@ -3,7 +3,8 @@
 use super::{egui, runtime_chip, tr, ControllerApp, RichText, ACCENT, BORDER,
     DIM, GOOD, MUTED, PANEL, PANEL_ALT, TEXT, WARN};
 use crate::diagnostics::{
-    DiagnosticsSampler, HlsAccountSample, HlsNetworkSample, PerformanceSample,
+    DiagnosticsSampler, GameQueueSample, HlsAccountSample, HlsNetworkSample,
+    OperationalSample, PerformanceSample,
 };
 
 fn mib(bytes: u64) -> String {
@@ -130,6 +131,7 @@ pub(super) fn draw_diagnostics_panel(
             }
 
             // Allocate the sampler only on the first active foreground frame.
+            let mut export_requested = false;
             let (sample, history, last_frame_ms, slowest_frame_ms,
                 recorded_frames, mean_frame_ms, p95_frame_ms,
                 preflight_ms, panel_ms, process_probe_ms, network_probe_ms,
@@ -142,6 +144,9 @@ pub(super) fn draw_diagnostics_panel(
                     }
                     if ui.small_button(tr("Reset samples")).clicked() {
                         sampler.reset();
+                    }
+                    if ui.small_button(tr("Export report")).clicked() {
+                        export_requested = true;
                     }
                 });
                 let refresh_network = sampler.sample_if_due();
@@ -159,7 +164,20 @@ pub(super) fn draw_diagnostics_panel(
             if refresh_network {
                 let probe_start = std::time::Instant::now();
                 let mut network = HlsNetworkSample::default();
+                let mut operational = OperationalSample::default();
                 for (index, runtime) in app.runtimes.iter().enumerate() {
+                    if let Some(game) = runtime.game.native.as_ref() {
+                        let snapshot = game.snapshot();
+                        operational.game.push(GameQueueSample {
+                            slot: index,
+                            phase: snapshot.phase,
+                            capture_queued: snapshot.native_capture_queue,
+                            automation_queued: snapshot.native_automation.queued,
+                            automation_pending: snapshot.native_automation.pending_field.is_some(),
+                            market_pending: snapshot.native_market.pending.is_some(),
+                            restock_pending: snapshot.native_restock.pending,
+                        });
+                    }
                     if let Some(kick) = runtime.kick.kick_monitor.as_ref() {
                         let current = kick.snapshot();
                         network.bytes = network.bytes.saturating_add(current.bandwidth.bytes);
@@ -173,19 +191,39 @@ pub(super) fn draw_diagnostics_panel(
                         });
                     }
                 }
+                let (channels, hls) = crate::native_kick_pool::diagnostics_usage();
+                operational.kick_channels = channels;
+                operational.kick_hls = hls;
                 let sampler = app.diagnostics.as_mut().expect("active diagnostics");
                 sampler.network = Some(network);
+                sampler.operational = Some(operational);
                 sampler.last_network_probe_ms =
                     Some(probe_start.elapsed().as_secs_f64() * 1000.0);
             }
             let network = app.diagnostics.as_ref()
                 .and_then(|sampler| sampler.network.as_ref())
                 .cloned().unwrap_or_default();
+            let operational = app.diagnostics.as_ref()
+                .and_then(|sampler| sampler.operational.as_ref())
+                .cloned().unwrap_or_default();
+
+            if export_requested {
+                // The report contains bounded numerical metrics and profile
+                // indices only, never credentials, stream URLs or account names.
+                let result = app.diagnostics.as_ref()
+                    .expect("active diagnostics").export_report();
+                match result {
+                    Ok(path) => app.set_status(format!(
+                        "{}: {}", tr("Diagnostics report saved"), path.display()
+                    ), false),
+                    Err(error) => app.set_status(error, true),
+                }
+            }
 
             if paused {
                 ui.label(RichText::new(tr("Sampling paused")).size(11.0).color(WARN));
             } else {
-                ui.label(RichText::new(tr("One sample every 2 seconds · last 2 minutes · no background worker"))
+                ui.label(RichText::new(tr("Every 2 seconds · up to 60 timestamped samples · no background worker"))
                     .size(10.0).color(DIM));
             }
             ui.add_space(12.0);
@@ -298,6 +336,55 @@ pub(super) fn draw_diagnostics_panel(
                     ui.label(RichText::new(tr(
                         "Only measured Kick HLS payload is included. Twitch, game socket, HTTP overhead, and Firefox network traffic are not measured here."
                     )).size(10.0).color(DIM));
+                });
+
+            ui.add_space(12.0);
+            egui::Frame::new().fill(PANEL).corner_radius(10.0)
+                .stroke(egui::Stroke::new(1.0, BORDER))
+                .inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                    ui.label(RichText::new(tr("Native worker queues"))
+                        .size(13.0).strong().color(TEXT));
+                    ui.label(RichText::new(tr(
+                        "Existing queue snapshots, not per-feature CPU usage. Collected only on diagnostics ticks."
+                    )).size(10.0).color(DIM));
+                    ui.add_space(8.0);
+                    for game in &operational.game {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(format!(
+                                "{} {} · {}", tr("Profile"), game.slot + 1, game.phase
+                            )).size(11.0).strong().color(TEXT));
+                            ui.label(RichText::new(format!(
+                                "{}: {} · {}: {} · {}: {} · {}: {} · {}: {}",
+                                tr("Capture queue"), game.capture_queued,
+                                tr("Automation queue"), game.automation_queued,
+                                tr("Automation pending"), if game.automation_pending { tr("Yes") } else { tr("No") },
+                                tr("Market pending"), if game.market_pending { tr("Yes") } else { tr("No") },
+                                tr("Restock pending"), if game.restock_pending { tr("Yes") } else { tr("No") },
+                            )).size(10.0).color(MUTED));
+                        });
+                    }
+                    if operational.game.is_empty() {
+                        ui.label(RichText::new(tr("No native game sessions")).size(10.0).color(DIM));
+                    }
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(tr("Kick worker pools"))
+                        .size(11.0).strong().color(TEXT));
+                    for (name, pool) in [
+                        (tr("Channel workers"), operational.kick_channels),
+                        (tr("HLS workers"), operational.kick_hls),
+                    ] {
+                        if let Some(pool) = pool {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(name).size(10.0).strong().color(TEXT));
+                                ui.label(RichText::new(format!(
+                                    "{}: {} · {}: {} · {}: {}",
+                                    tr("Workers"), pool.workers,
+                                    tr("Idle"), pool.idle,
+                                    tr("Queued"), pool.pending
+                                )).size(10.0).color(MUTED));
+                            });
+                        }
+                    }
                 });
         });
 }
