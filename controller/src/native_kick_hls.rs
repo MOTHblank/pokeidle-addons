@@ -333,6 +333,24 @@ mod tests {
         assert_eq!(second.usage().bytes, 512);
     }
     #[test]
+    fn diagnostics_bandwidth_read_never_waits_or_includes_stale_bytes() {
+        let bandwidth = AccountBandwidth::default();
+        bandwidth.record(2048);
+        let reading = bandwidth.diagnostics_usage().unwrap();
+        assert_eq!(reading.bytes, 2048);
+        assert_eq!(reading.last_minute, 2048);
+
+        let mut guard = bandwidth.traffic.lock().unwrap();
+        // try_lock must report unavailable rather than wait on an HLS worker.
+        assert!(bandwidth.diagnostics_usage().is_none());
+        guard.recent.front_mut().unwrap().0 = Instant::now() - Duration::from_secs(70);
+        drop(guard);
+        let old = bandwidth.diagnostics_usage().unwrap();
+        assert_eq!(old.bytes, 2048);
+        assert_eq!(old.last_minute, 0);
+    }
+
+    #[test]
     fn metered_reader_counts_partial_transfers_when_dropped() {
         let bandwidth = AccountBandwidth::default();
         {
