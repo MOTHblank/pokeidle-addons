@@ -1025,50 +1025,6 @@ struct Heartbeat {
     logged_in: bool,
 }
 
-/// Twitch is optional. Read only its authentication cookie from the same
-/// isolated Firefox profile; never open a chat/stream or expose unrelated
-/// browser cookies to the native worker.
-fn read_twitch_auth_token(session: &mut BrowserSession) -> Result<Option<String>, String> {
-    let id = session.next_id;
-    session.next_id += 1;
-    let response = send_and_wait(&mut session.socket, id, json!({
-        "id": id,
-        "method": "storage.getCookies",
-        "params": {}
-    }))?;
-    let cookies = response.get("result")
-        .and_then(|result| result.get("cookies"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Firefox did not return its cookie store".to_owned())?;
-    for cookie in cookies {
-        let name = cookie.get("name").and_then(Value::as_str).unwrap_or_default();
-        let domain = cookie.get("domain").and_then(Value::as_str).unwrap_or_default()
-            .trim_start_matches('.').to_ascii_lowercase();
-        if name != "auth-token" || (domain != "twitch.tv" && !domain.ends_with(".twitch.tv")) {
-            continue;
-        }
-        let Some(encoded) = cookie.get("value") else { continue };
-        let token = if encoded.get("type").and_then(Value::as_str) == Some("string") {
-            encoded.get("value").and_then(Value::as_str)
-        } else {
-            encoded.as_str()
-        };
-        let Some(token)=token.map(str::trim) else { continue };
-        if token.is_empty() || token.len() > 2048
-            || token.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
-        {
-            continue;
-        }
-        return Ok(Some(token.to_owned()));
-    }
-    Ok(None)
-}
-
-fn read_twitch_auth_cookie(session: &mut BrowserSession) -> Option<Value> {
-    read_twitch_auth_token(session).ok().flatten()
-        .map(|token| json!({ "token": token }))
-}
-
 /// Capture only the bridge-confirmed socket's initial hello. The storage
 /// command returns HttpOnly cookies (page JavaScript cannot access those).
 /// All sensitive results stay inside this in-process handoff.
@@ -1124,9 +1080,8 @@ fn read_native_bootstrap(session: &mut BrowserSession) -> Result<Value, String> 
     let autocatch = settings_response.ok()
         .and_then(|frame| frame.get("result")?.get("result")?.get("value")?
             .as_str().and_then(|raw| serde_json::from_str::<Value>(raw).ok()));
-    let twitch = read_twitch_auth_cookie(session);
     Ok(json!({ "bootstrap": bootstrap, "cookies": entries,
-        "autocatch": autocatch, "twitch": twitch }))
+        "autocatch": autocatch }))
 }
 
 fn probe_heartbeat(session: &mut BrowserSession) -> Result<Heartbeat, String> {
