@@ -54,8 +54,10 @@ pub(crate) struct DiagnosticsSampler {
     pub(crate) recorded_frames: u64,
 }
 
-pub(crate) fn should_sample(tab_selected: bool, window_foreground: bool) -> bool {
-    tab_selected && window_foreground
+/// Fail closed if the window manager does not report focus. Diagnostics
+/// must never silently run in an unverified background window.
+pub(crate) fn should_sample(tab_selected: bool, tray_hidden: bool, focused: Option<bool>) -> bool {
+    tab_selected && !tray_hidden && focused == Some(true)
 }
 
 fn cpu_usage_percent(previous_ns: u128, current_ns: u128, elapsed: Duration) -> Option<f64> {
@@ -248,9 +250,11 @@ mod tests {
 
     #[test]
     fn disabled_when_closed_or_unfocused() {
-        assert!(!should_sample(false, true));
-        assert!(!should_sample(true, false));
-        assert!(should_sample(true, true));
+        assert!(!should_sample(false, false, Some(true)));
+        assert!(!should_sample(true, true, Some(true)));
+        assert!(!should_sample(true, false, Some(false)));
+        assert!(!should_sample(true, false, None));
+        assert!(should_sample(true, false, Some(true)));
         let sampler = DiagnosticsSampler::default();
         assert!(sampler.current.is_none());
         assert!(sampler.history.is_empty());
