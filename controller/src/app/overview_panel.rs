@@ -752,7 +752,7 @@ fn overview_boss_species_id(
     }
     let key = |name: &str| name.chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
+        .flat_map(|ch| ch.to_lowercase())
         .collect::<String>();
     let target = key(&entry.name);
     reference?.species.iter().find_map(|(id, species)|
