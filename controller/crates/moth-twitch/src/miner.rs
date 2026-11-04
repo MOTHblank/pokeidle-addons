@@ -1,8 +1,9 @@
-use crate::gql::{GqlError, TwitchGql};
+use crate::gql::{GqlError, TwitchGql, ViewerIdentity};
 use crate::model::{
     normalize_channels, Credentials, MinerConfig, MinerEvent, MinerPhase, MinerSnapshot,
     StreamerState,
 };
+use crate::watch::WatchClient;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -127,6 +128,7 @@ impl Drop for Miner {
 struct ChannelCache {
     channel_id: Option<String>,
     balance: Option<u64>,
+    last_watch: Option<Instant>,
 }
 
 fn notify(wake: &PhaseWake) {
@@ -162,7 +164,7 @@ fn set_phase(
 }
 
 fn run(
-    gql: TwitchGql,
+    mut gql: TwitchGql,
     config: MinerConfig,
     snapshot: Arc<Mutex<MinerSnapshot>>,
     events: Arc<Mutex<VecDeque<MinerEvent>>>,
@@ -171,32 +173,44 @@ fn run(
     phase_wake: PhaseWake,
     wake_rx: Receiver<()>,
 ) {
-    match gql.verify_login() {
-        Ok(()) => {
-            set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
-            push_event(&events, MinerEvent::Connected);
-        }
-        Err(error) if error.is_auth() => {
-            set_phase(
-                &snapshot,
-                &phase_wake,
-                MinerPhase::NeedsLogin,
-                Some(error.user_message()),
-            );
-        }
+    let mut watch = match WatchClient::new() {
+        Ok(watch) => watch,
         Err(error) => {
-            set_phase(
-                &snapshot,
-                &phase_wake,
-                MinerPhase::Reconnecting,
-                Some(error.user_message()),
-            );
+            set_phase(&snapshot, &phase_wake, MinerPhase::Failed, Some(error));
+            return;
         }
-    }
-
+    };
+    let mut identity: Option<ViewerIdentity> = None;
     let mut cache: HashMap<String, ChannelCache> = HashMap::new();
     let interval = config.poll_interval.max(Duration::from_secs(10));
+
     while !stop.load(Ordering::Acquire) {
+        if identity.is_none() {
+            match gql.authenticate() {
+                Ok(viewer) => {
+                    identity = Some(viewer);
+                    set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
+                    push_event(&events, MinerEvent::Connected);
+                }
+                Err(error) if error.is_auth() => {
+                    set_phase(
+                        &snapshot,
+                        &phase_wake,
+                        MinerPhase::NeedsLogin,
+                        Some(error.user_message()),
+                    );
+                }
+                Err(error) => {
+                    set_phase(
+                        &snapshot,
+                        &phase_wake,
+                        MinerPhase::Reconnecting,
+                        Some(error.user_message()),
+                    );
+                }
+            }
+        }
+
         let channels = desired.lock().map(|channels| channels.clone()).unwrap_or_default();
         cache.retain(|channel, _| channels.binary_search(channel).is_ok());
         if let Ok(mut current) = snapshot.lock() {
@@ -204,20 +218,25 @@ fn run(
             current.streamers.retain(|streamer| channels.binary_search(&streamer.login).is_ok());
         }
 
-        if !channels.is_empty() {
-            poll_channels(
-                &gql,
-                &config,
-                &channels,
-                &mut cache,
-                &snapshot,
-                &events,
-                &phase_wake,
-            );
-        } else if snapshot.lock().ok().is_some_and(|current| {
-            !matches!(current.phase, MinerPhase::NeedsLogin | MinerPhase::Failed)
-        }) {
-            set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
+        if let Some(viewer) = identity.as_ref() {
+            if !channels.is_empty() {
+                let auth_failed = poll_channels(
+                    &gql,
+                    &mut watch,
+                    viewer,
+                    &config,
+                    &channels,
+                    &mut cache,
+                    &snapshot,
+                    &events,
+                    &phase_wake,
+                );
+                if auth_failed {
+                    identity = None;
+                }
+            } else {
+                set_phase(&snapshot, &phase_wake, MinerPhase::Online, None);
+            }
         }
 
         match wake_rx.recv_timeout(interval) {
@@ -229,17 +248,21 @@ fn run(
     set_phase(&snapshot, &phase_wake, MinerPhase::Stopped, None);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn poll_channels(
     gql: &TwitchGql,
+    watch: &mut WatchClient,
+    viewer: &ViewerIdentity,
     config: &MinerConfig,
     channels: &[String],
     cache: &mut HashMap<String, ChannelCache>,
     snapshot: &Arc<Mutex<MinerSnapshot>>,
     events: &Arc<Mutex<VecDeque<MinerEvent>>>,
     phase_wake: &PhaseWake,
-) {
+) -> bool {
     let mut active = 0usize;
     let mut first_error: Option<GqlError> = None;
+    let mut auth_failed = false;
 
     for login in channels {
         let channel = cache.entry(login.clone()).or_default();
@@ -247,6 +270,7 @@ fn poll_channels(
             match gql.lookup_channel_id(login) {
                 Ok(id) => channel.channel_id = Some(id),
                 Err(error) => {
+                    auth_failed |= error.is_auth();
                     update_streamer(snapshot, login, channel, Some(error.user_message()));
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -289,6 +313,7 @@ fn poll_channels(
                                 );
                             }
                             Err(error) => {
+                                auth_failed |= error.is_auth();
                                 if first_error.is_none() {
                                     first_error = Some(error);
                                 }
@@ -296,12 +321,45 @@ fn poll_channels(
                         }
                     }
                 }
+
+                let watch_due = channel.last_watch
+                    .is_none_or(|at| at.elapsed() >= Duration::from_secs(55));
+                if watch_due {
+                    match gql.stream_info(login) {
+                        Ok(Some(stream)) => {
+                            if let Some(channel_id) = channel.channel_id.as_deref() {
+                                match watch.send_minute_watched(
+                                    login,
+                                    channel_id,
+                                    &stream.broadcast_id,
+                                    &viewer.user_id,
+                                ) {
+                                    Ok(()) => channel.last_watch = Some(Instant::now()),
+                                    Err(error) => {
+                                        push_event(events, MinerEvent::Warning(format!(
+                                            "{login}: {error}"
+                                        )));
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            auth_failed |= error.is_auth();
+                            if first_error.is_none() {
+                                first_error = Some(error);
+                            }
+                        }
+                    }
+                }
+
                 update_streamer(snapshot, login, channel, None);
                 if let Ok(mut current) = snapshot.lock() {
                     current.last_received = Some(Instant::now());
                 }
             }
             Err(error) => {
+                auth_failed |= error.is_auth();
                 update_streamer(snapshot, login, channel, Some(error.user_message()));
                 if first_error.is_none() {
                     first_error = Some(error);
@@ -336,6 +394,7 @@ fn poll_channels(
         ),
         None => set_phase(snapshot, phase_wake, MinerPhase::Online, None),
     }
+    auth_failed
 }
 
 fn update_streamer(
