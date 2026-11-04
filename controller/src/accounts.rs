@@ -1,10 +1,8 @@
 use crate::config::{Config, GameProfile};
 
-pub const TWITCH_LOGIN: &str = "https://www.twitch.tv/login";
-
 const SETUP_MARKER: &str = ".moth-setup-complete";
 
-/// This marker records a completed PokéIdle and Twitch sign-in.
+/// This marker records a completed PokéIdle sign-in.
 pub fn setup_complete(profile: GameProfile) -> Result<bool, String> {
     Ok(Config::for_profile(profile)?.profile_dir.join(SETUP_MARKER).is_file())
 }
