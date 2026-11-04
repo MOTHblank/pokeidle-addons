@@ -488,7 +488,7 @@ pub(super) fn draw_diagnostics_panel(
             if paused {
                 ui.label(RichText::new(tr("Sampling paused")).size(11.0).color(WARN));
             } else {
-                ui.label(RichText::new(tr("Every 2 seconds · up to 60 timestamped samples · no background worker"))
+                ui.label(RichText::new(tr("Every 2 seconds · up to 60 timestamped samples · thread inspection runs asynchronously"))
                     .size(10.0).color(DIM));
             }
             ui.add_space(12.0);
