@@ -16,6 +16,7 @@ pub struct PvpStatus {
     pub awaiting_reply: bool,
     pub cooldown_secs: u64,
     pub waiting_for_team: bool,
+    pub paused: bool,
     pub warning: Option<String>,
 }
 
@@ -48,6 +49,8 @@ pub struct PvpAutomation {
     next_info_at: Option<Instant>,
     last_vip_sync: Option<(bool, Instant)>,
     vip_cancel_pending: bool,
+    vip_rejected: bool,
+    leave_sent: Option<Instant>,
     warning: Option<String>,
 }
 
@@ -57,7 +60,8 @@ impl Default for PvpAutomation {
             queue_known: false, queued: false, owned_queue: false,
             team_ready: None, min_level: None, cooldown_until: None,
             join_sent: None, next_join_at: None, next_info_at: None,
-            last_vip_sync: None, vip_cancel_pending: false, warning: None,
+            last_vip_sync: None, vip_cancel_pending: false,
+            vip_rejected: false, leave_sent: None, warning: None,
         }
     }
 }
