@@ -508,8 +508,7 @@ impl ControllerApp {
                     let pending = error.to_ascii_lowercase();
                     let is_bootstrap = pending.contains("reloaded")
                         || pending.contains("waiting") || pending.contains("pending")
-                        || pending.contains("hook installed")
-                        ;
+                        || pending.contains("hook installed");
                     if is_bootstrap {
                         self.runtimes[event.index].session.native_error = None;
                     } else {
