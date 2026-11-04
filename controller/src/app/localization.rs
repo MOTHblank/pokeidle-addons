@@ -492,6 +492,9 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Optional, rate-limited system alerts. No account names or server messages are included." => "Alertas opcionais e limitados por frequência, sem nomes de contas ou mensagens do servidor.",
         "Enable desktop notifications" => "Ativar notificações da área de trabalho",
         "Connection issues" => "Problemas de conexão",
+        "Prolonged disconnections (90 seconds)" => "Desconexões prolongadas (90 segundos)",
+        "Opening Moth again restores this window instead of running another controller." =>
+            "Abrir o Moth novamente restaura esta janela em vez de executar outro controlador.",
         "Automation failures" => "Falhas de automação",
         "Boss farming completed" => "Farm de boss concluído",
         "Quiet mode (suppress alerts)" => "Modo silencioso (suprimir alertas)",
