@@ -3,6 +3,25 @@
 
 pub(super) fn pt<'a>(en: &'a str) -> &'a str {
     match en {
+        "Moth can check GitHub and download verified updates without opening a browser." =>
+            "O Moth pode verificar o GitHub e baixar atualizações verificadas sem abrir o navegador.",
+        "Moth Controller is up to date." => "O Moth Controller está atualizado.",
+        "Ready to install" => "Pronta para instalar",
+        "Downloading update..." => "Baixando atualização...",
+        "Download update" => "Baixar atualização",
+        "Update download started" => "Download da atualização iniciado",
+        "Restart and install update" => "Reiniciar e instalar atualização",
+        "Restarting to install update" => "Reiniciando para instalar atualização",
+        "Update is ready. Stop all active accounts before restarting to install it." =>
+            "A atualização está pronta. Pare todas as contas ativas antes de reiniciar para instalá-la.",
+        "The verified update replaces only the application executable, then reopens Moth." =>
+            "A atualização verificada substitui somente o executável do aplicativo e reabre o Moth.",
+        "Downloading never interrupts active accounts. Installation only starts after you choose to restart." =>
+            "O download nunca interrompe contas ativas. A instalação só começa quando você escolher reiniciar.",
+        "Automatic checks do not download or install anything unless you choose to." =>
+            "As verificações automáticas não baixam nem instalam nada sem sua escolha.",
+        "In-app installation is currently available on Windows; use Release notes to download the Linux package." =>
+            "A instalação pelo aplicativo está disponível no Windows; use as notas da versão para baixar o pacote Linux.",
         "Phase" => "Fase",
         "Loot totals" => "Totais de loot",
         "Auto farm" => "Farm automático",
