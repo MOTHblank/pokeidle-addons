@@ -177,11 +177,18 @@ impl TwitchMinerSession {
         if let Ok(mut current)=self.phase_wake.lock() {
             *current=Some(Arc::clone(&wake));
         }
-        if let Ok(miner)=self.miner.lock() {
+        let active=self.miner.lock().ok().map(|miner| {
             if let Some(miner)=miner.as_ref() {
-                miner.set_phase_waker(wake);
+                miner.set_phase_waker(Arc::clone(&wake));
+                true
+            } else {
+                false
             }
-        }
+        }).unwrap_or(false);
+        // Authentication can finish before ControllerApp adopts the native
+        // session and installs its wake callback. Publish the already-current
+        // state immediately instead of waiting for a later Twitch event.
+        if active {wake();}
     }
 
     pub fn stop(&self) {
