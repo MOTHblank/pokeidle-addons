@@ -923,6 +923,12 @@ fn current_background_hunt(view:&HuntView)->Option<crate::native_hunts::HuntEntr
     view.hunts.iter().find(|hunt|hunt.slug==slug).cloned()
 }
 
+/// Auto PvP must not stall while VIP detection is incomplete. Unknown VIP
+/// status deliberately uses the normal client-driven matchmaking path.
+fn pvp_uses_vip_path(view:&HuntView)->bool {
+    view.bonuses.vip_known && view.bonuses.vip_active
+}
+
 fn session_loop(profile: GameProfile, credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
     twitch_miner:TwitchMinerControl, first_session: Option<(GameSocket, Value)>,
@@ -1244,35 +1250,36 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         let pref = match pvp_preference.load(Ordering::Acquire) {
                             1 => Some(false), 2 => Some(true), _ => None,
                         };
-                        let vip = hunt_intel.view.bonuses.vip_active;
+                        // Fail open to the regular queue path when VIP has
+                        // not been identified yet. This keeps explicit Auto PvP
+                        // working even on incomplete state payloads. If the
+                        // server later confirms VIP, the next tick naturally
+                        // switches to the native pvpAutoFila path.
+                        let vip = pvp_uses_vip_path(&hunt_intel.view);
                         let vip_auto = hunt_intel.view.automation.as_ref()
                             .and_then(|a| a.get("pvpAutoFila")).and_then(Value::as_bool);
-                        // Do not treat an unconfirmed VIP status as non-VIP:
-                        // matchmaking must wait until the server reports it.
-                        if hunt_intel.view.bonuses.vip_known {
-                            if let Some(action) = pvp.next(pref, vip, vip_auto,
-                                hunt_intel.view.trainer_level, Instant::now()) {
-                                match action {
-                                    PvpAction::SetVipAuto(wanted) => {
-                                        if let Err(error) = automation_writer.queue(
-                                            "pvpAutoFila".into(), Value::Bool(wanted)) {
-                                            crate::logging::warn(&format!(
-                                                "Could not update VIP Auto PvP preference: {error}"));
-                                        }
+                        if let Some(action) = pvp.next(pref, vip, vip_auto,
+                            hunt_intel.view.trainer_level, Instant::now()) {
+                            match action {
+                                PvpAction::SetVipAuto(wanted) => {
+                                    if let Err(error) = automation_writer.queue(
+                                        "pvpAutoFila".into(), Value::Bool(wanted)) {
+                                        crate::logging::warn(&format!(
+                                            "Could not update VIP Auto PvP preference: {error}"));
                                     }
-                                    other => if let Some(wire) = other.wire() {
-                                        if socket.send(Message::Text(wire.to_string().into())).is_err() {
-                                            pvp.send_failed(other);
-                                            send_failed = true;
-                                        } else if matches!(other, PvpAction::Join | PvpAction::Leave) {
-                                            let activity = if other == PvpAction::Join {
-                                                "requested matchmaking"
-                                            } else { "requested queue cancellation" };
-                                            crate::logging::info(&format!(
-                                                "{}: Auto PvP {activity}", profile.label()));
-                                        }
-                                    },
                                 }
+                                other => if let Some(wire) = other.wire() {
+                                    if socket.send(Message::Text(wire.to_string().into())).is_err() {
+                                        pvp.send_failed(other);
+                                        send_failed = true;
+                                    } else if matches!(other, PvpAction::Join | PvpAction::Leave) {
+                                        let activity = if other == PvpAction::Join {
+                                            "requested matchmaking"
+                                        } else { "requested queue cancellation" };
+                                        crate::logging::info(&format!(
+                                            "{}: Auto PvP {activity}", profile.label()));
+                                    }
+                                },
                             }
                         }
                         last_pvp_tick = Instant::now();
@@ -1630,6 +1637,23 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn auto_pvp_defaults_to_regular_queue_until_vip_is_confirmed() {
+        let mut view=HuntView::default();
+
+        // No VIP fields yet: keep automating through pvp.fila.entrar.
+        assert!(!pvp_uses_vip_path(&view));
+
+        // Explicit non-VIP remains on the regular path.
+        view.bonuses.vip_known=true;
+        view.bonuses.vip_active=false;
+        assert!(!pvp_uses_vip_path(&view));
+
+        // Once VIP is confirmed, switch to the game's pvpAutoFila path.
+        view.bonuses.vip_active=true;
+        assert!(pvp_uses_vip_path(&view));
+    }
+
     #[test]
     fn state_waker_fires_without_waiting_for_a_view_refresh() {
         let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));
