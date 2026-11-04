@@ -34,6 +34,7 @@ fn localize_status_pt(message: String) -> String {
         ("Could not start Twitch login: ", "Não foi possível iniciar o login Twitch: "),
         ("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Twitch login again.", "Este perfil Firefox do PokéIdle ainda está aberto. Conclua a transição nativa do jogo e tente o login Twitch novamente."),
         ("Could not observe the Twitch Firefox login window", "Não foi possível acompanhar a janela de login Twitch no Firefox"),
+        ("Twitch login was imported, but its temporary Firefox window could not close: ", "O login Twitch foi importado, mas a janela temporária do Firefox não pôde ser fechada: "),
         ("Twitch login not detected. Sign in using Firefox; Moth will import automatically.", "Login Twitch não detectado. Entre pelo Firefox; o Moth importará automaticamente."),
         ("Close Firefox for this account before forgetting the Twitch login.", "Feche o Firefox desta conta antes de esquecer o login Twitch."),
         (": please sign in to continue", ": faça login para continuar"),
