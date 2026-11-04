@@ -1,6 +1,8 @@
 use serde_json::Value;
 use std::cmp::Ordering;
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
