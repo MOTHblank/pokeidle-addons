@@ -181,6 +181,40 @@ impl ControllerApp {
                 }
             }
         }
+        // Twitch login mirrors Kick: the background Firefox watcher stores
+        // the credential, closes its own temporary browser, then this central
+        // pump applies the new token to a live native account without restart.
+        for index in 0..self.runtimes.len() {
+            let Some(profile)=GameProfile::from_index(index) else { continue; };
+            let done=matches!(
+                crate::native_twitch_login::status(profile),
+                crate::native_twitch_login::LoginStatus::Done
+            );
+            if done && !self.runtimes[index].twitch.login_done_seen {
+                self.runtimes[index].twitch.login_done_seen=true;
+                let account_name=self.account_name(profile);
+                if let Some(game)=self.runtimes[index].game.native.as_ref() {
+                    match game.refresh_twitch_login() {
+                        Ok(true)=>self.set_status(format!(
+                            "{account_name}: Twitch login imported; miner refreshed without restarting PokéIdle"
+                        ),false),
+                        Ok(false)=>self.set_status(format!(
+                            "{account_name}: Twitch login finished but no saved credential was found"
+                        ),true),
+                        Err(error)=>self.set_status(format!(
+                            "{account_name}: Twitch login saved but miner refresh failed: {error}"
+                        ),true),
+                    }
+                } else {
+                    self.set_status(format!(
+                        "{account_name}: Twitch login imported; it will start with this account"
+                    ),false);
+                }
+            } else if !done {
+                self.runtimes[index].twitch.login_done_seen=false;
+            }
+        }
+
         while let Ok(event) = self.firefox_stopped_rx.try_recv() {
             self.finish_firefox_stop(
                 event.index, event.generation, event.ownership, event.result
