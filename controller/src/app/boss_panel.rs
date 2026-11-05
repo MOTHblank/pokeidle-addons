@@ -112,15 +112,15 @@ fn boss_card_state(
     if !view.state_known {
         return BossCardState::Loading;
     }
-    if optimistic_request == Some(entry.key.as_str())
-        || view.request_key.as_deref() == Some(entry.key.as_str()) {
-        return BossCardState::Requested;
-    }
     if view.auto && view.auto_key.as_deref() == Some(entry.key.as_str()) {
         return BossCardState::Farming;
     }
     if view.arena.as_deref() == Some(entry.key.as_str()) {
         return BossCardState::Fighting;
+    }
+    if optimistic_request == Some(entry.key.as_str())
+        || view.request_key.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Requested;
     }
     if optimistic_request.is_some() || view.busy || view.auto || view.arena.is_some() {
         return BossCardState::OtherBossActive;
@@ -1049,7 +1049,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let selected = &mut app.workspace.boss_selected[index];
                 if !view.catalog.iter().any(|entry| entry.key == *selected) {
                     let preferred = view.arena.as_deref()
-                        .or(view.auto_key.as_deref())
+                        .or_else(|| if view.auto { view.auto_key.as_deref() } else { None })
                         .or(view.request_key.as_deref())
                         .or_else(|| pending_start.as_ref().map(|(key, _)| key.as_str()));
                     *selected = preferred
