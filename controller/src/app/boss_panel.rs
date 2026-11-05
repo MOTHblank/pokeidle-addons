@@ -2,7 +2,7 @@
 //! Reuse the controller's themed cards, badges, resource chips and detail rows.
 use super::{
     automation_badge, compact_text, detail_stat_line, draw_native_missing_panel, egui,
-    native_atlas, request_item_catalog, resource_chip, tr, AtlasReference,
+    native_atlas, request_item_catalog, resource_chip, tr, tr_dynamic, AtlasReference,
     ControllerApp, GameCommand, RichText, Stroke, ACCENT, BORDER, DIM, MUTED,
     PANEL, PANEL_ALT, TEXT, WARN, GOOD, BAD,
 };
@@ -460,9 +460,12 @@ fn draw_boss_status_card(
                         .strong()
                         .color(TEXT),
                 );
+                let settled = view.auto
+                    || view.arena.is_some()
+                    || (!view.busy && view.request_key.is_none() && optimistic_start.is_none());
                 automation_badge(
                     ui, "Status", status,
-                    live && view.state_known && view.warning.is_none(),
+                    live && view.state_known && view.warning.is_none() && settled,
                 );
             });
             if let Some(arena) = view.arena.as_deref() {
@@ -1082,7 +1085,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         app.set_status(notice, false);
                     }
                     Err(error) => {
-                        app.workspace.boss_action_error[index] = Some(error.clone());
+                        app.workspace.boss_action_error[index] = Some(tr_dynamic(error.clone()));
                         match pending {
                             GameCommand::BossStart { .. } =>
                                 app.workspace.boss_start_pending[index] = None,
