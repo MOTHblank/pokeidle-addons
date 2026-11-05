@@ -1254,6 +1254,36 @@ mod tests {
     }
 
     #[test]
+    fn boss_center_leg_retries_on_hunt_atlas_cadence() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let at = Instant::now();
+        let view = hunt();
+        manager.start("bronze", true, &view, &mut nav, at).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, at),
+            Some(GameCommand::Center)));
+        assert!(manager.next_action(&view, &mut nav,
+            at + Duration::from_millis(100)).is_none());
+        assert!(matches!(manager.next_action(&view, &mut nav,
+            at + Duration::from_millis(350)), Some(GameCommand::Center)));
+    }
+
+    #[test]
+    fn published_boss_view_identifies_pending_destination_and_mode() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let at = Instant::now();
+        let view = hunt();
+        let shared = Arc::new(Mutex::new(BossView::default()));
+        manager.start("bronze", false, &view, &mut nav, at).unwrap();
+        manager.publish(&shared);
+        let published = shared.lock().unwrap().clone();
+        assert_eq!(published.request_key.as_deref(), Some("bronze"));
+        assert_eq!(published.request_repeat, Some(false));
+        assert!(published.busy);
+    }
+
+    #[test]
     fn boss_start_waits_on_the_same_switch_gate_as_hunt_atlas() {
         let mut manager = manager();
         let mut nav = HuntNavigator::default();
