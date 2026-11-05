@@ -3,6 +3,7 @@
 //! Keep defaults equivalent to the previous ControllerApp initialization.
 use super::{AccountsSection, AutomationSection, HuntRanking, HuntSubtab, PanelTab, UiOptions,
     AppPreferences, SettingsBackup, OptionsSection};
+use std::time::Instant;
 
 #[derive(Default)]
 pub(super) struct BrowserTabEditor {
@@ -53,6 +54,10 @@ pub(super) struct WorkspaceState {
     pub(super) hunt_subtab: HuntSubtab,
     pub(super) hunt_page: usize,
     pub(super) boss_selected: [String;4],
+    /// Immediate UI acknowledgement while the native worker adopts a boss request.
+    pub(super) boss_start_pending: [Option<(String, bool, Instant)>;4],
+    pub(super) boss_stop_pending: [Option<Instant>;4],
+    pub(super) boss_leave_pending: [Option<Instant>;4],
     pub(super) boss_leave_confirm: [bool;4],
     pub(super) boss_leave_target: [Option<String>;4],
     pub(super) boss_history_page: [usize;4],
@@ -90,6 +95,9 @@ impl Default for WorkspaceState {
             hunt_subtab: HuntSubtab::Explorer,
             hunt_page: 0,
             boss_selected: std::array::from_fn(|_| String::new()),
+            boss_start_pending: std::array::from_fn(|_| None),
+            boss_stop_pending: std::array::from_fn(|_| None),
+            boss_leave_pending: std::array::from_fn(|_| None),
             boss_leave_confirm: [false;4],
             boss_leave_target: std::array::from_fn(|_| None),
             boss_history_page: [0;4],

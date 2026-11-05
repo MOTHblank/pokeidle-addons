@@ -117,6 +117,8 @@ pub struct BossView {
     pub auto: bool,
     pub auto_key: Option<String>,
     pub arena: Option<String>,
+    pub request_key: Option<String>,
+    pub request_repeat: Option<bool>,
     pub busy: bool,
     pub can_stop: bool,
     pub phase: String,
@@ -376,6 +378,15 @@ impl BossManager {
         if let Ok(mut state) = shared.lock() {
             *state = self.view.clone();
             state.busy = self.trip.is_some();
+            if let Some(trip) = self.trip.as_ref().filter(|trip|
+                matches!(trip.stage, Stage::Starting | Stage::Running) &&
+                !trip.confirmed && !trip.ended && !trip.stop_pending) {
+                state.request_key = Some(trip.key.clone());
+                state.request_repeat = Some(trip.repeat);
+            } else {
+                state.request_key = None;
+                state.request_repeat = None;
+            }
             state.can_stop = self.view.auto || self.trip.as_ref().is_some_and(|trip|
                 !trip.recovering && (trip.stage == Stage::Starting ||
                     (trip.repeat && trip.stage == Stage::Running)));
@@ -1240,6 +1251,36 @@ mod tests {
         assert!(manager.stop(&mut nav, &view, now).is_none());
         assert!(!manager.active());
         assert!(nav.next_action(&view, now).is_none());
+    }
+
+    #[test]
+    fn boss_center_leg_retries_on_hunt_atlas_cadence() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let at = Instant::now();
+        let view = hunt();
+        manager.start("bronze", true, &view, &mut nav, at).unwrap();
+        assert!(matches!(manager.next_action(&view, &mut nav, at),
+            Some(GameCommand::Center)));
+        assert!(manager.next_action(&view, &mut nav,
+            at + Duration::from_millis(100)).is_none());
+        assert!(matches!(manager.next_action(&view, &mut nav,
+            at + Duration::from_millis(350)), Some(GameCommand::Center)));
+    }
+
+    #[test]
+    fn published_boss_view_identifies_pending_destination_and_mode() {
+        let mut manager = manager();
+        let mut nav = HuntNavigator::default();
+        let at = Instant::now();
+        let view = hunt();
+        let shared = Arc::new(Mutex::new(BossView::default()));
+        manager.start("bronze", false, &view, &mut nav, at).unwrap();
+        manager.publish(&shared);
+        let published = shared.lock().unwrap().clone();
+        assert_eq!(published.request_key.as_deref(), Some("bronze"));
+        assert_eq!(published.request_repeat, Some(false));
+        assert!(published.busy);
     }
 
     #[test]
