@@ -1183,7 +1183,33 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{boss_name_limit, history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+    use super::{
+        boss_card_state, boss_name_limit, history_range, leave_confirmation_valid,
+        loot_age, BossCardState, BOSS_HISTORY_PAGE_SIZE,
+    };
+    use crate::native_boss::{BossEntry, BossView};
+    use crate::native_hunts::HuntView;
+    use std::sync::Arc;
+
+    fn boss_entry() -> BossEntry {
+        BossEntry {
+            key: "bronze".into(),
+            name: "Bronze Boss".into(),
+            min_level: 20,
+            token_id: 500,
+            token_name: "Boss Token".into(),
+            tokens_per_entry: 2,
+            ..Default::default()
+        }
+    }
+
+    fn ready_hunt() -> HuntView {
+        HuntView {
+            trainer_level: Some(30),
+            items: Arc::new([(500, 4)].into()),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn boss_names_use_compact_labels_in_narrow_workspaces() {
@@ -1215,8 +1241,79 @@ mod tests {
 
     #[test]
     fn history_relative_age_never_underflows() {
-        assert_eq!(loot_age(100, 200), "0m");
+        assert_eq!(loot_age(100, 200), "<1m");
+        assert_eq!(loot_age(59, 0), "<1m");
+        assert_eq!(loot_age(60, 0), "1m");
         assert_eq!(loot_age(3600, 0), "1h");
         assert_eq!(loot_age(86400, 0), "1d");
+    }
+
+    #[test]
+    fn card_state_prioritizes_runtime_activity_over_eligibility() {
+        let entry = boss_entry();
+        let hunt = ready_hunt();
+        let mut view = BossView { state_known: true, ..Default::default() };
+
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::Ready,
+        );
+
+        view.arena = Some(entry.key.clone());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::Fighting,
+        );
+
+        view.arena = None;
+        view.auto = true;
+        view.auto_key = Some(entry.key.clone());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::Farming,
+        );
+
+        view.auto = false;
+        view.auto_key = None;
+        view.arena = Some("other".into());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::OtherBossActive,
+        );
+
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, Some("bronze")),
+            BossCardState::Requested,
+        );
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, false, Some("bronze")),
+            BossCardState::Offline,
+        );
+    }
+
+    #[test]
+    fn card_state_explains_level_and_token_blocks() {
+        let entry = boss_entry();
+        let view = BossView { state_known: true, ..Default::default() };
+        let mut hunt = ready_hunt();
+
+        hunt.trainer_level = None;
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::LevelUnavailable,
+        );
+
+        hunt.trainer_level = Some(10);
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::LevelRequired,
+        );
+
+        hunt.trainer_level = Some(30);
+        hunt.items = Arc::new([(500, 1)].into());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::TokensMissing,
+        );
     }
 }
