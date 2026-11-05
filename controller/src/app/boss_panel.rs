@@ -1048,7 +1048,15 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let reference = app.hunt_reference.clone();
                 let selected = &mut app.workspace.boss_selected[index];
                 if !view.catalog.iter().any(|entry| entry.key == *selected) {
-                    *selected = view.catalog[0].key.clone();
+                    let preferred = view.arena.as_deref()
+                        .or(view.auto_key.as_deref())
+                        .or(view.request_key.as_deref())
+                        .or_else(|| pending_start.as_ref().map(|(key, _)| key.as_str()));
+                    *selected = preferred
+                        .and_then(|key| view.catalog.iter()
+                            .find(|entry| entry.key == key)
+                            .map(|entry| entry.key.clone()))
+                        .unwrap_or_else(|| view.catalog[0].key.clone());
                 }
                 let desktop = ui.available_width() >= 880.0;
                 if desktop {
