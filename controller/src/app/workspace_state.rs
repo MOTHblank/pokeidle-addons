@@ -56,6 +56,7 @@ pub(super) struct WorkspaceState {
     pub(super) boss_selected: [String;4],
     /// Immediate UI acknowledgement while the native worker adopts a boss request.
     pub(super) boss_start_pending: [Option<(String, bool, Instant)>;4],
+    pub(super) boss_action_error: [Option<String>;4],
     pub(super) boss_stop_pending: [Option<Instant>;4],
     pub(super) boss_leave_pending: [Option<Instant>;4],
     pub(super) boss_leave_confirm: [bool;4],
@@ -96,6 +97,7 @@ impl Default for WorkspaceState {
             hunt_page: 0,
             boss_selected: std::array::from_fn(|_| String::new()),
             boss_start_pending: std::array::from_fn(|_| None),
+            boss_action_error: std::array::from_fn(|_| None),
             boss_stop_pending: std::array::from_fn(|_| None),
             boss_leave_pending: std::array::from_fn(|_| None),
             boss_leave_confirm: [false;4],
