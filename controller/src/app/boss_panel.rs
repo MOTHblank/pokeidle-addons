@@ -32,7 +32,7 @@ fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
 fn leave_confirmation_valid(live: bool, arena: Option<&str>, target: Option<&str>) -> bool {
     live && matches!((arena, target), (Some(arena), Some(target)) if arena == target)
 }
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn loot_age(now: u64, at: u64) -> String {
     let elapsed = now.saturating_sub(at);
@@ -570,7 +570,7 @@ fn draw_boss_history_card(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Boss victories & loot"))
+                RichText::new(tr("Boss history"))
                     .size(13.0)
                     .strong()
                     .color(TEXT),
@@ -578,7 +578,7 @@ fn draw_boss_history_card(
             ui.horizontal_wrapped(|ui| {
                 resource_chip(
                     ui,
-                    &format!("{}: {}", tr("Victories"), view.log.len()),
+                    &format!("{}: {}", tr("Recorded victories"), view.log.len()),
                 );
             });
             if let Some(error) = view.storage_warning.as_deref() {
@@ -605,23 +605,23 @@ fn draw_boss_history_card(
                     *total = total.saturating_add(drop.quantity);
                 }
             }
-            if totals.is_empty() {
+            if view.log.is_empty() {
                 ui.label(
-                    RichText::new(tr("No confirmed boss item drops recorded yet."))
+                    RichText::new(tr("No boss victories recorded yet."))
+                        .size(10.0)
+                        .color(DIM),
+                );
+            } else if totals.is_empty() {
+                ui.label(
+                    RichText::new(tr("No loot was recorded in these victories."))
                         .size(10.0)
                         .color(DIM),
                 );
             } else {
                 ui.add_space(7.0);
-                // Keep the history controls reachable even after
-                // hundreds of distinct recorded item drops.
-                let totals_label = if ui.available_width() < 320.0 {
-                    tr("Loot totals")
-                } else {
-                    tr("Items acquired (retained history)")
-                };
+                // Keep totals compact; individual results remain below.
                 egui::CollapsingHeader::new(format!(
-                    "{} ({})", totals_label, totals.len(),
+                    "{} ({})", tr("Loot totals"), totals.len(),
                 ))
                 .id_salt(("boss-loot-totals", index))
                 .default_open(false)
@@ -655,37 +655,42 @@ fn draw_boss_history_card(
                 if !filter.is_empty() && !boss_names.contains_key(filter.as_str()) {
                     filter.clear();
                 }
-                let previous_filter = filter.clone();
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(tr("Filter history"))
-                            .size(10.0)
-                            .color(MUTED),
-                    );
-                    let selected_name = boss_names
-                        .get(filter.as_str()).map(String::as_str)
-                        .unwrap_or(tr("All bosses"));
-                    let max_chars = boss_name_limit(ui.available_width());
-                    egui::ComboBox::from_id_salt(("boss-history-filter", index))
-                        .selected_text(compact_text(selected_name, max_chars))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut *filter,
-                                String::new(),
-                                tr("All bosses"),
-                            );
-                            for (key, name) in &boss_names {
+                if boss_names.len() > 1 {
+                    let previous_filter = filter.clone();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(tr("Filter history"))
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                        let selected_name = boss_names
+                            .get(filter.as_str()).map(String::as_str)
+                            .unwrap_or(tr("All bosses"));
+                        let max_chars = boss_name_limit(ui.available_width());
+                        egui::ComboBox::from_id_salt(("boss-history-filter", index))
+                            .selected_text(compact_text(selected_name, max_chars))
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut *filter,
-                                    key.clone(),
-                                    compact_text(name, max_chars),
-                                ).on_hover_text(name);
-                            }
-                        })
-                        .response
-                        .on_hover_text(selected_name);
-                });
-                if *filter != previous_filter {
+                                    String::new(),
+                                    tr("All bosses"),
+                                );
+                                for (key, name) in &boss_names {
+                                    ui.selectable_value(
+                                        &mut *filter,
+                                        key.clone(),
+                                        compact_text(name, max_chars),
+                                    ).on_hover_text(name);
+                                }
+                            })
+                            .response
+                            .on_hover_text(selected_name);
+                    });
+                    if *filter != previous_filter {
+                        app.workspace.boss_history_page[index] = 0;
+                    }
+                } else if !filter.is_empty() {
+                    filter.clear();
                     app.workspace.boss_history_page[index] = 0;
                 }
                 let filtered: Vec<_> = view.log.iter().rev()
@@ -709,20 +714,19 @@ fn draw_boss_history_card(
                         ).clicked() {
                             *page += 1;
                         }
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {} / {}",
+                                tr("Page"), *page + 1, page_count,
+                            ))
+                            .size(10.0)
+                            .color(DIM),
+                        );
                     });
                 }
                 // Compute the range after clicks: the count and rows
                 // now describe the same page in this exact frame.
                 let range = history_range(page, count);
-                let first = if count == 0 { 0 } else { range.start + 1 };
-                ui.label(
-                    RichText::new(format!(
-                        "{first}–{} / {count} · {} / {page_count}",
-                        range.end, *page + 1,
-                    ))
-                        .size(10.0)
-                        .color(DIM),
-                );
                 if filtered.is_empty() {
                     ui.label(
                         RichText::new(tr("No victories match this boss."))
@@ -803,19 +807,48 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .as_secs();
     let mut action = None;
 
+    // Mirror Hunt Atlas: acknowledge the click immediately, then replace the
+    // optimistic state with the native worker's authoritative trip state.
+    {
+        let boss_ui = &mut app.runtimes[index].boss;
+        if boss_entry_pending(&view) {
+            if let Some(key) = view.trip_key.as_ref() {
+                let replace = boss_ui.action_pending.as_ref()
+                    .is_none_or(|(pending, repeat, _)| {
+                        pending != key || *repeat != view.trip_repeat
+                    });
+                if replace {
+                    boss_ui.action_pending =
+                        Some((key.clone(), view.trip_repeat, Instant::now()));
+                }
+            }
+        } else if boss_ui.action_pending.as_ref().is_some_and(|(key, _, at)| {
+            !live
+                || view.arena.as_deref() == Some(key.as_str())
+                || view.auto_key.as_deref() == Some(key.as_str())
+                || !view.busy
+                || at.elapsed() > Duration::from_secs(3)
+        }) {
+            boss_ui.action_pending = None;
+        }
+    }
+    let optimistic_pending = app.runtimes[index].boss.action_pending.clone();
+    let pending_request = boss_pending_request(&view, optimistic_pending.as_ref());
+    let action_error = app.runtimes[index].boss.action_error.clone();
+
     egui::ScrollArea::vertical()
         .id_salt(("boss-farm", index))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Server-native Boss Farm"))
+                RichText::new(tr("Boss Farm"))
                     .size(15.0)
                     .strong()
                     .color(TEXT),
             );
             ui.label(
-                RichText::new(tr("Boss entry uses Hunt Atlas navigation to return to the Pokémon Center first, then starts the selected boss. If travel stays blocked for one minute, the pending request authorizes one Give Up. Moth restores your original hunt when the run ends."))
+                RichText::new(tr("Choose a boss to fight once or farm. Moth returns to your previous hunt when the run finishes."))
                     .size(10.0)
                     .color(MUTED),
             );
@@ -859,6 +892,21 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                 });
             ui.add_space(10.0);
+
+            if let Some(error) = action_error.as_deref() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(error)
+                            .size(10.0)
+                            .strong()
+                            .color(BAD),
+                    );
+                    if ui.small_button(tr("Dismiss")).clicked() {
+                        app.runtimes[index].boss.action_error = None;
+                    }
+                });
+                ui.add_space(6.0);
+            }
 
             // Hunt Atlas-style master/detail selection: boss cards on the
             // left, selected combat and entry information on the right.
@@ -925,7 +973,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 .find(|entry| entry.key == *selected) {
                                 draw_boss_details(
                                     ui, entry, &view, &hunt, live,
-                                    reference.as_deref(), restock_enabled, &mut action,
+                                    reference.as_deref(), restock_enabled,
+                                    pending_request, &mut action,
                                 );
                             }
                         });
@@ -951,7 +1000,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .find(|entry| entry.key == *selected) {
                         draw_boss_details(
                             ui, entry, &view, &hunt, live,
-                            reference.as_deref(), restock_enabled, &mut action,
+                            reference.as_deref(), restock_enabled,
+                            pending_request, &mut action,
                         );
                     }
                 }
@@ -965,12 +1015,33 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     GameCommand::BossLeave => tr("Boss leave queued"),
                     _ => tr("Boss command queued"),
                 };
+                let pending = match &command {
+                    GameCommand::BossStart { key, repeat } =>
+                        Some((key.clone(), *repeat)),
+                    _ => None,
+                };
+                let clears_pending = matches!(
+                    &command, GameCommand::BossStop | GameCommand::BossLeave
+                );
                 let result = app.runtimes[index].game.native.as_ref()
                     .expect("native still present")
                     .send_command(command);
                 match result {
-                    Ok(()) => app.set_status(notice, false),
-                    Err(error) => app.set_status(error, true),
+                    Ok(()) => {
+                        if let Some((key, repeat)) = pending {
+                            app.runtimes[index].boss.action_pending =
+                                Some((key, repeat, Instant::now()));
+                            app.runtimes[index].boss.action_error = None;
+                        } else if clears_pending {
+                            app.runtimes[index].boss.action_pending = None;
+                        }
+                        app.set_status(notice, false);
+                    }
+                    Err(error) => {
+                        app.runtimes[index].boss.action_pending = None;
+                        app.runtimes[index].boss.action_error = Some(error.clone());
+                        app.set_status(error, true);
+                    }
                 }
             }
         });
