@@ -12,6 +12,7 @@ use super::hunt_panel::components::{
 use crate::native_boss::{BossEntry, BossView};
 use crate::native_hunts::HuntView;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BOSS_HISTORY_PAGE_SIZE: usize = 15;
 
@@ -32,11 +33,12 @@ fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
 fn leave_confirmation_valid(live: bool, arena: Option<&str>, target: Option<&str>) -> bool {
     live && matches!((arena, target), (Some(arena), Some(target)) if arena == target)
 }
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn loot_age(now: u64, at: u64) -> String {
     let elapsed = now.saturating_sub(at);
-    if elapsed < 3_600 {
+    if elapsed < 60 {
+        "<1m".to_owned()
+    } else if elapsed < 3_600 {
         format!("{}m", elapsed / 60)
     } else if elapsed < 86_400 {
         format!("{}h", elapsed / 3_600)
@@ -83,6 +85,59 @@ fn boss_name_for_key<'a>(view: &'a BossView, key: &'a str) -> &'a str {
         .unwrap_or(key)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BossCardState {
+    Offline,
+    Loading,
+    Requested,
+    Fighting,
+    Farming,
+    OtherBossActive,
+    LevelUnavailable,
+    LevelRequired,
+    TokensMissing,
+    Ready,
+}
+
+fn boss_card_state(
+    entry: &BossEntry,
+    view: &BossView,
+    hunt: &HuntView,
+    live: bool,
+    optimistic_request: Option<&str>,
+) -> BossCardState {
+    if !live {
+        return BossCardState::Offline;
+    }
+    if !view.state_known {
+        return BossCardState::Loading;
+    }
+    if optimistic_request == Some(entry.key.as_str())
+        || view.request_key.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Requested;
+    }
+    if view.auto && view.auto_key.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Farming;
+    }
+    if view.arena.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Fighting;
+    }
+    if optimistic_request.is_some() || view.busy || view.auto || view.arena.is_some() {
+        return BossCardState::OtherBossActive;
+    }
+    let Some(level) = hunt.trainer_level else {
+        return BossCardState::LevelUnavailable;
+    };
+    if level < entry.min_level {
+        return BossCardState::LevelRequired;
+    }
+    let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
+    if tokens < entry.tokens_per_entry {
+        return BossCardState::TokensMissing;
+    }
+    BossCardState::Ready
+}
+
 fn boss_status_label(view: &BossView, hunt: &HuntView, live: bool) -> &'static str {
     if !live {
         return tr("Offline");
@@ -126,28 +181,38 @@ fn draw_boss_selector(
     ui: &mut egui::Ui,
     entry: &BossEntry,
     selected: bool,
-    pending: bool,
+    view: &BossView,
     hunt: &HuntView,
+    live: bool,
+    optimistic_request: Option<&str>,
 ) -> bool {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
     let fight_level = entry.fight_level(hunt)
         .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
-    let level_ready = hunt.trainer_level.is_some_and(|level| level >= entry.min_level);
-    let tokens_ready = tokens >= entry.tokens_per_entry;
-    let (availability, availability_color) = if pending {
-        (tr("Requested").to_owned(), WARN)
-    } else if !level_ready {
-        (format!("{} {}", tr("Required level"), entry.min_level), WARN)
-    } else if !tokens_ready {
-        (tr("Not enough tokens").to_owned(), WARN)
-    } else {
-        (tr("Ready").to_owned(), GOOD)
+    let state = boss_card_state(entry, view, hunt, live, optimistic_request);
+    let (availability, availability_color) = match state {
+        BossCardState::Offline => (tr("Offline").to_owned(), DIM),
+        BossCardState::Loading => (tr("Loading…").to_owned(), MUTED),
+        BossCardState::Requested => (tr("Requested").to_owned(), WARN),
+        BossCardState::Fighting => (tr("Fighting").to_owned(), GOOD),
+        BossCardState::Farming => (tr("Farming").to_owned(), GOOD),
+        BossCardState::OtherBossActive => (tr("Another boss active").to_owned(), MUTED),
+        BossCardState::LevelUnavailable => (tr("Level unavailable").to_owned(), DIM),
+        BossCardState::LevelRequired =>
+            (format!("{} {}", tr("Required level"), entry.min_level), WARN),
+        BossCardState::TokensMissing => (tr("Not enough tokens").to_owned(), WARN),
+        BossCardState::Ready => (tr("Ready").to_owned(), GOOD),
     };
+    let emphasized = matches!(
+        state,
+        BossCardState::Requested | BossCardState::Fighting | BossCardState::Farming
+    );
+    let emphasis_color = if state == BossCardState::Requested { WARN } else { GOOD };
     let card = egui::Frame::new()
-        .fill(if pending { WARN.linear_multiply(0.08) }
+        .fill(if emphasized { emphasis_color.linear_multiply(0.08) }
             else if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
-        .stroke(Stroke::new(1.0, if pending { WARN.linear_multiply(0.7) }
+        .stroke(Stroke::new(1.0, if emphasized { emphasis_color.linear_multiply(0.7) }
             else if selected { ACCENT } else { BORDER }))
         .corner_radius(8.0)
         .inner_margin(egui::Margin::symmetric(9, 7))
