@@ -119,6 +119,10 @@ pub struct BossView {
     pub arena: Option<String>,
     pub busy: bool,
     pub can_stop: bool,
+    /// Controller-owned trip target. Unlike arena/auto_key this is available
+    /// while navigation is still waiting for a safe opening.
+    pub trip_key: Option<String>,
+    pub trip_repeat: bool,
     pub phase: String,
     pub original_hunt: Option<String>,
     pub warning: Option<String>,
@@ -376,6 +380,8 @@ impl BossManager {
         if let Ok(mut state) = shared.lock() {
             *state = self.view.clone();
             state.busy = self.trip.is_some();
+            state.trip_key = self.trip.as_ref().map(|trip| trip.key.clone());
+            state.trip_repeat = self.trip.as_ref().is_some_and(|trip| trip.repeat);
             state.can_stop = self.view.auto || self.trip.as_ref().is_some_and(|trip|
                 !trip.recovering && (trip.stage == Stage::Starting ||
                     (trip.repeat && trip.stage == Stage::Running)));
