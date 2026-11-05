@@ -12,6 +12,7 @@ use super::hunt_panel::components::{
 use crate::native_boss::{BossEntry, BossView};
 use crate::native_hunts::HuntView;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BOSS_HISTORY_PAGE_SIZE: usize = 15;
 
@@ -32,11 +33,12 @@ fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
 fn leave_confirmation_valid(live: bool, arena: Option<&str>, target: Option<&str>) -> bool {
     live && matches!((arena, target), (Some(arena), Some(target)) if arena == target)
 }
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn loot_age(now: u64, at: u64) -> String {
     let elapsed = now.saturating_sub(at);
-    if elapsed < 3_600 {
+    if elapsed < 60 {
+        "<1m".to_owned()
+    } else if elapsed < 3_600 {
         format!("{}m", elapsed / 60)
     } else if elapsed < 86_400 {
         format!("{}h", elapsed / 3_600)
@@ -83,6 +85,66 @@ fn boss_name_for_key<'a>(view: &'a BossView, key: &'a str) -> &'a str {
         .unwrap_or(key)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BossCardState {
+    Offline,
+    Loading,
+    Requested,
+    Fighting,
+    Farming,
+    OtherBossActive,
+    OperationBusy,
+    LevelUnavailable,
+    LevelRequired,
+    TokensMissing,
+    Ready,
+}
+
+fn boss_card_state(
+    entry: &BossEntry,
+    view: &BossView,
+    hunt: &HuntView,
+    live: bool,
+    optimistic_request: Option<&str>,
+) -> BossCardState {
+    if !live {
+        return BossCardState::Offline;
+    }
+    if !view.state_known {
+        return BossCardState::Loading;
+    }
+    if view.auto && view.auto_key.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Farming;
+    }
+    if view.arena.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Fighting;
+    }
+    if optimistic_request == Some(entry.key.as_str())
+        || view.request_key.as_deref() == Some(entry.key.as_str()) {
+        return BossCardState::Requested;
+    }
+    if optimistic_request.is_some()
+        || view.request_key.is_some()
+        || view.auto
+        || view.arena.is_some() {
+        return BossCardState::OtherBossActive;
+    }
+    if view.busy {
+        return BossCardState::OperationBusy;
+    }
+    let Some(level) = hunt.trainer_level else {
+        return BossCardState::LevelUnavailable;
+    };
+    if level < entry.min_level {
+        return BossCardState::LevelRequired;
+    }
+    let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
+    if tokens < entry.tokens_per_entry {
+        return BossCardState::TokensMissing;
+    }
+    BossCardState::Ready
+}
+
 fn boss_status_label(view: &BossView, hunt: &HuntView, live: bool) -> &'static str {
     if !live {
         return tr("Offline");
@@ -126,28 +188,39 @@ fn draw_boss_selector(
     ui: &mut egui::Ui,
     entry: &BossEntry,
     selected: bool,
-    pending: bool,
+    view: &BossView,
     hunt: &HuntView,
+    live: bool,
+    optimistic_request: Option<&str>,
 ) -> bool {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
     let fight_level = entry.fight_level(hunt)
         .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
-    let level_ready = hunt.trainer_level.is_some_and(|level| level >= entry.min_level);
-    let tokens_ready = tokens >= entry.tokens_per_entry;
-    let (availability, availability_color) = if pending {
-        (tr("Requested").to_owned(), WARN)
-    } else if !level_ready {
-        (format!("{} {}", tr("Required level"), entry.min_level), WARN)
-    } else if !tokens_ready {
-        (tr("Not enough tokens").to_owned(), WARN)
-    } else {
-        (tr("Ready").to_owned(), GOOD)
+    let state = boss_card_state(entry, view, hunt, live, optimistic_request);
+    let (availability, availability_color) = match state {
+        BossCardState::Offline => (tr("Offline").to_owned(), DIM),
+        BossCardState::Loading => (tr("Loading…").to_owned(), MUTED),
+        BossCardState::Requested => (tr("Requested").to_owned(), WARN),
+        BossCardState::Fighting => (tr("Fighting").to_owned(), GOOD),
+        BossCardState::Farming => (tr("Farming").to_owned(), GOOD),
+        BossCardState::OtherBossActive => (tr("Another boss active").to_owned(), MUTED),
+        BossCardState::OperationBusy => (boss_status_label(view, hunt, live).to_owned(), MUTED),
+        BossCardState::LevelUnavailable => (tr("Level unavailable").to_owned(), DIM),
+        BossCardState::LevelRequired =>
+            (format!("{} {}", tr("Required level"), entry.min_level), WARN),
+        BossCardState::TokensMissing => (tr("Not enough tokens").to_owned(), WARN),
+        BossCardState::Ready => (tr("Ready").to_owned(), GOOD),
     };
+    let emphasized = matches!(
+        state,
+        BossCardState::Requested | BossCardState::Fighting | BossCardState::Farming
+    );
+    let emphasis_color = if state == BossCardState::Requested { WARN } else { GOOD };
     let card = egui::Frame::new()
-        .fill(if pending { WARN.linear_multiply(0.08) }
+        .fill(if emphasized { emphasis_color.linear_multiply(0.08) }
             else if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
-        .stroke(Stroke::new(1.0, if pending { WARN.linear_multiply(0.7) }
+        .stroke(Stroke::new(1.0, if emphasized { emphasis_color.linear_multiply(0.7) }
             else if selected { ACCENT } else { BORDER }))
         .corner_radius(8.0)
         .inner_margin(egui::Margin::symmetric(9, 7))
@@ -485,6 +558,22 @@ fn draw_boss_status_card(
             }
             if let Some(warning) = hunt.navigation_warning.as_deref() {
                 ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
+            }
+            if let Some(error) = app.workspace.boss_action_error[index].clone() {
+                ui.add_space(5.0);
+                egui::Frame::new()
+                    .fill(BAD.linear_multiply(0.06))
+                    .stroke(Stroke::new(1.0, BAD.linear_multiply(0.35)))
+                    .corner_radius(7.0)
+                    .inner_margin(egui::Margin::symmetric(9, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(error).size(10.0).color(BAD));
+                            if ui.small_button(tr("Dismiss")).clicked() {
+                                app.workspace.boss_action_error[index] = None;
+                            }
+                        });
+                    });
             }
 
             // Never let a confirmation from a previous arena or
@@ -937,16 +1026,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 });
             ui.add_space(10.0);
 
-            if let Some(error) = app.workspace.boss_action_error[index].clone() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(error).size(10.0).strong().color(BAD));
-                    if ui.small_button(tr("Dismiss")).clicked() {
-                        app.workspace.boss_action_error[index] = None;
-                    }
-                });
-                ui.add_space(6.0);
-            }
-
             // Hunt Atlas-style master/detail selection: boss cards on the
             // left, selected combat and entry information on the right.
             if !view.catalog_ready {
@@ -977,7 +1056,15 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 let reference = app.hunt_reference.clone();
                 let selected = &mut app.workspace.boss_selected[index];
                 if !view.catalog.iter().any(|entry| entry.key == *selected) {
-                    *selected = view.catalog[0].key.clone();
+                    let preferred = view.arena.as_deref()
+                        .or_else(|| if view.auto { view.auto_key.as_deref() } else { None })
+                        .or(view.request_key.as_deref())
+                        .or_else(|| pending_start.as_ref().map(|(key, _)| key.as_str()));
+                    *selected = preferred
+                        .and_then(|key| view.catalog.iter()
+                            .find(|entry| entry.key == key)
+                            .map(|entry| entry.key.clone()))
+                        .unwrap_or_else(|| view.catalog[0].key.clone());
                 }
                 let desktop = ui.available_width() >= 880.0;
                 if desktop {
@@ -996,8 +1083,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             for entry in &view.catalog {
                                 if draw_boss_selector(
                                     ui, entry, *selected == entry.key,
-                                    pending_start.as_ref().is_some_and(|(key, _)| key == &entry.key),
-                                    &hunt,
+                                    &view, &hunt, live,
+                                    pending_start.as_ref().map(|(key, _)| key.as_str()),
                                 ) {
                                     *selected = entry.key.clone();
                                 }
@@ -1030,8 +1117,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     for entry in &view.catalog {
                         if draw_boss_selector(
                             ui, entry, *selected == entry.key,
-                            pending_start.as_ref().is_some_and(|(key, _)| key == &entry.key),
-                            &hunt,
+                            &view, &hunt, live,
+                            pending_start.as_ref().map(|(key, _)| key.as_str()),
                         ) {
                             *selected = entry.key.clone();
                         }
@@ -1104,7 +1191,33 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
-    use super::{boss_name_limit, history_range, leave_confirmation_valid, loot_age, BOSS_HISTORY_PAGE_SIZE};
+    use super::{
+        boss_card_state, boss_name_limit, history_range, leave_confirmation_valid,
+        loot_age, BossCardState, BOSS_HISTORY_PAGE_SIZE,
+    };
+    use crate::native_boss::{BossEntry, BossView};
+    use crate::native_hunts::HuntView;
+    use std::sync::Arc;
+
+    fn boss_entry() -> BossEntry {
+        BossEntry {
+            key: "bronze".into(),
+            name: "Bronze Boss".into(),
+            min_level: 20,
+            token_id: 500,
+            token_name: "Boss Token".into(),
+            tokens_per_entry: 2,
+            ..Default::default()
+        }
+    }
+
+    fn ready_hunt() -> HuntView {
+        HuntView {
+            trainer_level: Some(30),
+            items: Arc::new([(500, 4)].into()),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn boss_names_use_compact_labels_in_narrow_workspaces() {
@@ -1136,8 +1249,89 @@ mod tests {
 
     #[test]
     fn history_relative_age_never_underflows() {
-        assert_eq!(loot_age(100, 200), "0m");
+        assert_eq!(loot_age(100, 200), "<1m");
+        assert_eq!(loot_age(59, 0), "<1m");
+        assert_eq!(loot_age(60, 0), "1m");
         assert_eq!(loot_age(3600, 0), "1h");
         assert_eq!(loot_age(86400, 0), "1d");
+    }
+
+    #[test]
+    fn card_state_prioritizes_runtime_activity_over_eligibility() {
+        let entry = boss_entry();
+        let hunt = ready_hunt();
+        let mut view = BossView { state_known: true, ..Default::default() };
+
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::Ready,
+        );
+
+        view.arena = Some(entry.key.clone());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::Fighting,
+        );
+
+        view.arena = None;
+        view.auto = true;
+        view.auto_key = Some(entry.key.clone());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::Farming,
+        );
+
+        view.auto = false;
+        view.auto_key = None;
+        view.arena = Some("other".into());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::OtherBossActive,
+        );
+
+        view.arena = None;
+        view.busy = true;
+        view.phase = "Returning to saved hunt".into();
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::OperationBusy,
+        );
+        view.busy = false;
+        view.phase.clear();
+
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, Some("bronze")),
+            BossCardState::Requested,
+        );
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, false, Some("bronze")),
+            BossCardState::Offline,
+        );
+    }
+
+    #[test]
+    fn card_state_explains_level_and_token_blocks() {
+        let entry = boss_entry();
+        let view = BossView { state_known: true, ..Default::default() };
+        let mut hunt = ready_hunt();
+
+        hunt.trainer_level = None;
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::LevelUnavailable,
+        );
+
+        hunt.trainer_level = Some(10);
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::LevelRequired,
+        );
+
+        hunt.trainer_level = Some(30);
+        hunt.items = Arc::new([(500, 1)].into());
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::TokensMissing,
+        );
     }
 }

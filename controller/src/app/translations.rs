@@ -178,6 +178,11 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Starting boss" => "Iniciando boss",
         "Going to Pokémon Center" => "Indo ao Centro Pokémon",
         "Boss operation in progress" => "Operação de boss em andamento",
+        "Loading…" => "Carregando…",
+        "Fighting" => "Lutando",
+        "Farming" => "Farmando",
+        "Another boss active" => "Outro boss ativo",
+        "Level unavailable" => "Nível indisponível",
         "Requested" => "Solicitado",
         "Not enough tokens" => "Tokens insuficientes",
         "Boss level follows your strongest eligible team Pokémon, with the unlock level as the minimum." =>
