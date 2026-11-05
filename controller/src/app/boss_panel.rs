@@ -2,14 +2,14 @@
 //! Reuse the controller's themed cards, badges, resource chips and detail rows.
 use super::{
     automation_badge, compact_text, detail_stat_line, draw_native_missing_panel, egui,
-    native_atlas, request_item_catalog, resource_chip, tr, AtlasReference,
+    native_atlas, request_item_catalog, resource_chip, tr, tr_dynamic, AtlasReference,
     ControllerApp, GameCommand, RichText, Stroke, ACCENT, BORDER, DIM, MUTED,
-    PANEL, PANEL_ALT, TEXT, WARN,
+    PANEL, PANEL_ALT, TEXT, WARN, GOOD, BAD,
 };
 use super::hunt_panel::components::{
     atlas_type_multiplier, atlas_type_name, atlas_types_for_active, draw_atlas_matchup,
 };
-use crate::native_boss::{strongest_eligible_team_level, BossEntry, BossView};
+use crate::native_boss::{BossEntry, BossView};
 use crate::native_hunts::HuntView;
 use std::collections::BTreeMap;
 
@@ -32,7 +32,7 @@ fn history_range(page: &mut usize, count: usize) -> std::ops::Range<usize> {
 fn leave_confirmation_valid(live: bool, arena: Option<&str>, target: Option<&str>) -> bool {
     live && matches!((arena, target), (Some(arena), Some(target)) if arena == target)
 }
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn loot_age(now: u64, at: u64) -> String {
     let elapsed = now.saturating_sub(at);
@@ -76,6 +76,52 @@ fn boss_type_label(entry: &BossEntry) -> String {
         .collect::<Vec<_>>().join(" · ")
 }
 
+fn boss_name_for_key<'a>(view: &'a BossView, key: &'a str) -> &'a str {
+    view.catalog.iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.name.as_str())
+        .unwrap_or(key)
+}
+
+fn boss_status_label(view: &BossView, hunt: &HuntView, live: bool) -> &'static str {
+    if !live {
+        return tr("Offline");
+    }
+    if !view.state_known {
+        return tr("Loading boss state…");
+    }
+    if view.phase.starts_with("Stopping") {
+        return tr("Stopping boss farm");
+    }
+    if view.phase.starts_with("Leaving")
+        || (view.busy && (view.phase.contains("Returning to saved hunt")
+            || view.phase.contains("Restoring saved hunt"))) {
+        return tr("Returning to hunt");
+    }
+    if view.phase.contains("cancel") {
+        return tr("Cancelling boss request");
+    }
+    if view.auto {
+        return tr("Boss farm active");
+    }
+    if view.arena.is_some() {
+        return tr("Boss fight active");
+    }
+    if view.request_key.is_some() {
+        if hunt.pending_center {
+            return tr("Waiting for a safe opening…");
+        }
+        if hunt.in_center {
+            return tr("Starting boss");
+        }
+        return tr("Going to Pokémon Center");
+    }
+    if view.busy {
+        return tr("Boss operation in progress");
+    }
+    tr("Ready")
+}
+
 fn draw_boss_selector(
     ui: &mut egui::Ui,
     entry: &BossEntry,
@@ -87,6 +133,17 @@ fn draw_boss_selector(
     let attempts = tokens / entry.tokens_per_entry.max(1);
     let fight_level = entry.fight_level(hunt)
         .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
+    let level_ready = hunt.trainer_level.is_some_and(|level| level >= entry.min_level);
+    let tokens_ready = tokens >= entry.tokens_per_entry;
+    let (availability, availability_color) = if pending {
+        (tr("Requested").to_owned(), WARN)
+    } else if !level_ready {
+        (format!("{} {}", tr("Required level"), entry.min_level), WARN)
+    } else if !tokens_ready {
+        (tr("Not enough tokens").to_owned(), WARN)
+    } else {
+        (tr("Ready").to_owned(), GOOD)
+    };
     let card = egui::Frame::new()
         .fill(if pending { WARN.linear_multiply(0.08) }
             else if selected { ACCENT.linear_multiply(0.13) } else { PANEL })
@@ -123,6 +180,12 @@ fn draw_boss_selector(
                     ui.vertical(|ui| {
                         ui.label(RichText::new(attempts.to_string()).size(12.0).strong().color(TEXT));
                         ui.label(RichText::new(tr("Possible entries")).size(9.0).color(MUTED));
+                        ui.label(
+                            RichText::new(availability)
+                                .size(9.0)
+                                .strong()
+                                .color(availability_color),
+                        );
                     });
                 });
             });
@@ -178,9 +241,12 @@ fn draw_boss_details(
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
     let level = hunt.trainer_level;
-    let team_level = strongest_eligible_team_level(hunt);
     let has_level = level.is_some_and(|current| current >= entry.min_level);
     let has_tokens = tokens >= entry.tokens_per_entry;
+    let pending_mode = pending_start
+        .filter(|(key, _)| *key == entry.key.as_str())
+        .map(|(_, repeat)| repeat);
+    let any_pending = pending_start.is_some();
 
     egui::Frame::new()
         .fill(PANEL)
@@ -209,26 +275,21 @@ fn draw_boss_details(
             });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                let current = level.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
-                resource_chip(ui, &format!("{}: {}", tr("Trainer level"), current));
-                resource_chip(ui, &format!("{}: {}", tr("Required level"), entry.min_level));
-                let strongest = team_level.filter(|value| *value > 0)
-                    .map(|value| value.to_string()).unwrap_or_else(|| "—".into());
-                resource_chip(ui, &format!("{}: {}", tr("Strongest eligible team Pokémon"), strongest));
                 if let Some(fight_level) = entry.fight_level(hunt) {
                     resource_chip(ui, &format!("{}: {}", tr("Boss combat level"), fight_level));
                 }
+                resource_chip(ui, &format!(
+                    "{}: {} × {}", tr("Entry"), entry.tokens_per_entry, entry.token_name,
+                ));
                 resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
+                if !has_level {
+                    let current = level.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
+                    resource_chip(ui, &format!(
+                        "{}: {} / {}", tr("Trainer level"), current, entry.min_level,
+                    ));
+                }
             });
             ui.add_space(5.0);
-            detail_stat_line(
-                ui, tr("Entry"),
-                &format!("{} × {}", entry.tokens_per_entry, entry.token_name),
-            );
-            detail_stat_line(
-                ui, tr("Inventory"),
-                &format!("{} × {}", tokens, entry.token_name),
-            );
             draw_boss_weaknesses(ui, reference, &entry.types);
 
             ui.add_space(8.0);
@@ -246,9 +307,13 @@ fn draw_boss_details(
             );
 
             ui.add_space(7.0);
-            ui.label(RichText::new(tr(
-                "Bosses fight at the level of your strongest eligible team Pokémon, never below their own unlock level. Trainer level still controls which bosses are unlocked; entry tokens and drop tiers are unchanged."
-            )).size(10.0).color(MUTED));
+            ui.label(
+                RichText::new(tr(
+                    "Boss level follows your strongest eligible team Pokémon, with the unlock level as the minimum."
+                ))
+                .size(10.0)
+                .color(MUTED),
+            );
             ui.label(
                 RichText::new(if restock_enabled {
                     tr("Restock stays active during boss battles.")
@@ -264,13 +329,11 @@ fn draw_boss_details(
                 && !view.busy
                 && !view.auto
                 && view.arena.is_none()
+                && !any_pending
                 && has_level
                 && has_tokens;
             ui.add_space(9.0);
             let compact_actions = ui.available_width() < 340.0;
-            let pending_mode = pending_start
-                .filter(|(key, _)| *key == entry.key.as_str())
-                .map(|(_, repeat)| repeat);
             ui.horizontal_wrapped(|ui| {
                 let farm_label = if compact_actions {
                     tr("Auto farm")
@@ -283,22 +346,26 @@ fn draw_boss_details(
                             .fill(WARN.linear_multiply(0.14))
                             .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7)))
                             .corner_radius(8.0));
-                    ui.label(RichText::new(tr(if hunt.in_center {
-                        "Entering boss from Pokémon Center…"
+                    let progress = if view.request_key.is_some() {
+                        boss_status_label(view, hunt, live)
+                    } else if hunt.in_center {
+                        tr("Starting boss")
                     } else {
-                        "Waiting for a safe opening to reach Pokémon Center…"
-                    })).size(10.0).color(WARN));
+                        tr("Waiting for a safe opening…")
+                    };
+                    ui.label(
+                        RichText::new(progress)
+                            .size(10.0)
+                            .strong()
+                            .color(WARN),
+                    );
                 } else if ui.add_enabled(
-                    ready && pending_mode.is_none(),
+                    ready,
                     egui::Button::new(RichText::new(farm_label).strong())
-                        .fill(if ready && pending_mode.is_none() {
-                            ACCENT.linear_multiply(0.32)
-                        } else { PANEL_ALT })
+                        .fill(if ready { ACCENT.linear_multiply(0.32) } else { PANEL_ALT })
                         .stroke(Stroke::new(
                             1.0,
-                            if ready && pending_mode.is_none() {
-                                ACCENT.linear_multiply(0.65)
-                            } else { BORDER },
+                            if ready { ACCENT.linear_multiply(0.65) } else { BORDER },
                         ))
                         .corner_radius(8.0),
                 ).on_hover_text(tr("Farm until tokens run out")).clicked() {
@@ -312,13 +379,21 @@ fn draw_boss_details(
                         egui::Button::new(tr("Starting fight…"))
                             .fill(WARN.linear_multiply(0.14))
                             .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
-                    ui.label(RichText::new(tr(if hunt.in_center {
-                        "Entering boss from Pokémon Center…"
+                    let progress = if view.request_key.is_some() {
+                        boss_status_label(view, hunt, live)
+                    } else if hunt.in_center {
+                        tr("Starting boss")
                     } else {
-                        "Waiting for a safe opening to reach Pokémon Center…"
-                    })).size(10.0).color(WARN));
+                        tr("Waiting for a safe opening…")
+                    };
+                    ui.label(
+                        RichText::new(progress)
+                            .size(10.0)
+                            .strong()
+                            .color(WARN),
+                    );
                 } else if ui.add_enabled(
-                    ready && pending_mode.is_none(),
+                    ready,
                     egui::Button::new(tr("Fight once")),
                 ).clicked() {
                     *action = Some(GameCommand::BossStart {
@@ -331,10 +406,12 @@ fn draw_boss_details(
                 let reason = if !live {
                     tr("Game disconnected. Boss controls will become available after reconnection.").to_owned()
                 } else if !view.state_known {
-                    tr("Waiting for authoritative server boss state.").to_owned()
-                } else if view.busy && !view.auto && view.arena.is_none() {
-                    tr("Returning to Pokémon Center before boss entry").to_owned()
-                } else if view.busy || view.auto || view.arena.is_some() {
+                    tr("Loading boss state…").to_owned()
+                } else if let Some((key, _)) = pending_start {
+                    format!("{}: {}", tr("Boss request in progress"), boss_name_for_key(view, key))
+                } else if view.arena.is_some() {
+                    tr("Finish the current boss fight before starting another.").to_owned()
+                } else if view.busy || view.auto {
                     tr("Finish the current boss run before starting another.").to_owned()
                 } else if level.is_none() {
                     tr("Trainer level is not available yet.").to_owned()
@@ -347,7 +424,6 @@ fn draw_boss_details(
             }
         });
 }
-
 
 fn draw_boss_status_card(
     app: &mut ControllerApp,
@@ -365,6 +441,18 @@ fn draw_boss_status_card(
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
+            let optimistic_start = app.workspace.boss_start_pending[index].as_ref();
+            let status = if optimistic_start.is_some() && view.request_key.is_none() {
+                if !live {
+                    tr("Offline")
+                } else if hunt.in_center {
+                    tr("Starting boss")
+                } else {
+                    tr("Waiting for a safe opening…")
+                }
+            } else {
+                boss_status_label(view, hunt, live)
+            };
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(tr("Boss status"))
@@ -372,33 +460,25 @@ fn draw_boss_status_card(
                         .strong()
                         .color(TEXT),
                 );
-                let phase = if !live {
-                    tr("Offline")
-                } else if !view.state_known {
-                    tr("Waiting for authoritative server boss state.")
-                } else if view.phase.is_empty() {
-                    tr("Idle")
-                } else {
-                    tr(&view.phase)
-                };
-                automation_badge(ui, "Phase", phase, live && (view.auto || view.arena.is_some()));
+                let settled = view.auto
+                    || view.arena.is_some()
+                    || (!view.busy && view.request_key.is_none() && optimistic_start.is_none());
+                automation_badge(
+                    ui, "Status", status,
+                    live && view.state_known && view.warning.is_none() && settled,
+                );
             });
             if let Some(arena) = view.arena.as_deref() {
-                let name = view.catalog.iter()
-                    .find(|entry| entry.key == arena)
-                    .map(|entry| entry.name.as_str())
-                    .unwrap_or(arena);
-                detail_stat_line(ui, tr("Current arena"), name);
+                detail_stat_line(ui, tr("Fighting"), boss_name_for_key(view, arena));
+            } else if let Some(key) = view.auto_key.as_deref() {
+                detail_stat_line(ui, tr("Farm target"), boss_name_for_key(view, key));
+            } else if let Some(key) = view.request_key.as_deref() {
+                detail_stat_line(ui, tr("Target boss"), boss_name_for_key(view, key));
+            } else if let Some((key, _, _)) = optimistic_start {
+                detail_stat_line(ui, tr("Target boss"), boss_name_for_key(view, key));
             }
             if let Some(original) = view.original_hunt.as_deref() {
                 detail_stat_line(ui, tr("Return destination"), original);
-            }
-            if view.auto {
-                let boss_name = view.auto_key.as_deref().and_then(|key| {
-                    view.catalog.iter().find(|entry| entry.key == key)
-                        .map(|entry| entry.name.as_str())
-                }).or(view.auto_key.as_deref()).unwrap_or("—");
-                detail_stat_line(ui, tr("Server repeating"), boss_name);
             }
             if let Some(warning) = view.warning.as_deref() {
                 ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
@@ -406,7 +486,7 @@ fn draw_boss_status_card(
             if let Some(warning) = hunt.navigation_warning.as_deref() {
                 ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
             }
-    
+
             // Never let a confirmation from a previous arena or
             // disconnected session authorize leaving a new encounter.
             if app.workspace.boss_leave_confirm[index]
@@ -418,19 +498,25 @@ fn draw_boss_status_card(
                 app.workspace.boss_leave_confirm[index] = false;
                 app.workspace.boss_leave_target[index] = None;
             }
-    
+
             ui.add_space(8.0);
             let compact_actions = ui.available_width() < 340.0;
             let stopping = app.workspace.boss_stop_pending[index].is_some()
                 || view.phase.starts_with("Stopping");
             let leaving = app.workspace.boss_leave_pending[index].is_some()
                 || view.phase.starts_with("Leaving");
+            let pending_entry = view.can_stop
+                && view.request_key.is_some()
+                && view.arena.is_none()
+                && !view.auto;
             let can_leave = live && view.arena.is_some() && !leaving;
             ui.horizontal_wrapped(|ui| {
-                let stop_label = if compact_actions {
+                let stop_label = if pending_entry {
+                    tr("Cancel request")
+                } else if compact_actions {
                     tr("Stop & return")
                 } else {
-                    tr("Stop repetition and return")
+                    tr("Stop farm and return")
                 };
                 if stopping {
                     ui.add_enabled(false, egui::Button::new(tr("Stopping…"))
@@ -441,7 +527,11 @@ fn draw_boss_status_card(
                 } else if ui.add_enabled(
                     live && view.can_stop,
                     egui::Button::new(stop_label),
-                ).on_hover_text(tr("Stop repetition and return")).clicked() {
+                ).on_hover_text(if pending_entry {
+                    tr("Cancel the pending boss request")
+                } else {
+                    tr("Stop farm and return")
+                }).clicked() {
                     *action = Some(GameCommand::BossStop);
                     app.workspace.boss_leave_confirm[index] = false;
                     app.workspace.boss_leave_target[index] = None;
@@ -522,7 +612,7 @@ fn draw_boss_history_card(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Boss victories & loot"))
+                RichText::new(tr("Boss history"))
                     .size(13.0)
                     .strong()
                     .color(TEXT),
@@ -530,7 +620,7 @@ fn draw_boss_history_card(
             ui.horizontal_wrapped(|ui| {
                 resource_chip(
                     ui,
-                    &format!("{}: {}", tr("Victories"), view.log.len()),
+                    &format!("{}: {}", tr("Recorded victories"), view.log.len()),
                 );
             });
             if let Some(error) = view.storage_warning.as_deref() {
@@ -557,23 +647,22 @@ fn draw_boss_history_card(
                     *total = total.saturating_add(drop.quantity);
                 }
             }
-            if totals.is_empty() {
+            if view.log.is_empty() {
                 ui.label(
-                    RichText::new(tr("No confirmed boss item drops recorded yet."))
+                    RichText::new(tr("No boss victories recorded yet."))
+                        .size(10.0)
+                        .color(DIM),
+                );
+            } else if totals.is_empty() {
+                ui.label(
+                    RichText::new(tr("No loot was recorded in these victories."))
                         .size(10.0)
                         .color(DIM),
                 );
             } else {
                 ui.add_space(7.0);
-                // Keep the history controls reachable even after
-                // hundreds of distinct recorded item drops.
-                let totals_label = if ui.available_width() < 320.0 {
-                    tr("Loot totals")
-                } else {
-                    tr("Items acquired (retained history)")
-                };
                 egui::CollapsingHeader::new(format!(
-                    "{} ({})", totals_label, totals.len(),
+                    "{} ({})", tr("Loot totals"), totals.len(),
                 ))
                 .id_salt(("boss-loot-totals", index))
                 .default_open(false)
@@ -607,37 +696,42 @@ fn draw_boss_history_card(
                 if !filter.is_empty() && !boss_names.contains_key(filter.as_str()) {
                     filter.clear();
                 }
-                let previous_filter = filter.clone();
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(tr("Filter history"))
-                            .size(10.0)
-                            .color(MUTED),
-                    );
-                    let selected_name = boss_names
-                        .get(filter.as_str()).map(String::as_str)
-                        .unwrap_or(tr("All bosses"));
-                    let max_chars = boss_name_limit(ui.available_width());
-                    egui::ComboBox::from_id_salt(("boss-history-filter", index))
-                        .selected_text(compact_text(selected_name, max_chars))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut *filter,
-                                String::new(),
-                                tr("All bosses"),
-                            );
-                            for (key, name) in &boss_names {
+                if boss_names.len() > 1 {
+                    let previous_filter = filter.clone();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(tr("Filter history"))
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                        let selected_name = boss_names
+                            .get(filter.as_str()).map(String::as_str)
+                            .unwrap_or(tr("All bosses"));
+                        let max_chars = boss_name_limit(ui.available_width());
+                        egui::ComboBox::from_id_salt(("boss-history-filter", index))
+                            .selected_text(compact_text(selected_name, max_chars))
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut *filter,
-                                    key.clone(),
-                                    compact_text(name, max_chars),
-                                ).on_hover_text(name);
-                            }
-                        })
-                        .response
-                        .on_hover_text(selected_name);
-                });
-                if *filter != previous_filter {
+                                    String::new(),
+                                    tr("All bosses"),
+                                );
+                                for (key, name) in &boss_names {
+                                    ui.selectable_value(
+                                        &mut *filter,
+                                        key.clone(),
+                                        compact_text(name, max_chars),
+                                    ).on_hover_text(name);
+                                }
+                            })
+                            .response
+                            .on_hover_text(selected_name);
+                    });
+                    if *filter != previous_filter {
+                        app.workspace.boss_history_page[index] = 0;
+                    }
+                } else if !filter.is_empty() {
+                    filter.clear();
                     app.workspace.boss_history_page[index] = 0;
                 }
                 let filtered: Vec<_> = view.log.iter().rev()
@@ -661,20 +755,19 @@ fn draw_boss_history_card(
                         ).clicked() {
                             *page += 1;
                         }
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {} / {}",
+                                tr("Page"), *page + 1, page_count,
+                            ))
+                            .size(10.0)
+                            .color(DIM),
+                        );
                     });
                 }
                 // Compute the range after clicks: the count and rows
                 // now describe the same page in this exact frame.
                 let range = history_range(page, count);
-                let first = if count == 0 { 0 } else { range.start + 1 };
-                ui.label(
-                    RichText::new(format!(
-                        "{first}–{} / {count} · {} / {page_count}",
-                        range.end, *page + 1,
-                    ))
-                        .size(10.0)
-                        .color(DIM),
-                );
                 if filtered.is_empty() {
                     ui.label(
                         RichText::new(tr("No victories match this boss."))
@@ -793,13 +886,13 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Server-native Boss Farm"))
+                RichText::new(tr("Boss Farm"))
                     .size(15.0)
                     .strong()
                     .color(TEXT),
             );
             ui.label(
-                RichText::new(tr("Boss requests use Hunt Atlas travel rules: wait for a safe opening, go through the Pokémon Center, then enter. Moth restores the original hunt afterward."))
+                RichText::new(tr("Choose a boss to fight once or farm. Moth returns to your previous hunt when the run finishes."))
                     .size(10.0)
                     .color(MUTED),
             );
@@ -843,6 +936,16 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                 });
             ui.add_space(10.0);
+
+            if let Some(error) = app.workspace.boss_action_error[index].clone() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(error).size(10.0).strong().color(BAD));
+                    if ui.small_button(tr("Dismiss")).clicked() {
+                        app.workspace.boss_action_error[index] = None;
+                    }
+                });
+                ui.add_space(6.0);
+            }
 
             // Hunt Atlas-style master/detail selection: boss cards on the
             // left, selected combat and entry information on the right.
@@ -965,6 +1068,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .send_command(command);
                 match result {
                     Ok(()) => {
+                        app.workspace.boss_action_error[index] = None;
                         match pending {
                             GameCommand::BossStart { key, repeat } => {
                                 app.workspace.boss_start_pending[index] =
@@ -981,6 +1085,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         app.set_status(notice, false);
                     }
                     Err(error) => {
+                        app.workspace.boss_action_error[index] = Some(tr_dynamic(error.clone()));
                         match pending {
                             GameCommand::BossStart { .. } =>
                                 app.workspace.boss_start_pending[index] = None,
