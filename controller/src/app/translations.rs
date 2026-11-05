@@ -67,6 +67,14 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss fight queued" => "Batalha de boss enviada à fila",
         "Boss farming requested" => "Farm de boss solicitado",
         "Boss fight requested" => "Batalha de boss solicitada",
+        "Starting farm…" => "Iniciando farm…",
+        "Starting fight…" => "Iniciando batalha…",
+        "Entering boss from Pokémon Center…" => "Entrando no boss a partir do Centro Pokémon…",
+        "Waiting for a safe opening to reach Pokémon Center…" => "Aguardando uma janela segura para chegar ao Centro Pokémon…",
+        "Stopping…" => "Parando…",
+        "Waiting for server confirmation…" => "Aguardando confirmação do servidor…",
+        "Leaving…" => "Saindo…",
+        "Returning to the saved hunt…" => "Retornando à hunt salva…",
         "Returning to Pokémon Center before boss entry" =>
             "Retornando ao Centro Pokémon antes de entrar no boss",
         "At Pokémon Center; entering boss" =>
@@ -137,8 +145,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Server-native Boss Farm" => "Farm de Boss (servidor)",
         "Start this account to manage server-native boss farming" =>
             "Inicie esta conta para gerenciar o farm de bosses no servidor",
-        "Boss entry uses Hunt Atlas navigation to return to the Pokémon Center first, then starts the selected boss. If travel stays blocked for one minute, the pending request authorizes one Give Up. Moth restores your original hunt when the run ends." =>
-            "A entrada no boss usa a navegação do Hunt Atlas para voltar primeiro ao Centro Pokémon e então iniciar o boss escolhido. Se a viagem ficar bloqueada por um minuto, a solicitação pendente autoriza uma desistência. O Moth restaura a hunt original quando a sequência termina.",
+        "Boss requests use Hunt Atlas travel rules: wait for a safe opening, go through the Pokémon Center, then enter. Moth restores the original hunt afterward." =>
+            "Pedidos de boss usam as regras de viagem do Hunt Atlas: aguardam uma janela segura, passam pelo Centro Pokémon e então entram. O Moth restaura a hunt original depois.",
         "Waiting for the server's playable boss catalog." =>
             "Aguardando o catálogo de bosses jogáveis do servidor.",
         "No playable boss arenas are currently advertised by the server." =>
