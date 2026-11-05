@@ -885,7 +885,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             ui.add_space(5.0);
                             for entry in &view.catalog {
                                 if draw_boss_selector(
-                                    ui, entry, *selected == entry.key, &hunt,
+                                    ui, entry, *selected == entry.key,
+                                    pending_start.as_ref().is_some_and(|(key, _)| key == &entry.key),
+                                    &hunt,
                                 ) {
                                     *selected = entry.key.clone();
                                 }
