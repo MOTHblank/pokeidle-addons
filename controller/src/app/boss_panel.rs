@@ -346,8 +346,15 @@ fn draw_boss_details(
                             .fill(WARN.linear_multiply(0.14))
                             .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7)))
                             .corner_radius(8.0));
+                    let progress = if view.request_key.is_some() {
+                        boss_status_label(view, hunt, live)
+                    } else if hunt.in_center {
+                        tr("Starting boss")
+                    } else {
+                        tr("Waiting for a safe opening…")
+                    };
                     ui.label(
-                        RichText::new(boss_status_label(view, hunt, live))
+                        RichText::new(progress)
                             .size(10.0)
                             .strong()
                             .color(WARN),
@@ -372,8 +379,15 @@ fn draw_boss_details(
                         egui::Button::new(tr("Starting fight…"))
                             .fill(WARN.linear_multiply(0.14))
                             .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+                    let progress = if view.request_key.is_some() {
+                        boss_status_label(view, hunt, live)
+                    } else if hunt.in_center {
+                        tr("Starting boss")
+                    } else {
+                        tr("Waiting for a safe opening…")
+                    };
                     ui.label(
-                        RichText::new(boss_status_label(view, hunt, live))
+                        RichText::new(progress)
                             .size(10.0)
                             .strong()
                             .color(WARN),
@@ -427,7 +441,18 @@ fn draw_boss_status_card(
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            let status = boss_status_label(view, hunt, live);
+            let optimistic_start = app.workspace.boss_start_pending[index].as_ref();
+            let status = if optimistic_start.is_some() && view.request_key.is_none() {
+                if !live {
+                    tr("Offline")
+                } else if hunt.in_center {
+                    tr("Starting boss")
+                } else {
+                    tr("Waiting for a safe opening…")
+                }
+            } else {
+                boss_status_label(view, hunt, live)
+            };
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(tr("Boss status"))
@@ -445,6 +470,8 @@ fn draw_boss_status_card(
             } else if let Some(key) = view.auto_key.as_deref() {
                 detail_stat_line(ui, tr("Farm target"), boss_name_for_key(view, key));
             } else if let Some(key) = view.request_key.as_deref() {
+                detail_stat_line(ui, tr("Target boss"), boss_name_for_key(view, key));
+            } else if let Some((key, _, _)) = optimistic_start {
                 detail_stat_line(ui, tr("Target boss"), boss_name_for_key(view, key));
             }
             if let Some(original) = view.original_hunt.as_deref() {
@@ -582,7 +609,7 @@ fn draw_boss_history_card(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Boss victories & loot"))
+                RichText::new(tr("Boss history"))
                     .size(13.0)
                     .strong()
                     .color(TEXT),
@@ -590,7 +617,7 @@ fn draw_boss_history_card(
             ui.horizontal_wrapped(|ui| {
                 resource_chip(
                     ui,
-                    &format!("{}: {}", tr("Victories"), view.log.len()),
+                    &format!("{}: {}", tr("Recorded victories"), view.log.len()),
                 );
             });
             if let Some(error) = view.storage_warning.as_deref() {
@@ -617,23 +644,22 @@ fn draw_boss_history_card(
                     *total = total.saturating_add(drop.quantity);
                 }
             }
-            if totals.is_empty() {
+            if view.log.is_empty() {
                 ui.label(
-                    RichText::new(tr("No confirmed boss item drops recorded yet."))
+                    RichText::new(tr("No boss victories recorded yet."))
+                        .size(10.0)
+                        .color(DIM),
+                );
+            } else if totals.is_empty() {
+                ui.label(
+                    RichText::new(tr("No loot was recorded in these victories."))
                         .size(10.0)
                         .color(DIM),
                 );
             } else {
                 ui.add_space(7.0);
-                // Keep the history controls reachable even after
-                // hundreds of distinct recorded item drops.
-                let totals_label = if ui.available_width() < 320.0 {
-                    tr("Loot totals")
-                } else {
-                    tr("Items acquired (retained history)")
-                };
                 egui::CollapsingHeader::new(format!(
-                    "{} ({})", totals_label, totals.len(),
+                    "{} ({})", tr("Loot totals"), totals.len(),
                 ))
                 .id_salt(("boss-loot-totals", index))
                 .default_open(false)
@@ -667,37 +693,42 @@ fn draw_boss_history_card(
                 if !filter.is_empty() && !boss_names.contains_key(filter.as_str()) {
                     filter.clear();
                 }
-                let previous_filter = filter.clone();
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(tr("Filter history"))
-                            .size(10.0)
-                            .color(MUTED),
-                    );
-                    let selected_name = boss_names
-                        .get(filter.as_str()).map(String::as_str)
-                        .unwrap_or(tr("All bosses"));
-                    let max_chars = boss_name_limit(ui.available_width());
-                    egui::ComboBox::from_id_salt(("boss-history-filter", index))
-                        .selected_text(compact_text(selected_name, max_chars))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut *filter,
-                                String::new(),
-                                tr("All bosses"),
-                            );
-                            for (key, name) in &boss_names {
+                if boss_names.len() > 1 {
+                    let previous_filter = filter.clone();
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(tr("Filter history"))
+                                .size(10.0)
+                                .color(MUTED),
+                        );
+                        let selected_name = boss_names
+                            .get(filter.as_str()).map(String::as_str)
+                            .unwrap_or(tr("All bosses"));
+                        let max_chars = boss_name_limit(ui.available_width());
+                        egui::ComboBox::from_id_salt(("boss-history-filter", index))
+                            .selected_text(compact_text(selected_name, max_chars))
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut *filter,
-                                    key.clone(),
-                                    compact_text(name, max_chars),
-                                ).on_hover_text(name);
-                            }
-                        })
-                        .response
-                        .on_hover_text(selected_name);
-                });
-                if *filter != previous_filter {
+                                    String::new(),
+                                    tr("All bosses"),
+                                );
+                                for (key, name) in &boss_names {
+                                    ui.selectable_value(
+                                        &mut *filter,
+                                        key.clone(),
+                                        compact_text(name, max_chars),
+                                    ).on_hover_text(name);
+                                }
+                            })
+                            .response
+                            .on_hover_text(selected_name);
+                    });
+                    if *filter != previous_filter {
+                        app.workspace.boss_history_page[index] = 0;
+                    }
+                } else if !filter.is_empty() {
+                    filter.clear();
                     app.workspace.boss_history_page[index] = 0;
                 }
                 let filtered: Vec<_> = view.log.iter().rev()
@@ -721,20 +752,19 @@ fn draw_boss_history_card(
                         ).clicked() {
                             *page += 1;
                         }
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {} / {}",
+                                tr("Page"), *page + 1, page_count,
+                            ))
+                            .size(10.0)
+                            .color(DIM),
+                        );
                     });
                 }
                 // Compute the range after clicks: the count and rows
                 // now describe the same page in this exact frame.
                 let range = history_range(page, count);
-                let first = if count == 0 { 0 } else { range.start + 1 };
-                ui.label(
-                    RichText::new(format!(
-                        "{first}–{} / {count} · {} / {page_count}",
-                        range.end, *page + 1,
-                    ))
-                        .size(10.0)
-                        .color(DIM),
-                );
                 if filtered.is_empty() {
                     ui.label(
                         RichText::new(tr("No victories match this boss."))
@@ -853,13 +883,13 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(tr("Server-native Boss Farm"))
+                RichText::new(tr("Boss Farm"))
                     .size(15.0)
                     .strong()
                     .color(TEXT),
             );
             ui.label(
-                RichText::new(tr("Boss requests use Hunt Atlas travel rules: wait for a safe opening, go through the Pokémon Center, then enter. Moth restores the original hunt afterward."))
+                RichText::new(tr("Choose a boss to fight once or farm. Moth returns to your previous hunt when the run finishes."))
                     .size(10.0)
                     .color(MUTED),
             );
@@ -903,6 +933,16 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     });
                 });
             ui.add_space(10.0);
+
+            if let Some(error) = app.workspace.boss_action_error[index].clone() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(error).size(10.0).strong().color(BAD));
+                    if ui.small_button(tr("Dismiss")).clicked() {
+                        app.workspace.boss_action_error[index] = None;
+                    }
+                });
+                ui.add_space(6.0);
+            }
 
             // Hunt Atlas-style master/detail selection: boss cards on the
             // left, selected combat and entry information on the right.
@@ -1025,6 +1065,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .send_command(command);
                 match result {
                     Ok(()) => {
+                        app.workspace.boss_action_error[index] = None;
                         match pending {
                             GameCommand::BossStart { key, repeat } => {
                                 app.workspace.boss_start_pending[index] =
@@ -1041,6 +1082,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         app.set_status(notice, false);
                     }
                     Err(error) => {
+                        app.workspace.boss_action_error[index] = Some(error.clone());
                         match pending {
                             GameCommand::BossStart { .. } =>
                                 app.workspace.boss_start_pending[index] = None,
