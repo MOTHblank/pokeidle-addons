@@ -9,6 +9,7 @@ pub(super) struct AccountRuntime {
     pub(super) capture: CaptureState,
     pub(super) automation: AutomationState,
     pub(super) hunt: HuntAccountState,
+    pub(super) boss: BossAccountState,
     pub(super) kick: KickAccountState,
     pub(super) twitch: TwitchAccountState,
     pub(super) telemetry: TelemetryState,
@@ -63,6 +64,13 @@ pub(super) struct HuntAccountState {
     pub(super) atlas_results: hunt_panel::ExplorerCache,
     pub(super) atlas_filters: hunt_panel::AtlasFilters,
     pub(super) atlas_scenarios: hunt_panel::AtlasScenario,
+}
+
+pub(super) struct BossAccountState {
+    /// Immediate Boss Farm click feedback, mirroring Hunt Atlas while the
+    /// native worker publishes the authoritative trip target.
+    pub(super) action_pending: Option<(String, bool, Instant)>,
+    pub(super) action_error: Option<String>,
 }
 
 pub(super) struct KickAccountState {
@@ -150,6 +158,10 @@ impl AccountRuntime {
                 atlas_results: hunt_panel::ExplorerCache::default(),
                 atlas_filters: hunt_panel::AtlasFilters::default(),
                 atlas_scenarios: hunt_panel::AtlasScenario::default(),
+            },
+            boss: BossAccountState {
+                action_pending: None,
+                action_error: None,
             },
             kick: KickAccountState {
                 kick_monitor: None,
