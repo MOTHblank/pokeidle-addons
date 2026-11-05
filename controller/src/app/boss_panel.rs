@@ -93,6 +93,7 @@ enum BossCardState {
     Fighting,
     Farming,
     OtherBossActive,
+    OperationBusy,
     LevelUnavailable,
     LevelRequired,
     TokensMissing,
@@ -122,8 +123,14 @@ fn boss_card_state(
         || view.request_key.as_deref() == Some(entry.key.as_str()) {
         return BossCardState::Requested;
     }
-    if optimistic_request.is_some() || view.busy || view.auto || view.arena.is_some() {
+    if optimistic_request.is_some()
+        || view.request_key.is_some()
+        || view.auto
+        || view.arena.is_some() {
         return BossCardState::OtherBossActive;
+    }
+    if view.busy {
+        return BossCardState::OperationBusy;
     }
     let Some(level) = hunt.trainer_level else {
         return BossCardState::LevelUnavailable;
@@ -198,6 +205,7 @@ fn draw_boss_selector(
         BossCardState::Fighting => (tr("Fighting").to_owned(), GOOD),
         BossCardState::Farming => (tr("Farming").to_owned(), GOOD),
         BossCardState::OtherBossActive => (tr("Another boss active").to_owned(), MUTED),
+        BossCardState::OperationBusy => (boss_status_label(view, hunt, live).to_owned(), MUTED),
         BossCardState::LevelUnavailable => (tr("Level unavailable").to_owned(), DIM),
         BossCardState::LevelRequired =>
             (format!("{} {}", tr("Required level"), entry.min_level), WARN),
@@ -1280,6 +1288,16 @@ mod tests {
             boss_card_state(&entry, &view, &hunt, true, None),
             BossCardState::OtherBossActive,
         );
+
+        view.arena = None;
+        view.busy = true;
+        view.phase = "Returning to saved hunt".into();
+        assert_eq!(
+            boss_card_state(&entry, &view, &hunt, true, None),
+            BossCardState::OperationBusy,
+        );
+        view.busy = false;
+        view.phase.clear();
 
         assert_eq!(
             boss_card_state(&entry, &view, &hunt, true, Some("bronze")),
