@@ -551,6 +551,22 @@ fn draw_boss_status_card(
             if let Some(warning) = hunt.navigation_warning.as_deref() {
                 ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
             }
+            if let Some(error) = app.workspace.boss_action_error[index].clone() {
+                ui.add_space(5.0);
+                egui::Frame::new()
+                    .fill(BAD.linear_multiply(0.06))
+                    .stroke(Stroke::new(1.0, BAD.linear_multiply(0.35)))
+                    .corner_radius(7.0)
+                    .inner_margin(egui::Margin::symmetric(9, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(error).size(10.0).color(BAD));
+                            if ui.small_button(tr("Dismiss")).clicked() {
+                                app.workspace.boss_action_error[index] = None;
+                            }
+                        });
+                    });
+            }
 
             // Never let a confirmation from a previous arena or
             // disconnected session authorize leaving a new encounter.
@@ -1002,16 +1018,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 });
             ui.add_space(10.0);
 
-            if let Some(error) = app.workspace.boss_action_error[index].clone() {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(error).size(10.0).strong().color(BAD));
-                    if ui.small_button(tr("Dismiss")).clicked() {
-                        app.workspace.boss_action_error[index] = None;
-                    }
-                });
-                ui.add_space(6.0);
-            }
-
             // Hunt Atlas-style master/detail selection: boss cards on the
             // left, selected combat and entry information on the right.
             if !view.catalog_ready {
@@ -1061,8 +1067,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             for entry in &view.catalog {
                                 if draw_boss_selector(
                                     ui, entry, *selected == entry.key,
-                                    pending_start.as_ref().is_some_and(|(key, _)| key == &entry.key),
-                                    &hunt,
+                                    &view, &hunt, live,
+                                    pending_start.as_ref().map(|(key, _)| key.as_str()),
                                 ) {
                                     *selected = entry.key.clone();
                                 }
@@ -1095,8 +1101,8 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     for entry in &view.catalog {
                         if draw_boss_selector(
                             ui, entry, *selected == entry.key,
-                            pending_start.as_ref().is_some_and(|(key, _)| key == &entry.key),
-                            &hunt,
+                            &view, &hunt, live,
+                            pending_start.as_ref().map(|(key, _)| key.as_str()),
                         ) {
                             *selected = entry.key.clone();
                         }
