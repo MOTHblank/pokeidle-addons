@@ -172,6 +172,8 @@ pub struct HuntBonuses {
     pub kick_shiny_active: bool,
     /// Store Loot Boost and active farming-event bonus, excluding guild ranking.
     pub extra_loot_pct:f64,
+    /// Raid reward farm component (0..5%), kept separate from XP.
+    pub raid_farm_pct:f64,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntMeasurements {
@@ -899,6 +901,27 @@ impl HuntIntel {
             *(if self.view.bonuses.kick_shiny_active {
                 1.0+self.kick_reported_pct/100.0
             }else{1.0});
+
+        // Raid's reward has a separate farm component (max +5%). Newer
+        // server snapshots can publish it alongside the raid XP part. Accept
+        // the explicit percentage/total forms only; never infer farm from XP.
+        let mut raid_farm=0.0f64;
+        if let Some(raw)=self.bonus_xp.as_ref() {
+            for part in raw.get("partes").and_then(Value::as_array)
+                .into_iter().flatten() {
+                if part.get("id").and_then(Value::as_str)!=Some("raid") {continue}
+                let active=part.get("ate").and_then(Value::as_u64)
+                    .is_none_or(|until|until==0||until>clock);
+                if !active {continue}
+                let direct=part.get("farmPct").or_else(||part.get("farm"))
+                    .and_then(Value::as_f64);
+                let from_total=part.get("total").and_then(Value::as_f64)
+                    .map(|total|(total.clamp(0.0,25.0)*5.0/25.0).round());
+                raid_farm=direct.or(from_total).unwrap_or(0.0).clamp(0.0,5.0);
+                break;
+            }
+        }
+        self.view.bonuses.raid_farm_pct=raid_farm;
     }
     fn merge_state(&mut self, state: &Value, now: Instant) {
         // Environmental combat modifiers. These fields are deliberately
