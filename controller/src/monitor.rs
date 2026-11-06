@@ -280,6 +280,15 @@ pub struct MonitorHandle {
 
 impl MonitorHandle {
     pub fn start(port: u16, headless: bool) -> Self {
+        Self::start_after(port, headless, Duration::ZERO)
+    }
+
+    /// A freshly spawned Firefox can briefly expose its Remote Agent while the
+    /// Windows launcher is still handing ownership to the real browser
+    /// process. Creating session.new in that window can strand Firefox's only
+    /// BiDi session if the transport is replaced before the response arrives.
+    /// Existing/adopted browsers use start() and attach immediately.
+    pub fn start_after(port: u16, headless: bool, startup_delay: Duration) -> Self {
         let health = Arc::new(Mutex::new(Health::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let commands = Arc::new(Mutex::new(CommandMailbox::default()));
@@ -300,6 +309,12 @@ impl MonitorHandle {
         thread::Builder::new()
             .name(format!("moth-firefox-monitor-{port}"))
             .spawn(move || {
+                if !startup_delay.is_zero() {
+                    let until = Instant::now() + startup_delay;
+                    while !stop_worker.load(Ordering::Relaxed) && Instant::now() < until {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
                 monitor_loop(port, headless, shared, stop_worker, command_queue, close_worker,
                     bootstrap_worker, game_close_worker, game_restore_worker, pace_worker);
             })
