@@ -336,7 +336,7 @@ pub fn finalize_capture_stages(reference:&mut Reference){
     }
 }
 /// Supplement public creature JSON with the latest Mega types and base stats.
-/// The full 1.398.1 spreadsheet movesets are applied afterward, not synthesized
+/// The full 1.408.7 spreadsheet movesets are applied afterward, not synthesized
 /// from the base species or a retired 30-second Mega signature.
 fn merge_upstream_megas(reference:&mut Reference){
     for row in include_str!("../assets/visual/upstream-megas.tsv").lines(){
@@ -361,13 +361,13 @@ fn merge_upstream_megas(reference:&mut Reference){
     }
 }
 /// Spreadsheet move overrides from upstream shared/golpes-planilhas.mjs,
-/// v1.398.1. The static creature JSON has not been regenerated for every
+/// v1.408.7. The static creature JSON has not been regenerated for every
 /// balance pass. The table includes normal species, named Outland variants
 /// and all 94 Megas; every move here is unlocked at level 1. No made-up
 /// Mega signature attack or legacy cooldown is inserted.
 fn apply_upstream_movesets(reference:&mut Reference) {
     let mut by_id:BTreeMap<u64,Vec<ReferenceMove>>=BTreeMap::new();
-    for line in include_str!("../assets/visual/upstream-movesets-v1398.tsv").lines() {
+    for line in include_str!("../assets/visual/upstream-movesets-v1408.tsv").lines() {
         if line.starts_with('#')||line.is_empty(){continue}
         let fields=line.split('\t').collect::<Vec<_>>();
         if fields.len()!=5 {continue}
@@ -816,6 +816,32 @@ mod tests {
         let result=estimate(&view,&hunt,&guide).unwrap();
         assert!((result.gold_h-result.combat_gold_h).abs()<0.001);
         assert!(result.trainer_xp_per_kill>result.pokemon_xp_per_kill);
+    }
+    #[test]
+    fn upstream_v1408_movesets_cover_new_stages_and_megas() {
+        let sheet=include_str!("../assets/visual/upstream-movesets-v1408.tsv");
+        let rows=sheet.lines().filter(|row|!row.starts_with('#')&&!row.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(),13_427,"upstream v1.408.7 moves changed");
+        let ids=rows.iter().filter_map(|row|row.split('\t').next())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(),1_243,"upstream v1.408.7 species changed");
+        let mut reference=Reference::default();
+        for id in [1,19,775,9006] {
+            reference.species.insert(id,ReferenceSpecies {
+                name:format!("Species {id}"),types:vec!["NORMAL".into()],
+                base:vec![100.0;6],moves:Vec::new(),
+            });
+        }
+        apply_upstream_movesets(&mut reference);
+        for (id,expected) in [(1,7),(19,9),(775,12),(9006,13)] {
+            let moves=&reference.species[&id].moves;
+            assert_eq!(moves.len(),expected,"wrong spreadsheet for {id}");
+            assert!(moves.iter().all(|move_|move_.min_level==1));
+        }
+        assert_eq!(reference.species[&1].moves[0].cooldown,13_500.0);
+        assert!(reference.species[&9006].moves.iter().any(|move_|
+            move_.power==600.0 && move_.cooldown==60_000.0));
     }
     #[test]
     fn xp_calculation_keeps_separate_channels(){
