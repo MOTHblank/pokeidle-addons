@@ -21,6 +21,7 @@ pub struct AppPreferences {
     pub notify_boss: bool,
     pub quiet_notifications: bool,
     pub check_updates_on_start: bool,
+    pub anonymous_usage_stats: bool,
     pub log_max_megabytes: u16,
     pub log_retention_days: u16,
 }
@@ -44,6 +45,7 @@ impl Default for AppPreferences {
             notify_boss: true,
             quiet_notifications: false,
             check_updates_on_start: true,
+            anonymous_usage_stats: true,
             log_max_megabytes: 8,
             log_retention_days: 7,
         }
@@ -74,6 +76,7 @@ impl AppPreferences {
             notify_boss: boolean("notifyBoss", defaults.notify_boss),
             quiet_notifications: boolean("quietNotifications", defaults.quiet_notifications),
             check_updates_on_start: boolean("checkUpdatesOnStart", defaults.check_updates_on_start),
+            anonymous_usage_stats: boolean("anonymousUsageStats", defaults.anonymous_usage_stats),
             log_max_megabytes: value.get("logMaxMegabytes").and_then(Value::as_u64)
                 .filter(|value| (4..=128).contains(value))
                 .and_then(|value| u16::try_from(value).ok())
@@ -104,6 +107,7 @@ impl AppPreferences {
             "notifyBoss": self.notify_boss,
             "quietNotifications": self.quiet_notifications,
             "checkUpdatesOnStart": self.check_updates_on_start,
+            "anonymousUsageStats": self.anonymous_usage_stats,
             "logMaxMegabytes": self.log_max_megabytes,
             "logRetentionDays": self.log_retention_days,
         })
