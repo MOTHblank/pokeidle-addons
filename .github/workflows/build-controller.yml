@@ -126,6 +126,8 @@ jobs:
 
       - name: Compilar release
         working-directory: controller
+        env:
+          MOTH_TELEMETRY_URL: ${{ vars.MOTH_TELEMETRY_URL }}
         run: cargo build --release --locked
 
       - name: Preparar executáveis Windows
