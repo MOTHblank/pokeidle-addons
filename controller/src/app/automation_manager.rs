@@ -81,15 +81,20 @@ pub(super) fn draw_native_manager_details(app: &mut ControllerApp, ui: &mut egui
                 let bonus = &view.bonuses;
                 for (label, percent) in [
                     ("Twitch", bonus.twitch_pct),
-                    ("Guild", bonus.guild_pct),
-                    ("Event trainer", bonus.trainer_event_pct),
-                    ("Event Pokémon", bonus.pokemon_event_pct),
+                    ("Kick", bonus.kick_xp_pct),
+                    (tr("Guild"), bonus.guild_pct),
+                    (tr("Trainer event"), bonus.trainer_event_pct),
+                    (tr("Pokémon event"), bonus.pokemon_event_pct),
                 ] {
-                    ui.label(RichText::new(format!("{label} +{percent:.0}%"))
-                        .size(10.0).color(DIM));
+                    if percent > 0.0 {
+                        ui.label(RichText::new(format!("{label} +{percent:.0}%"))
+                            .size(10.0).color(DIM));
+                    }
                 }
                 if bonus.vip_active { ui.label(RichText::new("VIP").color(GOOD)); }
-                if bonus.guild_boost_active { ui.label(RichText::new(tr("Guild boost")).color(GOOD)); }
+                if bonus.guild_boost_active {
+                    ui.label(RichText::new(format!("{} +10%",tr("Guild"))).color(GOOD));
+                }
             });
         });
     ui.add_space(9.0);
