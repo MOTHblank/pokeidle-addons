@@ -172,6 +172,7 @@ impl ControllerApp {
                 // endpoint and complete native handoff; never spawn another
                 // Firefox on the same profile or kill it before Rust is ready.
                 self.runtimes[index].game.orphaned_pid = Some(pid);
+                self.runtimes[index].game.profile_reconcile = None;
                 if self.runtimes[index].game.monitor.is_none() {
                     self.runtimes[index].game.monitor = Some(MonitorHandle::start(
                         config.remote_debug_port, headless));
@@ -197,6 +198,7 @@ impl ControllerApp {
         self.runtimes[index].game.child = None;
         self.runtimes[index].game.monitor = None;
         self.runtimes[index].game.orphaned_pid = None;
+        self.runtimes[index].game.profile_reconcile = None;
         self.runtimes[index].game.headless = headless;
 
         logging::info(&format!(
@@ -360,6 +362,7 @@ impl ControllerApp {
                 monitor: self.runtimes[index].game.monitor.take(),
             }
         )));
+        self.runtimes[index].game.profile_reconcile = None;
         self.runtimes[index].game.stopping = true;
         let tx = self.firefox_stopped_tx.clone();
         let generation = self.runtimes[index].session.auth_generation.load(Ordering::Acquire);
@@ -540,6 +543,7 @@ impl ControllerApp {
                 self.runtimes[index].game.child = Some(child);
                 self.runtimes[index].game.monitor = None;
                 self.runtimes[index].game.orphaned_pid = None;
+                self.runtimes[index].game.profile_reconcile = None;
                 self.runtimes[index].game.browser_only = true;
                 self.runtimes[index].game.headless = false;
                 // Google/PokéIdle sign-in may change the game credentials.
