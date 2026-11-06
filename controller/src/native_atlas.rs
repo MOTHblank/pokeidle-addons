@@ -423,8 +423,14 @@ fn pokemon_stats(mon:&PokemonInfo, meta:&ReferenceSpecies)->Option<[f64;6]> {
 }
 fn bonus(view:&HuntView, trainer:bool)->f64 {
     let b=&view.bonuses;
-    // Same multiplicative structure as the community calculator, but mark
-    // it partial when VIP/boost timing is not known from server clock.
+    if let Some(authoritative)=if trainer {
+        b.authoritative_trainer_xp_multiplier
+    }else{
+        b.authoritative_pokemon_xp_multiplier
+    }.filter(|m|m.is_finite()&&*m>0.0) {
+        return authoritative;
+    }
+    // Compatibility fallback for older shards that do not publish bonusXp.
     (if b.vip_active{1.5}else{1.0})
         *(1.0+b.guild_pct/100.0)
         *(if b.guild_boost_active{1.1}else{1.0})
@@ -435,6 +441,11 @@ fn bonus(view:&HuntView, trainer:bool)->f64 {
         *b.delayed_xp_multiplier.max(1.0)
         *(if b.sacrifice_xp_active {1.2} else {1.0})
         *(1.0+(if trainer{b.trainer_event_pct}else{b.pokemon_event_pct})/100.0)
+}
+fn gym_damage_multiplier(view:&HuntView,mon:&PokemonInfo,player:&ReferenceSpecies)->f64 {
+    let types=if mon.types.is_empty(){&player.types}else{&mon.types};
+    let best=types.iter().filter_map(|kind|view.gym_podium.get(kind)).copied().min();
+    match best {Some(1)=>1.25,Some(2)=>1.10,Some(3)=>1.05,_=>1.0}
 }
 /// The legacy entry point intentionally models a single-target Pokémon.
 /// Live UI must pass the user's explicit AoE preference to estimate_with_aoe.
@@ -449,7 +460,8 @@ pub fn estimate_with_aoe(
     let player=reference.species.get(&mon.species_id?)?;
     let stats=pokemon_stats(mon,player)?;
     let geometry=view.geo_distances.get(&hunt.slug);
-    let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry,aoe_enabled)?;
+    let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry,aoe_enabled,
+        view.seasonal_type.as_deref(),gym_damage_multiplier(view,mon,player))?;
     let kills_h=pace.kills_h;
     let loot_pct=(if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0})
         + view.bonuses.extra_loot_pct;
@@ -842,6 +854,26 @@ mod tests {
         assert_eq!(reference.species[&1].moves[0].cooldown,13_500.0);
         assert!(reference.species[&9006].moves.iter().any(|move_|
             move_.power==600.0 && move_.cooldown==60_000.0));
+    }
+    #[test]
+    fn authoritative_bonus_xp_overrides_reconstructed_sources(){
+        let mut view=HuntView::default();
+        view.bonuses.vip_active=true;
+        view.bonuses.guild_pct=25.0;
+        view.bonuses.authoritative_trainer_xp_multiplier=Some(1.7);
+        view.bonuses.authoritative_pokemon_xp_multiplier=Some(1.2);
+        assert!((bonus(&view,true)-1.7).abs()<1e-10);
+        assert!((bonus(&view,false)-1.2).abs()<1e-10);
+    }
+    #[test]
+    fn gym_podium_uses_best_matching_type_without_stacking(){
+        let mut view=HuntView::default();
+        view.gym_podium=Arc::new([
+            ("FIRE".to_owned(),2u8),("FLYING".to_owned(),3u8)
+        ].into_iter().collect());
+        let mon=PokemonInfo{types:vec!["FIRE".into(),"FLYING".into()],..Default::default()};
+        let meta=ReferenceSpecies{types:vec!["FIRE".into(),"FLYING".into()],..Default::default()};
+        assert!((gym_damage_multiplier(&view,&mon,&meta)-1.10).abs()<1e-10);
     }
     #[test]
     fn xp_calculation_keeps_separate_channels(){
