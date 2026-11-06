@@ -232,8 +232,9 @@ impl Credentials {
 fn browser_login_required_frame(frame:&Value)->Option<&str> {
     if frame.get("t").and_then(Value::as_str)!=Some("erro") {return None}
     match frame.get("chave").and_then(Value::as_str) {
-        Some(key @ ("auth.sessaoInvalida" | "auth.precisaLogin" | "login.precisaNick")) =>
-            Some(key),
+        Some(key) if matches!(
+            key,"auth.sessaoInvalida" | "auth.precisaLogin" | "login.precisaNick"
+        )=>Some(key),
         _=>None,
     }
 }
