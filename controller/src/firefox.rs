@@ -148,11 +148,10 @@ pub fn launch_twitch_login_bidi(config:&Config)->Result<Child,String> {
 
 /// Open a Twitch channel in this account's ordinary Firefox profile.
 ///
-/// This deliberately uses Firefox's normal profile routing rather than
-/// --no-remote, BiDi, Marionette, or a debugging port. Modern Firefox resolves
-/// --profile before handing a command to an existing instance, so repeated
-/// opens reuse this same account profile when it is already running and keep
-/// different Moth account profiles isolated from one another.
+/// The visible browser remains a normal account-profile window: no --no-remote,
+/// Marionette, or headless mode. A dedicated remote-debugging port is exposed
+/// only so the short-lived follow worker can inspect and press Twitch's own
+/// Follow control; the BiDi session ends immediately after confirmation.
 pub fn open_twitch_stream(config: &Config, login: &str) -> Result<(), String> {
     migrate_legacy_profile(config)?;
     if !config.profile_dir.is_dir() {
