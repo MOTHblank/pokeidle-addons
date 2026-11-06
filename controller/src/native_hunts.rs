@@ -254,6 +254,9 @@ pub struct HuntView {
     pub trainer_level: Option<u32>,
     pub trainer_xp: Option<u64>,
     pub gold: Option<u64>,
+    /// Server-selected seasonal day type (estado.diaSazonal.tipo).
+    /// Missing delta fields preserve the last confirmed value; disconnects clear it.
+    pub seasonal_type: Option<String>,
     pub bonuses: HuntBonuses,
     pub measurements: HuntMeasurements,
     pub session: HuntSessionStats,
@@ -278,6 +281,14 @@ impl HuntView {
 }
 /// Refuse partial, reordered or malformed tables from a remote game message.
 /// Do not mix an untrusted tier threshold with an unrelated multiplier.
+fn parse_seasonal_type(raw:&Value)->Option<String>{
+    let kind=raw.get("tipo").and_then(Value::as_str)?.trim().to_ascii_uppercase();
+    matches!(kind.as_str(),
+        "NORMAL"|"FIRE"|"WATER"|"ELECTRIC"|"GRASS"|"ICE"|
+        "FIGHTING"|"POISON"|"GROUND"|"FLYING"|"PSYCHIC"|"BUG"|
+        "ROCK"|"GHOST"|"DRAGON"|"DARK"|"STEEL"|"FAIRY"
+    ).then_some(kind)
+}
 fn parse_outland_catalog(raw:&Value)->Option<[(u32,f64);8]>{
     let rows=raw.as_array().filter(|rows|rows.len()==8)?;
     let mut out=[(0u32,0.0f64);8];
@@ -493,6 +504,7 @@ impl HuntIntel {
         // Automation writes must use a fresh authoritative snapshot after
         // reconnect; never reuse cached settings from a previous socket.
         self.view.automation=None;
+        self.view.seasonal_type=None;
         // A reconnect must not classify the new game session from stale VIP
         // state. Auto PvP waits for one of the authoritative VIP signals.
         self.vip_flag=None;
@@ -842,6 +854,11 @@ impl HuntIntel {
         if let Some(nick) = state.get("nick").and_then(Value::as_str)
             .map(str::trim).filter(|nick|!nick.is_empty()) {
             self.view.account_nick = Some(nick.to_owned());
+        }
+        // State packets are deltas. Only replace the seasonal type when the
+        // server actually includes diaSazonal; explicit null clears it.
+        if let Some(raw)=state.get("diaSazonal") {
+            self.view.seasonal_type=parse_seasonal_type(raw);
         }
         if let Some(value) = Self::num(state, "diamonds") { self.view.diamonds = Some(value); }
         if let Some(value) = Self::num(state, "orbs") { self.view.orbs = Some(value); }
@@ -1727,6 +1744,27 @@ mod tests {
         assert_eq!(m.view.field_slug.as_deref(),Some("route-map"));
         assert_eq!(m.view.field_init_timestamp,Some(12345));
         assert!(m.view.hunt_slug.is_none());
+    }
+
+    #[test]
+    fn seasonal_day_tracks_authoritative_state_and_survives_partial_deltas() {
+        let now=Instant::now();let mut m=HuntIntel::new();
+        m.ingest(r#"{"t":"welcome","estado":{"diaSazonal":{"tipo":"FIRE"}}}"#,now);
+        assert_eq!(m.view.seasonal_type.as_deref(),Some("FIRE"));
+        m.ingest(r#"{"t":"estado","estado":{"gold":10}}"#,now+Duration::from_secs(1));
+        assert_eq!(m.view.seasonal_type.as_deref(),Some("FIRE"),
+            "unrelated estado deltas must not erase the server-selected day");
+        m.ingest(r#"{"t":"estado","estado":{"diaSazonal":{"tipo":"water"}}}"#,
+            now+Duration::from_secs(2));
+        assert_eq!(m.view.seasonal_type.as_deref(),Some("WATER"));
+        m.ingest(r#"{"t":"estado","estado":{"diaSazonal":null}}"#,
+            now+Duration::from_secs(3));
+        assert!(m.view.seasonal_type.is_none());
+        m.ingest(r#"{"t":"estado","estado":{"diaSazonal":{"tipo":"FIRE"}}}"#,
+            now+Duration::from_secs(4));
+        m.on_disconnect();
+        assert!(m.view.seasonal_type.is_none(),
+            "offline UI must not keep yesterday's seasonal type");
     }
 
     #[test]

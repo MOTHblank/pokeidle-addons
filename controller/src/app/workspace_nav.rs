@@ -51,6 +51,47 @@ pub(super) fn draw_header_actions(app: &mut ControllerApp, ui: &mut egui::Ui) {
     }
 }
 
+fn seasonal_type_for_header(app:&ControllerApp,selected:Option<usize>)->Option<String>{
+    let live_type=|index:usize|->Option<String>{
+        let native=app.runtimes.get(index)?.game.native.as_ref()?;
+        let status=native.snapshot();
+        if status.phase!="Online" ||
+            status.last_received.is_none_or(|at|at.elapsed()>Duration::from_secs(90)){
+            return None;
+        }
+        native.hunt_snapshot().seasonal_type
+    };
+    selected.and_then(live_type)
+        .or_else(||(0..app.runtimes.len()).find_map(live_type))
+}
+
+pub(super) fn draw_seasonal_day_badge(
+    app:&ControllerApp,ui:&mut egui::Ui,selected:Option<usize>
+){
+    let Some(kind)=seasonal_type_for_header(app,selected) else{return};
+    let base=hunt_panel::atlas_type_color(kind.as_str());
+    let fg=hunt_panel::atlas_type_text_color(base);
+    let name=hunt_panel::components::atlas_type_name(kind.as_str());
+    let response=egui::Frame::new()
+        .fill(base)
+        .stroke(Stroke::new(1.0,base.gamma_multiply(0.84)))
+        .corner_radius(6.0)
+        .inner_margin(Margin::symmetric(10,6))
+        .show(ui,|ui|{
+            ui.set_min_width(76.0);
+            ui.set_min_height(38.0);
+            ui.vertical_centered(|ui|{
+                ui.label(RichText::new(name).size(11.0).strong().color(fg));
+                ui.label(RichText::new("2x").size(15.0).strong().color(fg));
+            });
+        }).response;
+    response.on_hover_text(if pt_br(){
+        "Dia sazonal · Pokémon deste tipo ficam 2x mais fortes nas hunts do mapa."
+    }else{
+        "Seasonal day · Pokémon of this type are 2x stronger in map hunts."
+    });
+}
+
 /// Same compact account navigation is reused by every native data page and
 /// the account manager. Clicking one account changes the workspace selection,
 /// not the running game. Status always reflects the real native session.

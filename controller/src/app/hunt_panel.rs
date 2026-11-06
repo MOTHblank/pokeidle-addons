@@ -26,6 +26,7 @@ use session::*;
 // Account runtimes only need these cache/filter handles.
 pub(super) use forecast_cache::EstimateCache;
 pub(super) use explorer::{AtlasFilters, ExplorerCache};
+pub(in crate::app) use explorer::{atlas_type_color, atlas_type_text_color};
 pub(super) use recommendations::RankingsCache;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
