@@ -58,6 +58,16 @@ impl BossEntry {
         self.min_level.max(1)
     }
 
+    fn upstream_region_level(region_order: u8) -> u32 {
+        match region_order {
+            0 => 300,
+            1 => 650,
+            step => 300u32.saturating_add(
+                350u32.saturating_mul(u32::from(step).saturating_pow(3))
+            ),
+        }
+    }
+
     fn upstream_region_meta(key: &str)
         -> Option<(&'static str, &'static str, &'static str, u8, u8)> {
         Some(match key {
@@ -103,12 +113,18 @@ impl BossEntry {
         let token_id = entry.get("itemId")?.as_u64()?;
         let tokens_per_entry = entry.get("qtd")?.as_u64()?;
         if token_id == 0 || tokens_per_entry == 0 { return None; }
+        let min_level = raw.get("minNivelTreinador")
+            .or_else(|| raw.get("nivel"))
+            .or_else(|| raw.get("level"))
+            .and_then(Value::as_u64)
+            .map(|value| value.min(u32::MAX as u64) as u32)
+            .or_else(|| fallback.map(|meta| Self::upstream_region_level(meta.3)))
+            .unwrap_or(0);
         Some(Self {
             key: key.to_owned(),
             name: raw.get("nome").or_else(|| raw.get("name"))
                 .and_then(Value::as_str).unwrap_or(key).to_owned(),
-            min_level: raw.get("minNivelTreinador").or_else(|| raw.get("level"))
-                .and_then(Value::as_u64).unwrap_or(0).min(u32::MAX as u64) as u32,
+            min_level,
             token_id,
             token_name: entry.get("nome").and_then(Value::as_str)
                 .unwrap_or("Boss Token").to_owned(),
@@ -999,7 +1015,7 @@ mod tests {
     #[test]
     fn boss_level_and_region_metadata_follow_v14087_contract() {
         let boss=BossEntry::parse(&json!({
-            "key":"articuno","nome":"Articuno","minNivelTreinador":300,
+            "key":"articuno","nome":"Articuno",
             "entrada":{"itemId":500,"qtd":1}
         })).expect("playable boss");
         assert_eq!(boss.fight_level(),300,
