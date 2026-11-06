@@ -627,7 +627,7 @@ pub fn stop_profile_processes(config: &Config) -> Result<(), String> {
     if find_profile_process(config)?.is_some() {
         Err("Moth Firefox profile still has processes after repeated verified shutdown".into())
     } else {
-        Err("Moth Firefox profile kept changing PIDs during repeated verified shutdown".into())
+        Ok(())
     }
 }
 
