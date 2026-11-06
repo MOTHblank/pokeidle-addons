@@ -66,6 +66,15 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
     })?;
 
     provision_profile(&config.profile_dir)?;
+
+    // Do not rely on the debugging port alone. During Firefox's Windows
+    // launcher -> browser handoff the port can be briefly free while the same
+    // profile is already owned by a process that still carries a BiDi session.
+    if let Some(pid) = find_profile_process(config)? {
+        return Err(format!(
+            "Firefox profile is already running as PID {pid}; refusing a duplicate launch"
+        ));
+    }
     ensure_debug_port_available(config.remote_debug_port)?;
     logging::info(&format!("starting Firefox: executable={} profile={} port={} mode={} url={}", config.firefox_executable.display(), config.profile_dir.display(), config.remote_debug_port, if headless { "headless" } else { "visible" }, config.url));
 
@@ -582,18 +591,43 @@ pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
 /// unrelated Firefox profiles must remain untouched.
 pub fn stop_profile_processes(config: &Config) -> Result<(), String> {
     const MAX_PROCESSES: usize = 24;
+    const RELEASE_CONFIRMATION: Duration = Duration::from_secs(1);
+
     for _ in 0..MAX_PROCESSES {
-        let Some(pid) = find_profile_process(config)? else { return Ok(()); };
-        logging::info(&format!(
-            "{}: closing existing Firefox profile process PID {pid}",
-            config.profile.label()
-        ));
-        stop_existing(config, pid)?;
+        if let Some(pid) = find_profile_process(config)? {
+            logging::info(&format!(
+                "{}: closing existing Firefox profile process PID {pid}",
+                config.profile.label()
+            ));
+            stop_existing(config, pid)?;
+            continue;
+        }
+
+        // Firefox may move from a short-lived launcher/content PID to the real
+        // profile owner. A single empty WMI snapshot is therefore not enough
+        // to declare the profile free. Require a continuous quiet window before
+        // allowing Start/Restart to create another Firefox instance.
+        let until = Instant::now() + RELEASE_CONFIRMATION;
+        loop {
+            if Instant::now() >= until {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(100));
+            if let Some(pid) = find_profile_process(config)? {
+                logging::info(&format!(
+                    "{}: Firefox profile PID {pid} appeared during shutdown confirmation",
+                    config.profile.label()
+                ));
+                stop_existing(config, pid)?;
+                break;
+            }
+        }
     }
+
     if find_profile_process(config)?.is_some() {
         Err("Moth Firefox profile still has processes after repeated verified shutdown".into())
     } else {
-        Ok(())
+        Err("Moth Firefox profile kept changing PIDs during repeated verified shutdown".into())
     }
 }
 
