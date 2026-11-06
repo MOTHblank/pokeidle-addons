@@ -423,11 +423,11 @@ fn pokemon_stats(mon:&PokemonInfo, meta:&ReferenceSpecies)->Option<[f64;6]> {
 }
 fn bonus(view:&HuntView, trainer:bool)->f64 {
     let b=&view.bonuses;
-    if let Some(authoritative)=if trainer {
+    if let Some(authoritative)=(if trainer {
         b.authoritative_trainer_xp_multiplier
     }else{
         b.authoritative_pokemon_xp_multiplier
-    }.filter(|m|m.is_finite()&&*m>0.0) {
+    }).filter(|m|m.is_finite()&&*m>0.0) {
         return authoritative;
     }
     // Compatibility fallback for older shards that do not publish bonusXp.
@@ -872,7 +872,10 @@ mod tests {
             ("FIRE".to_owned(),2u8),("FLYING".to_owned(),3u8)
         ].into_iter().collect());
         let mon=PokemonInfo{types:vec!["FIRE".into(),"FLYING".into()],..Default::default()};
-        let meta=ReferenceSpecies{types:vec!["FIRE".into(),"FLYING".into()],..Default::default()};
+        let meta=ReferenceSpecies{
+            name:"Lead".into(),types:vec!["FIRE".into(),"FLYING".into()],
+            base:vec![100.0;6],moves:Vec::new()
+        };
         assert!((gym_damage_multiplier(&view,&mon,&meta)-1.10).abs()<1e-10);
     }
     #[test]
