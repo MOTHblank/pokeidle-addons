@@ -330,11 +330,13 @@ pub(super) fn draw_overview_card(
                             ui.label(RichText::new("VIP").size(10.0).strong().color(WARN));
                         }
                         if view.bonuses.guild_boost_active {
-                            ui.label(RichText::new(tr("Guild boost")).size(10.0).color(GOOD));
+                            let guild_boost = if pt_br() { "Guilda +10%" } else { "Guild +10%" };
+                            ui.label(RichText::new(guild_boost).size(10.0).color(GOOD));
                         }
                         for (label, percent, known) in [
                             ("Twitch", view.bonuses.twitch_pct, view.bonuses.twitch_known),
-                            ("Guild", view.bonuses.guild_pct, view.bonuses.guild_known),
+                            ("Kick", view.bonuses.kick_xp_pct, true),
+                            (tr("Guild"), view.bonuses.guild_pct, view.bonuses.guild_known),
                             ("Event", view.bonuses.trainer_event_pct, view.bonuses.trainer_event_known),
                         ] {
                             if known && percent > 0.0 {
