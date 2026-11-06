@@ -868,7 +868,7 @@ mod tests {
     #[test]
     fn gym_podium_uses_best_matching_type_without_stacking(){
         let mut view=HuntView::default();
-        view.gym_podium=Arc::new([
+        view.gym_podium=std::sync::Arc::new([
             ("FIRE".to_owned(),2u8),("FLYING".to_owned(),3u8)
         ].into_iter().collect());
         let mon=PokemonInfo{types:vec!["FIRE".into(),"FLYING".into()],..Default::default()};
