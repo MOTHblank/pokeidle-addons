@@ -155,8 +155,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "BOSS DETAILS" => "DETALHES DO BOSS",
         "Type data unavailable" => "Tipos indisponíveis",
         "No type weakness" => "Nenhuma fraqueza de tipo",
-        "Restock stays active during boss battles." =>
-            "A reposição continua ativa durante as batalhas de boss.",
         "Restock is off for this account." =>
             "A reposição está desativada nesta conta.",
         "Entry" => "Entrada",
@@ -165,6 +163,10 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Boss combat level" => "Nível de combate do boss",
         "Boss damage" => "Dano do boss",
         "Next fight" => "Próxima luta",
+        "entries" => "entradas",
+        "Z-Move + AoE TM" => "Z-Move + TM AoE",
+        "Mega + Shiny Mega" => "Mega + Mega Shiny",
+        "Mystic + Safari" => "Mystic + Safari",
         "Legendary Birds Trio" => "Trio Aves Lendárias",
         "Legendary Beasts Trio" => "Trio Bestas Lendárias",
         "Weather Trio" => "Trio Climático",
@@ -174,10 +176,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Light Trio" => "Trio da Luz",
         "Combat Trio" => "Trio do Combate",
         "Loyal Trio" => "Trio da Lealdade",
-        "Reward: Z-Move and AoE TM Fragments" => "Prêmio: Fragmentos de Z-Move e de TM AoE",
-        "Reward: Mega Stone and Shiny Mega Stone Fragments" =>
-            "Prêmio: Fragmentos de Mega Stone e de Mega Stone Shiny",
-        "Reward: Mystic Ticket and Safari Ticket" => "Prêmio: Mystic Ticket e Safari Ticket",
         "Possible entries" => "Entradas possíveis",
         "Farm until tokens run out" => "Farmar até acabar os tokens",
         "Fight once" => "Lutar uma vez",
@@ -211,8 +209,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "No boss victories recorded yet." => "Nenhuma vitória de boss registrada ainda.",
         "No loot was recorded in these victories." => "Nenhum loot foi registrado nessas vitórias.",
         "Page" => "Página",
-        "Choose a boss to fight once or farm. Moth returns to your previous hunt when the run finishes." =>
-            "Escolha um boss para lutar uma vez ou farmar. O Moth retorna à hunt anterior quando a sequência termina.",
         "Boss status" => "Status do boss",
         "Boss battle history" => "Histórico de batalhas de boss",
         "Boss victories & loot" => "Vitórias e loot dos bosses",
