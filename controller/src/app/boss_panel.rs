@@ -135,6 +135,24 @@ fn boss_region_heading(entry: &BossEntry) -> Option<String> {
     ))
 }
 
+fn boss_damage_multiplier(entry: &BossEntry, hunt: &HuntView) -> String {
+    let Some(multiplier) = entry.damage_multiplier(hunt) else {
+        return "—".to_owned();
+    };
+    if (multiplier - multiplier.round()).abs() < 0.05 {
+        format!("×{:.0}", multiplier)
+    } else if multiplier < 10.0 {
+        format!("×{:.2}", multiplier)
+    } else {
+        format!("×{:.1}", multiplier)
+    }
+}
+
+fn boss_cooldown_remaining(view: &BossView, now: Instant) -> Option<u64> {
+    let until = view.cooldown_until?;
+    (until > now).then(|| until.duration_since(now).as_secs_f32().ceil() as u64)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BossCardState {
     Offline,
@@ -213,7 +231,9 @@ fn boss_status_label(view: &BossView, hunt: &HuntView, live: bool) -> &'static s
     if view.phase.contains("cancel") {
         return tr("Cancelling boss request");
     }
-    if view.phase.starts_with("Waiting for boss cooldown") {
+    if view.phase.starts_with("Waiting for boss cooldown")
+        || (view.auto && view.arena.is_none()
+            && boss_cooldown_remaining(view, Instant::now()).is_some()) {
         return tr("Waiting for next boss…");
     }
     if view.auto {
@@ -442,6 +462,9 @@ fn draw_boss_details(
                 if let Some(reward) = boss_reward_label(entry) {
                     resource_chip(ui, &reward);
                 }
+                resource_chip(ui, &format!(
+                    "{}: {}", tr("Boss damage"), boss_damage_multiplier(entry, hunt),
+                ));
                 if !has_level {
                     let current = level.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
                     resource_chip(ui, &format!(
@@ -467,20 +490,6 @@ fn draw_boss_details(
             );
 
             ui.add_space(7.0);
-            ui.label(
-                RichText::new(tr(
-                    "Boss level is fixed for its region; stronger Pokémon do not raise it. Team strength still affects the boss's damage penalty."
-                ))
-                .size(10.0)
-                .color(MUTED),
-            );
-            ui.label(
-                RichText::new(tr(
-                    "The first fight starts immediately. The server waits 10 seconds between boss fights, including auto-repeat."
-                ))
-                .size(10.0)
-                .color(MUTED),
-            );
             ui.label(
                 RichText::new(if restock_enabled {
                     tr("Restock stays active during boss battles.")
@@ -646,6 +655,11 @@ fn draw_boss_status_card(
             }
             if let Some(original) = view.original_hunt.as_deref() {
                 detail_stat_line(ui, tr("Return destination"), original);
+            }
+            if let Some(seconds) = boss_cooldown_remaining(view, Instant::now()) {
+                let remaining = format!("{}s", seconds);
+                detail_stat_line(ui, tr("Next fight"), &remaining);
+                ui.ctx().request_repaint_after(Duration::from_millis(250));
             }
             if let Some(warning) = view.warning.as_deref() {
                 ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
