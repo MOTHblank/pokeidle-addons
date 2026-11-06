@@ -527,6 +527,9 @@ impl ControllerApp {
             }
             match event.result {
                 Ok(Some(session)) => {
+                    logging::info(&format!(
+                        "{} protected native login accepted by PokéIdle",
+                        self.account_name(profile)));
                     self.adopt_native_session(event.index, session);
                     self.runtimes[event.index].capture.capture_draft=None;
                     self.runtimes[event.index].automation.automation_draft=AutomationDraft::default();
@@ -535,6 +538,9 @@ impl ControllerApp {
                         self.account_name(profile)), false);
                 },
                 Ok(None) => {
+                    logging::info(&format!(
+                        "{} has no protected native login; Firefox authentication is required",
+                        self.account_name(profile)));
                     self.runtimes[event.index].session.require_browser_login = true;
                     self.set_status(format!(
                         "{}: please sign in to continue",
