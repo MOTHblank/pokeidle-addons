@@ -29,6 +29,9 @@ pub struct BossEntry {
     pub token_id: u64,
     pub token_name: String,
     pub tokens_per_entry: u64,
+    /// Number of full-strength team Pokémon required to remove the server's
+    /// boss damage penalty. Upstream currently advertises 5 in bossesJogaveis.
+    pub team_ideal: u32,
     /// Region/trio/reward metadata introduced by upstream v1.408.7. The
     /// server catalog remains authoritative for which bosses are playable;
     /// known keys only provide presentation fallbacks when these fields are
@@ -56,6 +59,24 @@ impl BossEntry {
     /// boss damage penalty, but it no longer changes this combat level.
     pub fn fight_level(&self) -> u32 {
         self.min_level.max(1)
+    }
+
+    /// Upstream boss team penalty:
+    /// strength = Σ min(1, pokemon level / boss level)
+    /// damage   = 3 ^ max(0, team_ideal - strength)
+    pub fn team_strength(&self, hunt: &HuntView) -> Option<f64> {
+        if !hunt.roster_ready { return None; }
+        let boss_level = f64::from(self.fight_level());
+        Some(hunt.pokemon_roster.iter()
+            .filter(|pokemon| pokemon.slot.is_some() && pokemon.level > 0)
+            .map(|pokemon| (f64::from(pokemon.level) / boss_level).min(1.0))
+            .sum())
+    }
+
+    pub fn damage_multiplier(&self, hunt: &HuntView) -> Option<f64> {
+        let strength = self.team_strength(hunt)?;
+        let deficit = (f64::from(self.team_ideal.max(1)) - strength).max(0.0);
+        Some(3.0_f64.powf(deficit))
     }
 
     fn upstream_region_level(region_order: u8) -> u32 {
@@ -129,6 +150,11 @@ impl BossEntry {
             token_name: entry.get("nome").and_then(Value::as_str)
                 .unwrap_or("Boss Token").to_owned(),
             tokens_per_entry,
+            team_ideal: raw.get("equipeIdeal").or_else(|| raw.get("teamIdeal"))
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+                .map(|value| value as u32)
+                .unwrap_or(5),
             region: fallback.map(|meta| meta.0.to_owned()).or_else(||
                 ["regiao", "region"].into_iter().find_map(|field|
                     raw.get(field).and_then(Value::as_str)
@@ -617,6 +643,9 @@ impl BossManager {
             self.view.auto_key = boss.get("autoKey").and_then(Value::as_str).map(str::to_owned);
             self.view.arena = boss.get("arena").and_then(|arena| arena.get("key"))
                 .and_then(Value::as_str).map(str::to_owned);
+            if self.view.arena.is_some() {
+                self.view.cooldown_until = None;
+            }
             if let Some(trip) = self.trip.as_mut() {
                 if trip.stage == Stage::Running {
                     if trip.repeat {
@@ -678,6 +707,7 @@ impl BossManager {
                         }
                     }
                     Some("bossEntrou") => {
+                        self.view.cooldown_until = None;
                         if let Some(trip) = self.trip.as_mut() {
                             if event.get("key").and_then(Value::as_str)
                                 .map_or(true, |key| key == trip.key) {
@@ -896,6 +926,7 @@ impl BossManager {
         self.view.auto = false;
         self.view.auto_key = None;
         self.view.arena = None;
+        self.view.cooldown_until = None;
     }
 
     /// Called ONLY after a fresh, authenticated welcome from the same socket
@@ -1010,6 +1041,43 @@ mod tests {
                 "entrada":{"itemId":500,"qtd":1}
             }],"estado":{"boss":{"auto":false,"arena":null}}}));
         assert_eq!(fallback.view.catalog[0].types,vec!["ICE"]);
+    }
+
+    #[test]
+    fn boss_team_penalty_matches_upstream_formula() {
+        let boss=BossEntry::parse(&json!({
+            "key":"articuno","nome":"Articuno","equipeIdeal":5,
+            "entrada":{"itemId":500,"qtd":1}
+        })).unwrap();
+        let mut hunt=HuntView::default();
+        assert_eq!(boss.damage_multiplier(&hunt),None,
+            "partial roster must not invent a team penalty");
+
+        hunt.roster_ready=true;
+        hunt.pokemon_roster=Arc::new((0..5).map(|slot|
+            crate::native_hunts::PokemonInfo {
+                level:300, slot:Some(slot), ..Default::default()
+            }).collect());
+        assert!((boss.team_strength(&hunt).unwrap()-5.0).abs()<1e-9);
+        assert!((boss.damage_multiplier(&hunt).unwrap()-1.0).abs()<1e-9);
+
+        hunt.pokemon_roster=Arc::new((0..4).map(|slot|
+            crate::native_hunts::PokemonInfo {
+                level:300, slot:Some(slot), ..Default::default()
+            }).collect());
+        assert!((boss.damage_multiplier(&hunt).unwrap()-3.0).abs()<1e-9);
+
+        hunt.pokemon_roster=Arc::new(vec![
+            crate::native_hunts::PokemonInfo {
+                level:300, slot:Some(0), ..Default::default()
+            },
+            crate::native_hunts::PokemonInfo {
+                level:150, slot:Some(1), ..Default::default()
+            },
+        ]);
+        assert!((boss.team_strength(&hunt).unwrap()-1.5).abs()<1e-9);
+        let expected=3.0_f64.powf(3.5);
+        assert!((boss.damage_multiplier(&hunt).unwrap()-expected).abs()<1e-9);
     }
 
     #[test]
