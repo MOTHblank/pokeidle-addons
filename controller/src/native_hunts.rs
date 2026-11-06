@@ -1259,6 +1259,17 @@ impl HuntIntel {
     pub fn ingest_value(&mut self, frame: &Value, now: Instant) {
         match frame.get("t").and_then(Value::as_str) {
             Some("welcome") => {
+                // A welcome replaces the account snapshot. Never carry timed
+                // modifiers from a previous login when an older shard omits them.
+                self.bonus_xp=None;
+                self.view.seasonal_type=None;
+                self.view.gym_podium=Arc::new(BTreeMap::new());
+                self.twitch_xp_until=0;
+                self.twitch_capture_until=0;
+                self.twitch_shiny_until=0;
+                self.kick_xp_until=0;
+                self.kick_capture_until=0;
+                self.kick_shiny_until=0;
                 if let Some(boosts)=frame.get("tiposBoost").and_then(Value::as_array){
                     self.boost_multipliers=boosts.iter().filter_map(|row|{
                         let key=row.get("chave").and_then(Value::as_str)?;
