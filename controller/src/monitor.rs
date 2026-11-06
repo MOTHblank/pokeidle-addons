@@ -1417,9 +1417,13 @@ fn probe_twitch_follow_control(
     let expression = r#"(() => {
         const root = document.querySelector('.channel-info-content');
         if (!root) return JSON.stringify({state:'waiting'});
-        const unfollow = root.querySelector('[data-a-target="unfollow-button"]');
+        const unfollow = root.querySelector(
+            '[data-a-target="unfollow-button"],[data-test-selector="unfollow-button"]'
+        );
         if (unfollow) return JSON.stringify({state:'already'});
-        const marker = root.querySelector('[data-a-target="follow-button"]');
+        const marker = root.querySelector(
+            '[data-a-target="follow-button"],[data-test-selector="follow-button"]'
+        );
         if (!marker) return JSON.stringify({state:'waiting'});
         const button = marker.matches('button') ? marker : marker.closest('button');
         if (!button || button.disabled) return JSON.stringify({state:'waiting'});
@@ -1536,8 +1540,10 @@ pub fn ensure_twitch_follow(
             }
         }
 
-        let Some(current) = session.as_mut() else { continue };
-        let context = match find_twitch_channel_context(current, &login) {
+        let context_result = session.as_mut()
+            .ok_or_else(|| "Firefox BiDi session unavailable".to_owned())
+            .and_then(|current| find_twitch_channel_context(current, &login));
+        let context = match context_result {
             Ok(Some(context)) => context,
             Ok(None) => {
                 thread::sleep(Duration::from_millis(350));
@@ -1554,13 +1560,19 @@ pub fn ensure_twitch_follow(
             }
         };
 
-        match probe_twitch_follow_control(current, &context) {
+        let probe = session.as_mut()
+            .ok_or_else(|| "Firefox BiDi session unavailable".to_owned())
+            .and_then(|current| probe_twitch_follow_control(current, &context));
+        match probe {
             Ok(TwitchFollowProbe::AlreadyFollowing) => {
                 end_session(&mut session);
                 return Ok(clicked);
             }
             Ok(TwitchFollowProbe::Ready { x, y }) if !clicked => {
-                if let Err(error) = click_twitch_follow_control(current, &context, x, y) {
+                let click = session.as_mut()
+                    .ok_or_else(|| "Firefox BiDi session unavailable".to_owned())
+                    .and_then(|current| click_twitch_follow_control(current, &context, x, y));
+                if let Err(error) = click {
                     end_session(&mut session);
                     return Err(error);
                 }
@@ -1569,8 +1581,12 @@ pub fn ensure_twitch_follow(
             }
             Ok(_) => thread::sleep(Duration::from_millis(350)),
             Err(error) => {
-                last_error = Some(error);
-                thread::sleep(Duration::from_millis(350));
+                if session_connection_is_closed(&error) {
+                    session = None;
+                } else {
+                    last_error = Some(error);
+                    thread::sleep(Duration::from_millis(350));
+                }
             }
         }
     }
