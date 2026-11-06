@@ -928,26 +928,38 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool
                 if let Some(login)=twitch.get("login").and_then(Value::as_str) {
                     status.twitch_login=Some(login.to_owned());
                 }
-                let pct=twitch.get("pct").and_then(Value::as_f64)
-                    .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
-                let bonus=twitch.get("bonus").cloned().unwrap_or(Value::Null);
-                status.stream_bonuses.twitch=StreamBonusState {
-                    pct,
-                    xp_until: bonus.get("xp").and_then(Value::as_u64).unwrap_or(0),
-                    capture_until: bonus.get("captura").and_then(Value::as_u64).unwrap_or(0),
-                    shiny_until: bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0),
-                };
+                if let Some(pct)=twitch.get("pct").and_then(Value::as_f64) {
+                    status.stream_bonuses.twitch.pct=
+                        if pct.is_finite(){pct.max(0.0) as f32}else{0.0};
+                }
+                if let Some(bonus)=twitch.get("bonus") {
+                    if let Some(raw)=bonus.get("xp") {
+                        status.stream_bonuses.twitch.xp_until=raw.as_u64().unwrap_or(0);
+                    }
+                    if let Some(raw)=bonus.get("captura") {
+                        status.stream_bonuses.twitch.capture_until=raw.as_u64().unwrap_or(0);
+                    }
+                    if let Some(raw)=bonus.get("shiny") {
+                        status.stream_bonuses.twitch.shiny_until=raw.as_u64().unwrap_or(0);
+                    }
+                }
             }
             if let Some(kick)=state.get("kick") {
-                let pct=kick.get("pct").and_then(Value::as_f64)
-                    .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
-                let bonus=kick.get("bonus").cloned().unwrap_or(Value::Null);
-                status.stream_bonuses.kick=StreamBonusState {
-                    pct,
-                    xp_until: bonus.get("xp").and_then(Value::as_u64).unwrap_or(0),
-                    capture_until: bonus.get("captura").and_then(Value::as_u64).unwrap_or(0),
-                    shiny_until: bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0),
-                };
+                if let Some(pct)=kick.get("pct").and_then(Value::as_f64) {
+                    status.stream_bonuses.kick.pct=
+                        if pct.is_finite(){pct.max(0.0) as f32}else{0.0};
+                }
+                if let Some(bonus)=kick.get("bonus") {
+                    if let Some(raw)=bonus.get("xp") {
+                        status.stream_bonuses.kick.xp_until=raw.as_u64().unwrap_or(0);
+                    }
+                    if let Some(raw)=bonus.get("captura") {
+                        status.stream_bonuses.kick.capture_until=raw.as_u64().unwrap_or(0);
+                    }
+                    if let Some(raw)=bonus.get("shiny") {
+                        status.stream_bonuses.kick.shiny_until=raw.as_u64().unwrap_or(0);
+                    }
+                }
             }
             if let Some(now)=state.get("servidorAgora").and_then(Value::as_u64) {
                 status.stream_bonuses.server_now_ms=
@@ -1949,6 +1961,13 @@ mod tests {
         assert_eq!(observed.stream_bonuses.kick.xp_until,18100100);
         assert_eq!(observed.stream_bonuses.kick.capture_until,10900100);
         assert_eq!(observed.stream_bonuses.kick.shiny_until,36100100);
+
+        observe(&status, r#"{"t":"estado","estado":{"kick":{"oficiais":[]}}}"#);
+        let preserved=status.lock().unwrap().clone();
+        assert_eq!(preserved.stream_bonuses.kick.pct,15.0);
+        assert_eq!(preserved.stream_bonuses.kick.xp_until,18100100);
+        assert_eq!(preserved.stream_bonuses.kick.capture_until,10900100);
+        assert_eq!(preserved.stream_bonuses.kick.shiny_until,36100100);
     }
     #[test]
     fn cookie_scoping_and_hello_validation() {
