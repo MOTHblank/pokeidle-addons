@@ -336,7 +336,7 @@ pub fn finalize_capture_stages(reference:&mut Reference){
     }
 }
 /// Supplement public creature JSON with the latest Mega types and base stats.
-/// The full 1.398.1 spreadsheet movesets are applied afterward, not synthesized
+/// The full 1.408.7 spreadsheet movesets are applied afterward, not synthesized
 /// from the base species or a retired 30-second Mega signature.
 fn merge_upstream_megas(reference:&mut Reference){
     for row in include_str!("../assets/visual/upstream-megas.tsv").lines(){
@@ -367,7 +367,7 @@ fn merge_upstream_megas(reference:&mut Reference){
 /// Mega signature attack or legacy cooldown is inserted.
 fn apply_upstream_movesets(reference:&mut Reference) {
     let mut by_id:BTreeMap<u64,Vec<ReferenceMove>>=BTreeMap::new();
-    for line in include_str!("../assets/visual/upstream-movesets-v1398.tsv").lines() {
+    for line in include_str!("../assets/visual/upstream-movesets-v1408.tsv").lines() {
         if line.starts_with('#')||line.is_empty(){continue}
         let fields=line.split('\t').collect::<Vec<_>>();
         if fields.len()!=5 {continue}
