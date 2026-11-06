@@ -14,6 +14,8 @@ pub struct Modifiers {
     pub capture_boost:bool, pub shiny_boost:bool,
     pub kick_capture:bool, pub kick_shiny:bool,
     pub catch_event_pct:f64, pub shiny_event_pct:f64,
+    /// Authoritative timed Twitch/Kick factors from the current game state.
+    pub live_capture_multiplier:f64, pub live_shiny_multiplier:f64,
     pub lure:bool,
     pub loot:f64, pub guild:f64, pub drop_event:f64, pub kick_drop:f64,
 }
@@ -21,6 +23,7 @@ impl Default for Modifiers {
     fn default()->Self {
         Self {capture_boost:false,shiny_boost:false,kick_capture:false,
             kick_shiny:false,catch_event_pct:0.0,shiny_event_pct:0.0,
+            live_capture_multiplier:1.0,live_shiny_multiplier:1.0,
             lure:false,loot:1.0,guild:1.0,drop_event:1.0,kick_drop:1.0}
     }
 }
@@ -28,16 +31,19 @@ impl Modifiers {
     pub fn valid(&self)->bool {
         [self.catch_event_pct,self.shiny_event_pct].iter()
             .all(|v|v.is_finite()&&(0.0..=1000.0).contains(v))
-        && [self.loot,self.guild,self.drop_event,self.kick_drop].iter()
+        && [self.live_capture_multiplier,self.live_shiny_multiplier,
+            self.loot,self.guild,self.drop_event,self.kick_drop].iter()
             .all(|v|v.is_finite()&&(1.0..=1000.0).contains(v))
     }
     pub fn catch_factor(&self)->f64 {
-        (if self.capture_boost {2.0}else{1.0})
+        self.live_capture_multiplier
+        *(if self.capture_boost {2.0}else{1.0})
         *(1.0+self.catch_event_pct/100.0)
         *(if self.kick_capture {1.15}else{1.0})
     }
     pub fn shiny_factor(&self)->f64 {
-        (if self.shiny_boost {1.5}else{1.0})
+        self.live_shiny_multiplier
+        *(if self.shiny_boost {1.5}else{1.0})
         *(1.0+self.shiny_event_pct/100.0)
         *(if self.kick_shiny {1.15}else{1.0})
     }
@@ -206,6 +212,13 @@ mod tests {
         assert!(wiki_capture_chance(0.0,4.0,0.0).is_none());
         assert_eq!(catalog_rarity(Some(200),Some(100.0),None),
             Some((12000.0_f64*(200.0_f64/150.0).powf(0.6)).round()));
+    }
+    #[test] fn live_stream_capture_and_shiny_factors_stack_with_scenarios(){
+        let mut m=Modifiers::default();
+        m.live_capture_multiplier=1.15*1.15;
+        m.live_shiny_multiplier=1.15;
+        assert!((m.catch_factor()-1.3225).abs()<1e-12);
+        assert!((m.shiny_factor()-1.15).abs()<1e-12);
     }
     #[test] fn capture_boost_doubles_odds_before_10_percent_cap(){
         let mut boosted=Modifiers::default();
