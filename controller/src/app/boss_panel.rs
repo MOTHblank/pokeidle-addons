@@ -119,9 +119,9 @@ fn boss_trio_label(entry: &BossEntry) -> Option<String> {
 fn boss_reward_label(entry: &BossEntry) -> Option<String> {
     let reward = entry.reward.as_deref()?;
     Some(match reward {
-        "tm" => tr("Reward: Z-Move and AoE TM Fragments").to_owned(),
-        "mega" => tr("Reward: Mega Stone and Shiny Mega Stone Fragments").to_owned(),
-        "tickets" => tr("Reward: Mystic Ticket and Safari Ticket").to_owned(),
+        "tm" => tr("Z-Move + AoE TM").to_owned(),
+        "mega" => tr("Mega + Shiny Mega").to_owned(),
+        "tickets" => tr("Mystic + Safari").to_owned(),
         other => other.to_owned(),
     })
 }
@@ -129,10 +129,7 @@ fn boss_reward_label(entry: &BossEntry) -> Option<String> {
 fn boss_region_heading(entry: &BossEntry) -> Option<String> {
     let region = boss_region_name(entry.region.as_deref()?);
     let trio = boss_trio_label(entry)?;
-    Some(format!(
-        "{} · {} · {} {}",
-        region, trio, tr("Boss combat level"), entry.fight_level(),
-    ))
+    Some(format!("{} · {}", region, trio))
 }
 
 fn boss_damage_multiplier(entry: &BossEntry, hunt: &HuntView) -> String {
@@ -271,18 +268,18 @@ fn draw_boss_selector(
     let fight_level = entry.fight_level().to_string();
     let state = boss_card_state(entry, view, hunt, live, optimistic_request);
     let (availability, availability_color) = match state {
-        BossCardState::Offline => (tr("Offline").to_owned(), DIM),
-        BossCardState::Loading => (tr("Loading…").to_owned(), MUTED),
-        BossCardState::Requested => (tr("Requested").to_owned(), WARN),
-        BossCardState::Fighting => (tr("Fighting").to_owned(), GOOD),
-        BossCardState::Farming => (tr("Farming").to_owned(), GOOD),
-        BossCardState::OtherBossActive => (tr("Another boss active").to_owned(), MUTED),
-        BossCardState::OperationBusy => (boss_status_label(view, hunt, live).to_owned(), MUTED),
-        BossCardState::LevelUnavailable => (tr("Level unavailable").to_owned(), DIM),
+        BossCardState::Offline => (Some(tr("Offline").to_owned()), DIM),
+        BossCardState::Loading => (Some(tr("Loading…").to_owned()), MUTED),
+        BossCardState::Requested => (Some(tr("Requested").to_owned()), WARN),
+        BossCardState::Fighting => (Some(tr("Fighting").to_owned()), GOOD),
+        BossCardState::Farming => (Some(tr("Farming").to_owned()), GOOD),
+        BossCardState::OtherBossActive => (Some(tr("Another boss active").to_owned()), MUTED),
+        BossCardState::OperationBusy => (Some(boss_status_label(view, hunt, live).to_owned()), MUTED),
+        BossCardState::LevelUnavailable => (Some(tr("Level unavailable").to_owned()), DIM),
         BossCardState::LevelRequired =>
-            (format!("{} {}", tr("Required level"), entry.min_level), WARN),
-        BossCardState::TokensMissing => (tr("Not enough tokens").to_owned(), WARN),
-        BossCardState::Ready => (tr("Ready").to_owned(), GOOD),
+            (Some(format!("{} {}", tr("Required level"), entry.min_level)), WARN),
+        BossCardState::TokensMissing => (Some(tr("Not enough tokens").to_owned()), WARN),
+        BossCardState::Ready => (None, GOOD),
     };
     let emphasized = matches!(
         state,
@@ -299,41 +296,36 @@ fn draw_boss_selector(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(entry.name.chars().take(2)
-                        .collect::<String>().to_uppercase())
-                        .size(11.0).strong().color(ACCENT),
-                );
                 ui.vertical(|ui| {
                     ui.label(RichText::new(&entry.name).strong().size(12.0).color(TEXT));
                     ui.label(
-                        RichText::new(boss_type_label(entry))
-                            .size(9.0)
-                            .color(MUTED),
-                    );
-                    if let Some(reward) = boss_reward_label(entry) {
-                        ui.label(RichText::new(reward).size(9.0).color(ACCENT));
-                    }
-                    ui.label(
                         RichText::new(format!(
-                            "{} {} · {} {} × {}",
-                            tr("Boss combat level"), fight_level,
-                            tr("Entry"), entry.tokens_per_entry, entry.token_name,
+                            "{} · Lv {}",
+                            boss_type_label(entry), fight_level,
                         ))
                         .size(9.0)
                         .color(MUTED),
                     );
+                    if let Some(reward) = boss_reward_label(entry) {
+                        ui.label(RichText::new(reward).size(9.0).color(ACCENT));
+                    }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(attempts.to_string()).size(12.0).strong().color(TEXT));
-                        ui.label(RichText::new(tr("Possible entries")).size(9.0).color(MUTED));
                         ui.label(
-                            RichText::new(availability)
-                                .size(9.0)
+                            RichText::new(format!("{} {}", attempts, tr("entries")))
+                                .size(10.0)
                                 .strong()
-                                .color(availability_color),
+                                .color(TEXT),
                         );
+                        if let Some(availability) = availability {
+                            ui.label(
+                                RichText::new(availability)
+                                    .size(9.0)
+                                    .strong()
+                                    .color(availability_color),
+                            );
+                        }
                     });
                 });
             });
@@ -452,13 +444,8 @@ fn draw_boss_details(
             });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                resource_chip(ui, &format!(
-                    "{}: {}", tr("Boss combat level"), entry.fight_level(),
-                ));
-                resource_chip(ui, &format!(
-                    "{}: {} × {}", tr("Entry"), entry.tokens_per_entry, entry.token_name,
-                ));
-                resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
+                resource_chip(ui, &format!("Lv {}", entry.fight_level()));
+                resource_chip(ui, &format!("{} {}", attempts, tr("entries")));
                 if let Some(reward) = boss_reward_label(entry) {
                     resource_chip(ui, &reward);
                 }
@@ -489,16 +476,14 @@ fn draw_boss_details(
                 tr("Against your active Pokémon"),
             );
 
-            ui.add_space(7.0);
-            ui.label(
-                RichText::new(if restock_enabled {
-                    tr("Restock stays active during boss battles.")
-                } else {
-                    tr("Restock is off for this account.")
-                })
-                .size(10.0)
-                .color(if restock_enabled { ACCENT } else { MUTED }),
-            );
+            if !restock_enabled {
+                ui.add_space(7.0);
+                ui.label(
+                    RichText::new(tr("Restock is off for this account."))
+                        .size(10.0)
+                        .color(MUTED),
+                );
+            }
 
             let ready = live
                 && view.state_known
@@ -511,11 +496,7 @@ fn draw_boss_details(
             ui.add_space(9.0);
             let compact_actions = ui.available_width() < 340.0;
             ui.horizontal_wrapped(|ui| {
-                let farm_label = if compact_actions {
-                    tr("Auto farm")
-                } else {
-                    tr("Farm until tokens run out")
-                };
+                let farm_label = tr("Auto farm");
                 if pending_mode == Some(true) {
                     ui.add_enabled(false,
                         egui::Button::new(RichText::new(tr("Starting farm…")).strong())
@@ -1089,11 +1070,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     .size(15.0)
                     .strong()
                     .color(TEXT),
-            );
-            ui.label(
-                RichText::new(tr("Choose a boss to fight once or farm. Moth returns to your previous hunt when the run finishes."))
-                    .size(10.0)
-                    .color(MUTED),
             );
             if !live {
                 ui.label(
