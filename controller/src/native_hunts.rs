@@ -361,6 +361,8 @@ pub struct HuntIntel {
     kick_reported_pct:f64,
     /// Raw server-authoritative XP snapshot; parts are expiry-filtered locally.
     bonus_xp:Option<Value>,
+    raid_farm_reported_pct:f64,
+    raid_farm_until:u64,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
     geo_wave: Option<(String,Instant,Vec<f64>)>,
     geo_alive: BTreeMap<u64,bool>,
@@ -387,6 +389,7 @@ impl HuntIntel {
             twitch_reported_pct:0.0,
             kick_xp_until:0,kick_capture_until:0,kick_shiny_until:0,
             kick_reported_pct:0.0,bonus_xp:None,
+            raid_farm_reported_pct:0.0,raid_farm_until:0,
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
@@ -905,7 +908,10 @@ impl HuntIntel {
         // Raid's reward has a separate farm component (max +5%). Newer
         // server snapshots can publish it alongside the raid XP part. Accept
         // the explicit percentage/total forms only; never infer farm from XP.
-        let mut raid_farm=0.0f64;
+        let mut raid_farm=if self.raid_farm_reported_pct>0.0
+            && (self.raid_farm_until==0||self.raid_farm_until>clock) {
+            self.raid_farm_reported_pct
+        } else {0.0};
         if let Some(raw)=self.bonus_xp.as_ref() {
             for part in raw.get("partes").and_then(Value::as_array)
                 .into_iter().flatten() {
@@ -981,6 +987,22 @@ impl HuntIntel {
 
         if let Some(raw)=state.get("bonusXp") {
             self.bonus_xp=raw.is_object().then(||raw.clone());
+        }
+        let direct_raid=state.get("raidFarmPct")
+            .or_else(||state.get("bonusRaidFarmPct"))
+            .and_then(Value::as_f64)
+            .or_else(||state.get("raid").and_then(|raid|
+                raid.get("farmPct").or_else(||raid.get("farm"))
+                    .and_then(Value::as_f64)));
+        if let Some(pct)=direct_raid.filter(|pct|pct.is_finite()) {
+            self.raid_farm_reported_pct=pct.clamp(0.0,5.0);
+            self.raid_farm_until=state.get("raidFarmAte")
+                .or_else(||state.get("bonusRaidFarmAte"))
+                .and_then(Value::as_u64)
+                .or_else(||state.get("raid").and_then(|raid|
+                    raid.get("ate").or_else(||raid.get("until"))
+                        .and_then(Value::as_u64)))
+                .unwrap_or(0);
         }
 
         // Switch hunt before applying its opponent. On a welcome, the same
@@ -1262,6 +1284,8 @@ impl HuntIntel {
                 // A welcome replaces the account snapshot. Never carry timed
                 // modifiers from a previous login when an older shard omits them.
                 self.bonus_xp=None;
+                self.raid_farm_reported_pct=0.0;
+                self.raid_farm_until=0;
                 self.view.seasonal_type=None;
                 self.view.gym_podium=Arc::new(BTreeMap::new());
                 self.twitch_xp_until=0;
