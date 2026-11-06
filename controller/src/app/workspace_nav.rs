@@ -65,10 +65,42 @@ fn seasonal_type_for_header(app:&ControllerApp,selected:Option<usize>)->Option<S
         .or_else(||(0..app.runtimes.len()).find_map(live_type))
 }
 
+/// The seasonal type changes only at the game's daily rollover.
+/// Cache the small display value in egui's temporary UI memory so ordinary
+/// repaints never lock the native session or clone its full HuntView.
+#[derive(Clone)]
+struct SeasonalBadgeCache {
+    selected: Option<usize>,
+    checked_at: Instant,
+    kind: Option<String>,
+}
+const SEASONAL_BADGE_REFRESH: Duration = Duration::from_secs(60);
+
+fn cached_seasonal_type_for_header(
+    app:&ControllerApp,ui:&egui::Ui,selected:Option<usize>
+)->Option<String>{
+    let id=egui::Id::new("moth-seasonal-day-header");
+    let now=Instant::now();
+    let existing=ui.ctx().data(|data|data.get_temp::<SeasonalBadgeCache>(id));
+    if let Some(cache)=existing.as_ref(){
+        if cache.selected==selected &&
+            now.saturating_duration_since(cache.checked_at)<SEASONAL_BADGE_REFRESH {
+            return cache.kind.clone();
+        }
+    }
+    // No independent timer or network poll: a normal UI paint checks the
+    // already-published native snapshot no more than once per minute.
+    let kind=seasonal_type_for_header(app,selected);
+    ui.ctx().data_mut(|data|data.insert_temp(id,SeasonalBadgeCache{
+        selected,checked_at:now,kind:kind.clone(),
+    }));
+    kind
+}
+
 pub(super) fn draw_seasonal_day_badge(
     app:&ControllerApp,ui:&mut egui::Ui,selected:Option<usize>
 ){
-    let Some(kind)=seasonal_type_for_header(app,selected) else{return};
+    let Some(kind)=cached_seasonal_type_for_header(app,ui,selected) else{return};
     let base=hunt_panel::atlas_type_color(kind.as_str());
     let fg=hunt_panel::atlas_type_text_color(base);
     let name=hunt_panel::components::atlas_type_name(kind.as_str());
