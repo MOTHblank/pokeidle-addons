@@ -244,6 +244,19 @@ mod shutdown_lifecycle_tests {
     }
 
     #[test]
+    fn firefox_pid_reconciliation_keeps_launch_locked() {
+        let mut slot = GameSlot::new(GameProfile::ALL[0]);
+        let now = Instant::now();
+        slot.profile_reconcile = Some(FirefoxProfileReconcile {
+            deadline: now + FIREFOX_PROFILE_RECONCILE_GRACE,
+            next_check: now + FIREFOX_PROFILE_RECONCILE_RETRY,
+        });
+        assert!(slot.is_running());
+        slot.profile_reconcile = None;
+        assert!(!slot.is_running());
+    }
+
+    #[test]
     fn shutdown_worker_finishes_after_window_closes() {
         let complete = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&complete);
