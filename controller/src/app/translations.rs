@@ -164,18 +164,30 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Required level" => "Nível necessário",
         "Strongest eligible team Pokémon" => "Pokémon elegível mais forte da equipe",
         "Boss combat level" => "Nível de combate do boss",
+        "Legendary Birds Trio" => "Trio Aves Lendárias",
+        "Legendary Beasts Trio" => "Trio Bestas Lendárias",
+        "Weather Trio" => "Trio Climático",
+        "Creation Trio" => "Trio da Criação",
+        "\"Tao\" Trio" => "Trio \"Tao\"",
+        "Aura Trio" => "Trio da Aura",
+        "Light Trio" => "Trio da Luz",
+        "Combat Trio" => "Trio do Combate",
+        "Loyal Trio" => "Trio da Lealdade",
+        "Reward: Z-Move and AoE TM Fragments" => "Prêmio: Fragmentos de Z-Move e de TM AoE",
+        "Reward: Mega Stone and Shiny Mega Stone Fragments" =>
+            "Prêmio: Fragmentos de Mega Stone e de Mega Stone Shiny",
+        "Reward: Mystic Ticket and Safari Ticket" => "Prêmio: Mystic Ticket e Safari Ticket",
         "Possible entries" => "Entradas possíveis",
         "Farm until tokens run out" => "Farmar até acabar os tokens",
         "Fight once" => "Lutar uma vez",
         "Boss entry requires sufficient tokens and trainer level." =>
             "A entrada exige tokens suficientes e o nível necessário.",
-        "Bosses fight at the level of your strongest eligible team Pokémon, never below their own unlock level. Trainer level still controls which bosses are unlocked; entry tokens and drop tiers are unchanged." =>
-            "Os bosses lutam no nível do Pokémon elegível mais forte da sua equipe, nunca abaixo do próprio nível de liberação. O nível do treinador continua definindo quais bosses estão liberados; tokens de entrada e faixas de drop não mudaram.",
         "Loading boss state…" => "Carregando estado do boss…",
         "Stopping boss farm" => "Parando farm de boss",
         "Returning to hunt" => "Retornando à hunt",
         "Cancelling boss request" => "Cancelando solicitação de boss",
         "Starting boss" => "Iniciando boss",
+        "Waiting for next boss…" => "Aguardando o próximo boss…",
         "Going to Pokémon Center" => "Indo ao Centro Pokémon",
         "Boss operation in progress" => "Operação de boss em andamento",
         "Loading…" => "Carregando…",
@@ -185,8 +197,10 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Level unavailable" => "Nível indisponível",
         "Requested" => "Solicitado",
         "Not enough tokens" => "Tokens insuficientes",
-        "Boss level follows your strongest eligible team Pokémon, with the unlock level as the minimum." =>
-            "O nível do boss acompanha o Pokémon elegível mais forte da equipe, usando o nível de liberação como mínimo.",
+        "Boss level is fixed for its region; stronger Pokémon do not raise it. Team strength still affects the boss's damage penalty." =>
+            "O nível do boss é fixo para a região; Pokémon mais fortes não aumentam esse nível. A força da equipe ainda afeta a penalidade de dano do boss.",
+        "The first fight starts immediately. The server waits 10 seconds between boss fights, including auto-repeat." =>
+            "A primeira luta começa imediatamente. O servidor espera 10 segundos entre lutas de boss, inclusive na repetição automática.",
         "Boss request in progress" => "Solicitação de boss em andamento",
         "Finish the current boss fight before starting another." =>
             "Conclua a batalha de boss atual antes de iniciar outra.",

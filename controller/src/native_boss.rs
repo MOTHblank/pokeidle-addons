@@ -15,27 +15,11 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_LOOT: usize = 500;
-/// shared/pokemon-nivel-treinador.mjs: non-starters can fight up to trainer + 5.
-const POKEMON_LEVEL_GRACE: u32 = 5;
-
-/// v1.400.1 shared/bosses-lendarios.mjs: boss combat level follows the
-/// strongest Pokémon that is actually on the team and allowed to fight.
-/// A full roster is required because partial pkMud patches cannot prove who
-/// is absent from the team. Zero is authoritative when the confirmed team has
-/// no eligible Pokémon; the boss's own floor still determines combat level.
-pub fn strongest_eligible_team_level(hunt: &HuntView) -> Option<u32> {
-    if !hunt.roster_ready {
-        return None;
-    }
-    let trainer_level = hunt.trainer_level?;
-    let ceiling = trainer_level.saturating_add(POKEMON_LEVEL_GRACE);
-    Some(hunt.pokemon_roster.iter()
-        .filter(|pokemon| pokemon.slot.is_some())
-        .filter(|pokemon| pokemon.starter || pokemon.level <= ceiling)
-        .map(|pokemon| pokemon.level)
-        .max()
-        .unwrap_or(0))
-}
+/// Upstream v1.408.7 enforces the same ten-second gap for manual boss
+/// challenges and automatic repetition. Keep a local gate so a queued
+/// controller request does not hammer the entry command while the server is
+/// deliberately cooling down.
+const BOSS_NEXT_FIGHT_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BossEntry {
@@ -45,6 +29,15 @@ pub struct BossEntry {
     pub token_id: u64,
     pub token_name: String,
     pub tokens_per_entry: u64,
+    /// Region/trio/reward metadata introduced by upstream v1.408.7. The
+    /// server catalog remains authoritative for which bosses are playable;
+    /// known keys only provide presentation fallbacks when these fields are
+    /// absent from the welcome payload.
+    pub region: Option<String>,
+    pub trio: Option<String>,
+    pub reward: Option<String>,
+    pub region_order: Option<u8>,
+    pub trio_position: Option<u8>,
     /// Pokémon species used for artwork/status when exposed by the boss catalog.
     pub species_id: Option<u64>,
     /// Authoritative battle types from bossesJogaveis, with bossesCatalogo
@@ -58,12 +51,55 @@ impl BossEntry {
             .filter(|id| *id > 0)
     }
 
-    /// shared/bosses-lendarios.mjs v1.400.1: trainer level still unlocks
-    /// the arena, but combat level follows the strongest eligible team
-    /// Pokémon and never drops below this boss's own minimum.
-    pub fn fight_level(&self, hunt: &HuntView) -> Option<u32> {
-        strongest_eligible_team_level(hunt)
-            .map(|level| level.max(self.min_level.max(1)))
+    /// shared/bosses-lendarios.mjs v1.408.7: the boss now always fights at
+    /// its region's fixed unlock level. Team composition can still affect the
+    /// boss damage penalty, but it no longer changes this combat level.
+    pub fn fight_level(&self) -> u32 {
+        self.min_level.max(1)
+    }
+
+    fn upstream_region_level(region_order: u8) -> u32 {
+        match region_order {
+            0 => 300,
+            1 => 650,
+            step => 300u32.saturating_add(
+                350u32.saturating_mul(u32::from(step).saturating_pow(3))
+            ),
+        }
+    }
+
+    fn upstream_region_meta(key: &str)
+        -> Option<(&'static str, &'static str, &'static str, u8, u8)> {
+        Some(match key {
+            "articuno" => ("kanto", "Legendary Birds Trio", "tm", 0, 0),
+            "moltres" => ("kanto", "Legendary Birds Trio", "mega", 0, 1),
+            "zapdos" => ("kanto", "Legendary Birds Trio", "tickets", 0, 2),
+            "suicune" => ("johto", "Legendary Beasts Trio", "tm", 1, 0),
+            "entei" => ("johto", "Legendary Beasts Trio", "mega", 1, 1),
+            "raikou" => ("johto", "Legendary Beasts Trio", "tickets", 1, 2),
+            "groudon" => ("hoenn", "Weather Trio", "tm", 2, 0),
+            "kyogre" => ("hoenn", "Weather Trio", "mega", 2, 1),
+            "rayquaza" => ("hoenn", "Weather Trio", "tickets", 2, 2),
+            "dialga" => ("sinnoh", "Creation Trio", "tm", 3, 0),
+            "palkia" => ("sinnoh", "Creation Trio", "mega", 3, 1),
+            "dex487" => ("sinnoh", "Creation Trio", "tickets", 3, 2),
+            "reshiram" => ("unova", "\"Tao\" Trio", "tm", 4, 0),
+            "zekrom" => ("unova", "\"Tao\" Trio", "mega", 4, 1),
+            "kyurem" => ("unova", "\"Tao\" Trio", "tickets", 4, 2),
+            "xerneas" => ("kalos", "Aura Trio", "tm", 5, 0),
+            "yveltal" => ("kalos", "Aura Trio", "mega", 5, 1),
+            "zygarde" => ("kalos", "Aura Trio", "tickets", 5, 2),
+            "solgaleo" => ("alola", "Light Trio", "tm", 6, 0),
+            "lunala" => ("alola", "Light Trio", "mega", 6, 1),
+            "necrozma" => ("alola", "Light Trio", "tickets", 6, 2),
+            "zacian_crowned_sword" => ("galar", "Combat Trio", "tm", 7, 0),
+            "zamazenta_crowned_shield" => ("galar", "Combat Trio", "mega", 7, 1),
+            "eternatus" => ("galar", "Combat Trio", "tickets", 7, 2),
+            "okidogi" => ("paldea", "Loyal Trio", "tm", 8, 0),
+            "munkidori" => ("paldea", "Loyal Trio", "mega", 8, 1),
+            "fezandipiti" => ("paldea", "Loyal Trio", "tickets", 8, 2),
+            _ => return None,
+        })
     }
 
     fn parse(raw: &Value) -> Option<Self> {
@@ -72,20 +108,44 @@ impl BossEntry {
             !key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_') {
             return None;
         }
+        let fallback = Self::upstream_region_meta(key);
         let entry = raw.get("entrada")?;
         let token_id = entry.get("itemId")?.as_u64()?;
         let tokens_per_entry = entry.get("qtd")?.as_u64()?;
         if token_id == 0 || tokens_per_entry == 0 { return None; }
+        let min_level = raw.get("minNivelTreinador")
+            .or_else(|| raw.get("nivel"))
+            .or_else(|| raw.get("level"))
+            .and_then(Value::as_u64)
+            .map(|value| value.min(u32::MAX as u64) as u32)
+            .or_else(|| fallback.map(|meta| Self::upstream_region_level(meta.3)))
+            .unwrap_or(0);
         Some(Self {
             key: key.to_owned(),
             name: raw.get("nome").or_else(|| raw.get("name"))
                 .and_then(Value::as_str).unwrap_or(key).to_owned(),
-            min_level: raw.get("minNivelTreinador").or_else(|| raw.get("level"))
-                .and_then(Value::as_u64).unwrap_or(0).min(u32::MAX as u64) as u32,
+            min_level,
             token_id,
             token_name: entry.get("nome").and_then(Value::as_str)
                 .unwrap_or("Boss Token").to_owned(),
             tokens_per_entry,
+            region: fallback.map(|meta| meta.0.to_owned()).or_else(||
+                ["regiao", "region"].into_iter().find_map(|field|
+                    raw.get(field).and_then(Value::as_str)
+                        .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))),
+            trio: fallback.map(|meta| meta.1.to_owned()).or_else(||
+                raw.get("trio").and_then(Value::as_str)
+                    .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)),
+            reward: fallback.map(|meta| meta.2.to_owned()).or_else(||
+                ["premio", "reward"].into_iter().find_map(|field|
+                    raw.get(field).and_then(Value::as_str)
+                        .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))),
+            region_order: fallback.map(|meta| meta.3).or_else(||
+                raw.get("degrau").or_else(|| raw.get("regionIndex"))
+                    .and_then(Value::as_u64).map(|value| value.min(u8::MAX as u64) as u8)),
+            trio_position: fallback.map(|meta| meta.4).or_else(||
+                raw.get("posicao").or_else(|| raw.get("position"))
+                    .and_then(Value::as_u64).map(|value| value.min(u8::MAX as u64) as u8)),
             species_id: Self::species_id(raw),
             types: ["type1", "type2"].into_iter().filter_map(|field|
                 raw.get(field).and_then(Value::as_str)
@@ -123,6 +183,7 @@ pub struct BossView {
     pub can_stop: bool,
     pub phase: String,
     pub original_hunt: Option<String>,
+    pub cooldown_until: Option<Instant>,
     pub warning: Option<String>,
     pub storage_warning: Option<String>,
     /// Shared with the disk writer; available without waiting for the game socket.
@@ -544,6 +605,9 @@ impl BossManager {
                     }
                     boss
                 }).collect();
+                self.view.catalog.sort_by_key(|boss|
+                    (boss.region_order.unwrap_or(u8::MAX),
+                     boss.trio_position.unwrap_or(u8::MAX)));
                 self.view.catalog_ready = true;
             }
         }
@@ -576,6 +640,8 @@ impl BossManager {
             for event in events {
                 match event.get("k").and_then(Value::as_str) {
                     Some("bossMorto") => {
+                        self.view.cooldown_until =
+                            Some(Instant::now() + BOSS_NEXT_FIGHT_DELAY);
                         let drops = event.get("drops").and_then(Value::as_array)
                             .into_iter().flatten().filter_map(|drop| {
                                 let item_id = drop.get("itemId")?.as_u64()?;
@@ -605,6 +671,8 @@ impl BossManager {
                         }
                     }
                     Some("bossPerdeu") | Some("bossSaiu") => {
+                        self.view.cooldown_until =
+                            Some(Instant::now() + BOSS_NEXT_FIGHT_DELAY);
                         if let Some(trip) = self.trip.as_mut() {
                             if !trip.repeat { trip.ended = true; }
                         }
@@ -697,6 +765,11 @@ impl BossManager {
             matches!(trip.stage, Stage::Starting | Stage::Running) &&
             !trip.confirmed && !trip.ended && !trip.stop_pending);
         if awaiting_entry {
+            if self.view.cooldown_until.is_some_and(|until| until > now) {
+                self.view.phase = "Waiting for boss cooldown".into();
+                return None;
+            }
+            self.view.cooldown_until = None;
             let command = navigator.next_action(hunt, now)?;
             let (key, repeat) = match &command {
                 GameCommand::BossEnter(key) => (key.as_str(), false),
@@ -940,46 +1013,54 @@ mod tests {
     }
 
     #[test]
-    fn effective_boss_level_uses_strongest_eligible_team_pokemon() {
-        let catalog=serde_json::json!({"key":"regice","nome":"Regice",
-            "minNivelTreinador":300,
-            "entrada":{"itemId":500,"qtd":1}});
-        let boss=BossEntry::parse(&catalog).expect("playable boss");
-        let mut h=HuntView::default();
-        h.trainer_level=Some(5_000);
-        assert_eq!(boss.fight_level(&h),None,
-            "combat level must wait for a complete roster");
+    fn boss_level_and_region_metadata_follow_v14087_contract() {
+        let boss=BossEntry::parse(&json!({
+            "key":"articuno","nome":"Articuno",
+            "entrada":{"itemId":500,"qtd":1}
+        })).expect("playable boss");
+        assert_eq!(boss.fight_level(),300,
+            "boss combat level is now fixed to the region requirement");
+        assert_eq!(boss.region.as_deref(),Some("kanto"));
+        assert_eq!(boss.trio.as_deref(),Some("Legendary Birds Trio"));
+        assert_eq!(boss.reward.as_deref(),Some("tm"));
+        assert_eq!(boss.region_order,Some(0));
+        assert_eq!(boss.trio_position,Some(0));
 
-        h.roster_ready=true;
-        h.pokemon_roster=Arc::new(vec![
-            crate::native_hunts::PokemonInfo {
-                level:2_000, slot:Some(0), ..Default::default()
-            },
-            crate::native_hunts::PokemonInfo {
-                level:30_000, slot:None, ..Default::default()
-            },
-            crate::native_hunts::PokemonInfo {
-                level:5_006, slot:Some(1), ..Default::default()
-            },
-        ]);
-        assert_eq!(strongest_eligible_team_level(&h),Some(2_000),
-            "depot Pokémon and non-starters above trainer + 5 must not count");
-        assert_eq!(boss.fight_level(&h),Some(2_000));
-
-        let rayquaza=BossEntry {
-            min_level:3_100, ..boss.clone()
-        };
-        assert_eq!(rayquaza.fight_level(&h),Some(3_100),
-            "the boss minimum remains the combat-level floor");
-
-        h.pokemon_roster=Arc::new(vec![crate::native_hunts::PokemonInfo {
-            level:8_000, slot:Some(0), starter:true, ..Default::default()
-        }]);
-        assert_eq!(boss.fight_level(&h),Some(8_000),
-            "starter Pokémon ignore the trainer-level usability ceiling");
-        assert_eq!(boss.min_level,300,
-            "trainer-level unlock requirement remains separate");
+        let mega=BossEntry::parse(&json!({
+            "key":"moltres","minNivelTreinador":300,
+            "entrada":{"itemId":500,"qtd":1}
+        })).unwrap();
+        let tickets=BossEntry::parse(&json!({
+            "key":"fezandipiti","minNivelTreinador":179500,
+            "entrada":{"itemId":500,"qtd":1}
+        })).unwrap();
+        assert_eq!(mega.reward.as_deref(),Some("mega"));
+        assert_eq!(mega.trio_position,Some(1));
+        assert_eq!(tickets.region.as_deref(),Some("paldea"));
+        assert_eq!(tickets.reward.as_deref(),Some("tickets"));
+        assert_eq!(tickets.trio_position,Some(2));
+        assert_eq!(tickets.fight_level(),179_500);
     }
+
+    #[test]
+    fn controller_queues_entry_until_the_ten_second_boss_gap_expires() {
+        let mut manager = manager();
+        let mut navigator = HuntNavigator::default();
+        manager.ingest(&json!({"ev":[{
+            "k":"bossMorto","key":"previous","nome":"Previous","drops":[]
+        }]}));
+        let now = Instant::now();
+        let mut view = hunt();
+        view.in_center = true;
+        manager.start("bronze", false, &view, &mut navigator, now).unwrap();
+        assert!(manager.next_action(&view, &mut navigator, now).is_none());
+        assert_eq!(manager.view.phase,"Waiting for boss cooldown");
+        assert!(matches!(
+            manager.next_action(&view, &mut navigator, now + Duration::from_secs(11)),
+            Some(GameCommand::BossEnter(key)) if key == "bronze"
+        ));
+    }
+
     #[test]
     fn farm_routes_through_center_and_restores_exact_hunt() {
         let mut m = manager();
