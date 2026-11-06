@@ -406,7 +406,7 @@ pub(super) const ATLAS_TYPES:[&str;18]=[
     "FIGHTING","POISON","GROUND","FLYING","PSYCHIC","BUG",
     "ROCK","GHOST","DRAGON","DARK","STEEL","FAIRY",
 ];
-pub(super) fn atlas_type_color(kind:&str)->Color32{
+pub(in crate::app) fn atlas_type_color(kind:&str)->Color32{
     let (r,g,b)=match kind {
         "NORMAL"=>(0xA8,0xA7,0x7A),
         "FIRE"=>(0xEE,0x81,0x30),
@@ -432,7 +432,7 @@ pub(super) fn atlas_type_color(kind:&str)->Color32{
 }
 /// Standard relative-luminance contrast rule: white/black lettering
 /// remains readable even on yellow Electric or pale Ice and Steel tiles.
-pub(super) fn atlas_type_text_color(background:Color32)->Color32{
+pub(in crate::app) fn atlas_type_text_color(background:Color32)->Color32{
     let linear=|c:u8|{
         let x=c as f32/255.0;
         if x<=0.04045{x/12.92}else{((x+0.055)/1.055).powf(2.4)}
