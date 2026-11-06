@@ -549,26 +549,6 @@ fn draw_boss_details(
                     });
                 }
             });
-            if !ready && pending_mode.is_none() {
-                let reason = if !live {
-                    tr("Game disconnected. Boss controls will become available after reconnection.").to_owned()
-                } else if !view.state_known {
-                    tr("Loading boss state…").to_owned()
-                } else if let Some((key, _)) = pending_start {
-                    format!("{}: {}", tr("Boss request in progress"), boss_name_for_key(view, key))
-                } else if view.arena.is_some() {
-                    tr("Finish the current boss fight before starting another.").to_owned()
-                } else if view.busy || view.auto {
-                    tr("Finish the current boss run before starting another.").to_owned()
-                } else if level.is_none() {
-                    tr("Trainer level is not available yet.").to_owned()
-                } else if !has_level {
-                    tr("Trainer level is below the boss requirement.").to_owned()
-                } else {
-                    tr("Not enough boss entry tokens.").to_owned()
-                };
-                ui.label(RichText::new(reason).size(10.0).color(MUTED));
-            }
         });
 }
 
@@ -669,8 +649,6 @@ fn draw_boss_status_card(
                 app.workspace.boss_leave_target[index] = None;
             }
 
-            ui.add_space(8.0);
-            let compact_actions = ui.available_width() < 340.0;
             let stopping = app.workspace.boss_stop_pending[index].is_some()
                 || view.phase.starts_with("Stopping");
             let leaving = app.workspace.boss_leave_pending[index].is_some()
@@ -679,59 +657,58 @@ fn draw_boss_status_card(
                 && view.request_key.is_some()
                 && view.arena.is_none()
                 && !view.auto;
+            let can_stop = live && view.can_stop;
             let can_leave = live && view.arena.is_some() && !leaving;
-            ui.horizontal_wrapped(|ui| {
-                let stop_label = if pending_entry {
-                    tr("Cancel request")
-                } else if compact_actions {
-                    tr("Stop & return")
-                } else {
-                    tr("Stop farm and return")
-                };
-                if stopping {
-                    ui.add_enabled(false, egui::Button::new(tr("Stopping…"))
-                        .fill(WARN.linear_multiply(0.14))
-                        .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
-                    ui.label(RichText::new(tr("Waiting for server confirmation…"))
-                        .size(10.0).color(WARN));
-                } else if ui.add_enabled(
-                    live && view.can_stop,
-                    egui::Button::new(stop_label),
-                ).on_hover_text(if pending_entry {
-                    tr("Cancel the pending boss request")
-                } else {
-                    tr("Stop farm and return")
-                }).clicked() {
-                    *action = Some(GameCommand::BossStop);
-                    app.workspace.boss_leave_confirm[index] = false;
-                    app.workspace.boss_leave_target[index] = None;
-                }
-                let leave_label = if compact_actions {
-                    tr("Leave arena")
-                } else {
-                    tr("Leave boss encounter")
-                };
-                if leaving {
-                    ui.add_enabled(false, egui::Button::new(tr("Leaving…"))
-                        .fill(WARN.linear_multiply(0.14))
-                        .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
-                    ui.label(RichText::new(tr("Returning to the saved hunt…"))
-                        .size(10.0).color(WARN));
-                } else if ui.add_enabled(
-                    can_leave,
-                    egui::Button::new(
-                        RichText::new(leave_label).color(if can_leave { WARN } else { DIM }),
-                    )
-                    .stroke(Stroke::new(1.0, if can_leave {
-                        WARN.linear_multiply(0.5)
+            if stopping || can_stop || leaving || can_leave {
+                ui.add_space(8.0);
+                let compact_actions = ui.available_width() < 340.0;
+                ui.horizontal_wrapped(|ui| {
+                    let stop_label = if pending_entry {
+                        tr("Cancel request")
+                    } else if compact_actions {
+                        tr("Stop & return")
                     } else {
-                        BORDER
-                    })),
-                ).on_hover_text(tr("Leaving an active boss encounter may forfeit its entry. Confirm?")).clicked() {
-                    app.workspace.boss_leave_confirm[index] = true;
-                    app.workspace.boss_leave_target[index] = view.arena.clone();
-                }
-            });
+                        tr("Stop farm and return")
+                    };
+                    if stopping {
+                        ui.add_enabled(false, egui::Button::new(tr("Stopping…"))
+                            .fill(WARN.linear_multiply(0.14))
+                            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+                        ui.label(RichText::new(tr("Waiting for server confirmation…"))
+                            .size(10.0).color(WARN));
+                    } else if can_stop && ui.button(stop_label)
+                        .on_hover_text(if pending_entry {
+                            tr("Cancel the pending boss request")
+                        } else {
+                            tr("Stop farm and return")
+                        }).clicked() {
+                        *action = Some(GameCommand::BossStop);
+                        app.workspace.boss_leave_confirm[index] = false;
+                        app.workspace.boss_leave_target[index] = None;
+                    }
+
+                    let leave_label = if compact_actions {
+                        tr("Leave arena")
+                    } else {
+                        tr("Leave boss encounter")
+                    };
+                    if leaving {
+                        ui.add_enabled(false, egui::Button::new(tr("Leaving…"))
+                            .fill(WARN.linear_multiply(0.14))
+                            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.7))));
+                        ui.label(RichText::new(tr("Returning to the saved hunt…"))
+                            .size(10.0).color(WARN));
+                    } else if can_leave && ui.add(
+                        egui::Button::new(RichText::new(leave_label).color(WARN))
+                            .stroke(Stroke::new(1.0, WARN.linear_multiply(0.5))),
+                    ).on_hover_text(
+                        tr("Leaving an active boss encounter may forfeit its entry. Confirm?"),
+                    ).clicked() {
+                        app.workspace.boss_leave_confirm[index] = true;
+                        app.workspace.boss_leave_target[index] = view.arena.clone();
+                    }
+                });
+            }
             if app.workspace.boss_leave_confirm[index] {
                 ui.add_space(7.0);
                 egui::Frame::new()
@@ -1069,37 +1046,56 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 );
             }
             ui.add_space(10.0);
-            // Keep status and history beside each other without letting the
-            // horizontal scroller consume the rest of the page vertically.
-            // Measure the row before entering the horizontal ScrollArea:
-            // available_width() inside a horizontal scroller is intentionally
-            // unbounded and must not be used to size these two columns.
-            let summary_width = ui.available_width().max(720.0);
-            egui::ScrollArea::horizontal()
-                .id_salt(("boss-summary-horizontal", index))
-                .max_height(260.0)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.set_width(summary_width);
-                    ui.columns(2, |cols| {
+            // Keep status and history prominent without forcing a horizontal
+            // canvas. Status needs less width; History gets the remaining room.
+            let summary_width = ui.available_width();
+            if summary_width >= 640.0 {
+                let gap = ui.spacing().item_spacing.x;
+                let status_width = (summary_width * 0.40).clamp(260.0, 360.0);
+                let history_width = (summary_width - status_width - gap).max(260.0);
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(status_width);
                         egui::ScrollArea::vertical()
                             .id_salt(("boss-status-top", index))
-                            .max_height(240.0)
+                            .max_height(210.0)
                             .auto_shrink([false, true])
-                            .show(&mut cols[0], |ui| {
+                            .show(ui, |ui| {
                                 draw_boss_status_card(
                                     app, ui, index, &view, &hunt, live, &mut action,
                                 );
                             });
+                    });
+                    ui.vertical(|ui| {
+                        ui.set_width(history_width);
                         egui::ScrollArea::vertical()
                             .id_salt(("boss-history-top", index))
-                            .max_height(240.0)
+                            .max_height(210.0)
                             .auto_shrink([false, true])
-                            .show(&mut cols[1], |ui| {
+                            .show(ui, |ui| {
                                 draw_boss_history_card(app, ui, index, &view, now);
                             });
                     });
                 });
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt(("boss-status-top", index))
+                    .max_height(190.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        draw_boss_status_card(
+                            app, ui, index, &view, &hunt, live, &mut action,
+                        );
+                    });
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_salt(("boss-history-top", index))
+                    .max_height(190.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        draw_boss_history_card(app, ui, index, &view, now);
+                    });
+            }
             ui.add_space(10.0);
 
             // Hunt Atlas-style master/detail selection: boss cards on the
@@ -1151,11 +1147,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(list_width);
-                            ui.label(
-                                RichText::new(tr("BOSSES"))
-                                    .size(10.0).strong().color(DIM),
-                            );
-                            ui.add_space(5.0);
                             draw_boss_catalog(
                                 ui, &view, &hunt, live,
                                 pending_start.as_ref().map(|(key, _)| key.as_str()),
@@ -1164,11 +1155,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         });
                         ui.vertical(|ui| {
                             ui.set_width(details_width);
-                            ui.label(
-                                RichText::new(tr("BOSS DETAILS"))
-                                    .size(10.0).strong().color(DIM),
-                            );
-                            ui.add_space(5.0);
                             if let Some(entry) = view.catalog.iter()
                                 .find(|entry| entry.key == *selected) {
                                 draw_boss_details(
@@ -1181,22 +1167,12 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         });
                     });
                 } else {
-                    ui.label(
-                        RichText::new(tr("BOSSES"))
-                            .size(10.0).strong().color(DIM),
-                    );
-                    ui.add_space(5.0);
                     draw_boss_catalog(
                         ui, &view, &hunt, live,
                         pending_start.as_ref().map(|(key, _)| key.as_str()),
                         selected,
                     );
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(tr("BOSS DETAILS"))
-                            .size(10.0).strong().color(DIM),
-                    );
-                    ui.add_space(5.0);
+                    ui.add_space(8.0);
                     if let Some(entry) = view.catalog.iter()
                         .find(|entry| entry.key == *selected) {
                         draw_boss_details(
