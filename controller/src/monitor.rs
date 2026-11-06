@@ -2181,10 +2181,15 @@ fn probe_runtime_details(
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
 
-    if event_trainer > 0.0 || event_pokemon > 0.0 {
+    if event_trainer > 0.0 {
         xp_sources.push(format!(
-            "Event +{}% trainer / +{}% Pokémon XP",
-            trim_pct(event_trainer as f32),
+            "Event +{}% trainer XP",
+            trim_pct(event_trainer as f32)
+        ));
+    }
+    if event_pokemon > 0.0 {
+        xp_sources.push(format!(
+            "Event +{}% Pokémon XP",
             trim_pct(event_pokemon as f32)
         ));
     }
@@ -2196,6 +2201,11 @@ fn probe_runtime_details(
 
     if guild_bonus > 0.0 {
         xp_sources.push(format!("Guild +{}% XP", trim_pct(guild_bonus as f32)));
+    }
+    let guild_boost_until=state.get("guild").and_then(|guild|guild.get("boostAte"))
+        .and_then(Value::as_u64).unwrap_or(0);
+    if guild_boost_until>stream_bonuses.server_now_ms {
+        xp_sources.push("Guild +10%".to_string());
     }
 
     if state
