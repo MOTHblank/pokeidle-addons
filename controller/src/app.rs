@@ -509,12 +509,25 @@ impl GameSlot {
             health.autocatch_rate = format!("{} throws · {} captures",
                 state.native_throws, state.captures);
             health.autocatch_restock = state.native_restock.phase.clone();
-            health.xp_bonuses = vec![
-                format!("Twitch +{:.0}%", view.bonuses.twitch_pct),
-                format!("Guild +{:.0}%", view.bonuses.guild_pct),
-                format!("Trainer event +{:.0}%", view.bonuses.trainer_event_pct),
-                format!("Pokémon event +{:.0}%", view.bonuses.pokemon_event_pct),
-            ];
+            health.xp_bonuses.clear();
+            if view.bonuses.twitch_pct > 0.0 {
+                health.xp_bonuses.push(format!("Twitch +{:.0}% XP", view.bonuses.twitch_pct));
+            }
+            if view.bonuses.kick_xp_pct > 0.0 {
+                health.xp_bonuses.push(format!("Kick +{:.0}% XP", view.bonuses.kick_xp_pct));
+            }
+            if view.bonuses.guild_pct > 0.0 {
+                health.xp_bonuses.push(format!("Guild +{:.0}%", view.bonuses.guild_pct));
+            }
+            if view.bonuses.guild_boost_active {
+                health.xp_bonuses.push("Guild +10%".into());
+            }
+            if view.bonuses.trainer_event_pct > 0.0 {
+                health.xp_bonuses.push(format!("Event +{:.0}% trainer XP", view.bonuses.trainer_event_pct));
+            }
+            if view.bonuses.pokemon_event_pct > 0.0 {
+                health.xp_bonuses.push(format!("Event +{:.0}% Pokémon XP", view.bonuses.pokemon_event_pct));
+            }
             // Existing widgets consume hunt_atlas, but never claim a
             // speculative rate is a measured one.
             health.hunt_atlas = json!({
@@ -534,15 +547,14 @@ impl GameSlot {
             health.autocatch_captures = state.captures.min(u32::MAX as u64) as u32;
             health.twitch_linked = state.twitch_linked;
             health.twitch_login = state.twitch_login.clone().unwrap_or_default();
-            health.twitch_bonus_pct = state.twitch_bonus_pct;
-            health.twitch_xp_until = state.twitch_xp_until;
-            health.twitch_capture_until = state.twitch_capture_until;
-            health.twitch_shiny_until = state.twitch_shiny_until;
-            health.twitch_server_now_ms = view.server_now.map(|value|
-                if (1_000_000_000..10_000_000_000).contains(&value) {
-                    value.saturating_mul(1_000)
-                } else { value }
-            ).unwrap_or(0);
+            health.stream_bonuses = state.stream_bonuses;
+            if health.stream_bonuses.server_now_ms == 0 {
+                health.stream_bonuses.server_now_ms = view.server_now.map(|value|
+                    if (1_000_000_000..10_000_000_000).contains(&value) {
+                        value.saturating_mul(1_000)
+                    } else { value }
+                ).unwrap_or(0);
+            }
             health.game_ready = state.phase == "Online";
             health.logged_in = state.phase == "Online";
             health.hunt_slug = view.hunt_slug.clone().or(state.hunt_slug.clone()).unwrap_or_default();
