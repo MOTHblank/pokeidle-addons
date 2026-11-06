@@ -85,6 +85,56 @@ fn boss_name_for_key<'a>(view: &'a BossView, key: &'a str) -> &'a str {
         .unwrap_or(key)
 }
 
+fn boss_region_name(region: &str) -> String {
+    match region {
+        "kanto" => "Kanto".to_owned(),
+        "johto" => "Johto".to_owned(),
+        "hoenn" => "Hoenn".to_owned(),
+        "sinnoh" => "Sinnoh".to_owned(),
+        "unova" => "Unova".to_owned(),
+        "kalos" => "Kalos".to_owned(),
+        "alola" => "Alola".to_owned(),
+        "galar" => "Galar".to_owned(),
+        "paldea" => "Paldea".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+fn boss_trio_label(entry: &BossEntry) -> Option<String> {
+    let trio = entry.trio.as_deref()?;
+    Some(match trio {
+        "Legendary Birds Trio" => tr("Legendary Birds Trio").to_owned(),
+        "Legendary Beasts Trio" => tr("Legendary Beasts Trio").to_owned(),
+        "Weather Trio" => tr("Weather Trio").to_owned(),
+        "Creation Trio" => tr("Creation Trio").to_owned(),
+        "\"Tao\" Trio" => tr("\"Tao\" Trio").to_owned(),
+        "Aura Trio" => tr("Aura Trio").to_owned(),
+        "Light Trio" => tr("Light Trio").to_owned(),
+        "Combat Trio" => tr("Combat Trio").to_owned(),
+        "Loyal Trio" => tr("Loyal Trio").to_owned(),
+        other => other.to_owned(),
+    })
+}
+
+fn boss_reward_label(entry: &BossEntry) -> Option<String> {
+    let reward = entry.reward.as_deref()?;
+    Some(match reward {
+        "tm" => tr("Reward: Z-Move and AoE TM Fragments").to_owned(),
+        "mega" => tr("Reward: Mega Stone and Shiny Mega Stone Fragments").to_owned(),
+        "tickets" => tr("Reward: Mystic Ticket and Safari Ticket").to_owned(),
+        other => other.to_owned(),
+    })
+}
+
+fn boss_region_heading(entry: &BossEntry) -> Option<String> {
+    let region = boss_region_name(entry.region.as_deref()?);
+    let trio = boss_trio_label(entry)?;
+    Some(format!(
+        "{} · {} · {} {}",
+        region, trio, tr("Boss combat level"), entry.fight_level(),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BossCardState {
     Offline,
@@ -163,6 +213,9 @@ fn boss_status_label(view: &BossView, hunt: &HuntView, live: bool) -> &'static s
     if view.phase.contains("cancel") {
         return tr("Cancelling boss request");
     }
+    if view.phase.starts_with("Waiting for boss cooldown") {
+        return tr("Waiting for next boss…");
+    }
     if view.auto {
         return tr("Boss farm active");
     }
@@ -195,8 +248,7 @@ fn draw_boss_selector(
 ) -> bool {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
-    let fight_level = entry.fight_level(hunt)
-        .map(|level| level.to_string()).unwrap_or_else(|| "—".into());
+    let fight_level = entry.fight_level().to_string();
     let state = boss_card_state(entry, view, hunt, live, optimistic_request);
     let (availability, availability_color) = match state {
         BossCardState::Offline => (tr("Offline").to_owned(), DIM),
@@ -239,6 +291,9 @@ fn draw_boss_selector(
                             .size(9.0)
                             .color(MUTED),
                     );
+                    if let Some(reward) = boss_reward_label(entry) {
+                        ui.label(RichText::new(reward).size(9.0).color(ACCENT));
+                    }
                     ui.label(
                         RichText::new(format!(
                             "{} {} · {} {} × {}",
@@ -270,6 +325,35 @@ fn draw_boss_selector(
     ).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
     ui.add_space(5.0);
     clicked
+}
+
+fn draw_boss_catalog(
+    ui: &mut egui::Ui,
+    view: &BossView,
+    hunt: &HuntView,
+    live: bool,
+    optimistic_request: Option<&str>,
+    selected: &mut String,
+) {
+    let mut last_region = None::<String>;
+    for entry in &view.catalog {
+        if entry.region != last_region {
+            if last_region.is_some() {
+                ui.add_space(7.0);
+            }
+            if let Some(heading) = boss_region_heading(entry) {
+                ui.label(RichText::new(heading).size(10.0).strong().color(ACCENT));
+                ui.add_space(4.0);
+            }
+            last_region = entry.region.clone();
+        }
+        if draw_boss_selector(
+            ui, entry, selected.as_str() == entry.key,
+            view, hunt, live, optimistic_request,
+        ) {
+            *selected = entry.key.clone();
+        }
+    }
 }
 
 fn draw_boss_weaknesses(
@@ -348,13 +432,16 @@ fn draw_boss_details(
             });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                if let Some(fight_level) = entry.fight_level(hunt) {
-                    resource_chip(ui, &format!("{}: {}", tr("Boss combat level"), fight_level));
-                }
+                resource_chip(ui, &format!(
+                    "{}: {}", tr("Boss combat level"), entry.fight_level(),
+                ));
                 resource_chip(ui, &format!(
                     "{}: {} × {}", tr("Entry"), entry.tokens_per_entry, entry.token_name,
                 ));
                 resource_chip(ui, &format!("{}: {}", tr("Possible entries"), attempts));
+                if let Some(reward) = boss_reward_label(entry) {
+                    resource_chip(ui, &reward);
+                }
                 if !has_level {
                     let current = level.map(|value| value.to_string()).unwrap_or_else(|| "—".into());
                     resource_chip(ui, &format!(
@@ -382,7 +469,14 @@ fn draw_boss_details(
             ui.add_space(7.0);
             ui.label(
                 RichText::new(tr(
-                    "Boss level follows your strongest eligible team Pokémon, with the unlock level as the minimum."
+                    "Boss level is fixed for its region; stronger Pokémon do not raise it. Team strength still affects the boss's damage penalty."
+                ))
+                .size(10.0)
+                .color(MUTED),
+            );
+            ui.label(
+                RichText::new(tr(
+                    "The first fight starts immediately. The server waits 10 seconds between boss fights, including auto-repeat."
                 ))
                 .size(10.0)
                 .color(MUTED),
@@ -1080,15 +1174,11 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     .size(10.0).strong().color(DIM),
                             );
                             ui.add_space(5.0);
-                            for entry in &view.catalog {
-                                if draw_boss_selector(
-                                    ui, entry, *selected == entry.key,
-                                    &view, &hunt, live,
-                                    pending_start.as_ref().map(|(key, _)| key.as_str()),
-                                ) {
-                                    *selected = entry.key.clone();
-                                }
-                            }
+                            draw_boss_catalog(
+                                ui, &view, &hunt, live,
+                                pending_start.as_ref().map(|(key, _)| key.as_str()),
+                                selected,
+                            );
                         });
                         ui.vertical(|ui| {
                             ui.set_width(details_width);
@@ -1114,15 +1204,11 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             .size(10.0).strong().color(DIM),
                     );
                     ui.add_space(5.0);
-                    for entry in &view.catalog {
-                        if draw_boss_selector(
-                            ui, entry, *selected == entry.key,
-                            &view, &hunt, live,
-                            pending_start.as_ref().map(|(key, _)| key.as_str()),
-                        ) {
-                            *selected = entry.key.clone();
-                        }
-                    }
+                    draw_boss_catalog(
+                        ui, &view, &hunt, live,
+                        pending_start.as_ref().map(|(key, _)| key.as_str()),
+                        selected,
+                    );
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(tr("BOSS DETAILS"))
