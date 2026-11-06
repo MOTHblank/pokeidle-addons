@@ -170,6 +170,38 @@ pub fn open_twitch_stream(config: &Config, login: &str) -> Result<(), String> {
         .map_err(format_spawn_error)
 }
 
+/// Open Twitch's device activation page in this account's ordinary Firefox
+/// profile, never in the user's unrelated default browser.
+pub fn open_twitch_activation(config: &Config) -> Result<(), String> {
+    migrate_legacy_profile(config)?;
+    if !config.profile_dir.is_dir() {
+        return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
+    }
+
+    let mut command = twitch_activation_command(config);
+    logging::info(&format!(
+        "{}: opening Twitch activation in account Firefox profile",
+        config.profile.label()
+    ));
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(format_spawn_error)
+}
+
+fn twitch_activation_command(config: &Config) -> Command {
+    let mut command = Command::new(&config.firefox_executable);
+    command
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-tab")
+        .arg("https://www.twitch.tv/activate")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
 fn twitch_stream_command(config: &Config, login: &str) -> Result<Command, String> {
     let login = moth_twitch::normalize_login(login)
         .ok_or_else(|| "Invalid Twitch channel".to_owned())?;
@@ -826,6 +858,24 @@ mod unmonitored_login_tests {
         assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
         assert!(args.contains(&"--new-tab".to_owned()));
         assert!(args.contains(&"https://www.twitch.tv/some_channel".to_owned()));
+        assert!(!args.iter().any(|arg| {
+            arg.as_str() == "--no-remote" ||
+            arg.contains("remote-debugging") ||
+            arg.contains("marionette") ||
+            arg.contains("headless")
+        }));
+    }
+
+    #[test]
+    fn twitch_activation_uses_account_profile_without_automation_flags() {
+        let config = config();
+        let command = twitch_activation_command(&config);
+        let args: Vec<_> = command.get_args()
+            .map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--profile".to_owned()));
+        assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
+        assert!(args.contains(&"--new-tab".to_owned()));
+        assert!(args.contains(&"https://www.twitch.tv/activate".to_owned()));
         assert!(!args.iter().any(|arg| {
             arg.as_str() == "--no-remote" ||
             arg.contains("remote-debugging") ||

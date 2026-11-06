@@ -6,7 +6,6 @@ use crate::config::{Config, GameProfile};
 use crate::{firefox, native_auth};
 use reqwest::blocking::Client;
 use serde_json::Value;
-use std::process::{Command, Stdio};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr;
@@ -429,23 +428,6 @@ fn add_reference_device_headers(
         .header("X-Device-Id",device_id)
 }
 
-fn open_reference_activation_page() {
-    let mut command=if cfg!(windows) {
-        Command::new("explorer.exe")
-    } else if cfg!(target_os="macos") {
-        Command::new("open")
-    } else {
-        Command::new("xdg-open")
-    };
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let _=command.arg("https://www.twitch.tv/activate")
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-}
-
 fn sleep_cancelable(cancelled:&AtomicBool,duration:Duration)->bool {
     let deadline=std::time::Instant::now()+duration;
     while std::time::Instant::now()<deadline {
@@ -495,7 +477,8 @@ fn login_reference_device(
         return Err("Twitch login cancelled".into());
     }
     set_activation_code(profile,Some(user_code));
-    open_reference_activation_page();
+    let config=twitch_config(profile)?;
+    firefox::open_twitch_activation(&config)?;
 
     let started=std::time::Instant::now();
     while started.elapsed()<Duration::from_secs(expires) {
