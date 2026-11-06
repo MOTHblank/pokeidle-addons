@@ -194,6 +194,14 @@ fn updates(app: &mut ControllerApp, ui: &mut egui::Ui) {
         "Moth can check GitHub and download verified updates without opening a browser.", |ui| {
             ui.checkbox(&mut next.check_updates_on_start, tr("Check for new versions on startup"));
         });
+    ui.add_space(10.0);
+    card(ui, "Anonymous usage statistics",
+        "Helps count active Moth installations and adoption of new versions.", |ui| {
+            ui.checkbox(&mut next.anonymous_usage_stats,
+                tr("Send anonymous daily usage statistics"));
+            description(ui, "At most once per day: random installation ID, app version and operating system. No player accounts, gameplay, tokens or logs.");
+            description(ui, "You can turn this off at any time. Tracking requires a configured statistics service.");
+        });
     if next != app.preferences { app.save_app_preferences(next); }
 
     ui.add_space(11.0);
