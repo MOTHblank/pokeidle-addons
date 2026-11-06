@@ -509,6 +509,7 @@ pub fn persist_and_apply_capture_settings(
 mod platform {
     use super::*;
     use std::{ffi::c_void, fs, ptr, slice};
+    use std::os::windows::ffi::OsStrExt;
 
     #[repr(C)]
     struct Blob { size: u32, data: *mut u8 }
@@ -524,7 +525,10 @@ mod platform {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn LocalFree(memory: *mut c_void) -> *mut c_void;
+        fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
     }
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
 
     fn crypt(bytes: &[u8], encrypt: bool) -> Result<Vec<u8>, String> {
         if bytes.len() > MAX_BOOTSTRAP_BYTES + 4096 {
@@ -586,12 +590,30 @@ mod platform {
             };
             let prepared=output.write_all(bytes).and_then(|_|output.sync_all());
             drop(output);
-            // On Windows, same-volume rename replaces the old destination.
-            // If it fails (e.g. access denied), the original remains intact.
-            let result=prepared.and_then(|_|fs::rename(&pending,path));
-            if result.is_err() {
+            if prepared.is_err() {
                 let _=fs::remove_file(&pending);
                 return Err("Could not atomically save protected credential".into());
+            }
+
+            // std::fs::rename does not replace an existing destination on
+            // Windows. Credential refreshes therefore used to leave the first
+            // DPAPI blob permanently in place. MoveFileExW gives us an atomic
+            // same-volume replacement while preserving the old credential if
+            // the replacement itself fails.
+            let mut source:Vec<u16>=pending.as_os_str().encode_wide().collect();
+            source.push(0);
+            let mut destination:Vec<u16>=path.as_os_str().encode_wide().collect();
+            destination.push(0);
+            let replaced=unsafe {
+                MoveFileExW(
+                    source.as_ptr(),
+                    destination.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if replaced==0 {
+                let _=fs::remove_file(&pending);
+                return Err("Could not atomically replace protected credential".into());
             }
             return Ok(());
         }
