@@ -85,8 +85,8 @@ fn channel_row(ui: &mut egui::Ui, channel: &moth_twitch::StreamerState,
                         .size(11.0).color(GOOD));
                 }
                 open = ui.small_button("↗").on_hover_text(label(br,
-                    "Open Twitch channel in this account's Firefox profile",
-                    "Abrir canal Twitch no perfil Firefox desta conta")).clicked();
+                    "Open in this account's Firefox profile and follow the channel if needed",
+                    "Abrir no perfil Firefox desta conta e seguir o canal se necessário")).clicked();
             });
             if let Some(error) = channel.error.as_ref() {
                 ui.label(RichText::new(error).size(10.0).color(WARN));
