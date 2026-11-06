@@ -1659,6 +1659,33 @@ mod tests {
         assert!(intel.view.bonuses.sacrifice_xp_active);
     }
     #[test]
+    fn live_atlas_modifiers_parse_authoritative_state_and_expire() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        let clock=1_800_000_000_000u64;
+        intel.ingest_value(&json!({"t":"welcome","estado":{
+            "servidorAgora":clock,
+            "tipoSazonal":"fire",
+            "ginasiosPodio":{"FIRE":2,"FLYING":3},
+            "bonusXp":{"tr":1.32,"pk":1.21,"partes":[
+                {"id":"evento","tr":1.2,"pk":1.1},
+                {"id":"raid","tr":1.1,"pk":1.1,"ate":clock+5000,"farmPct":2}
+            ]},
+            "twitch":{"pct":15,"bonus":{"captura":clock+5000,"shiny":clock+5000}},
+            "kick":{"pct":15,"bonus":{"captura":clock+5000}}
+        }}),now);
+        assert_eq!(intel.view.seasonal_type.as_deref(),Some("FIRE"));
+        assert_eq!(intel.view.gym_podium.get("FIRE"),Some(&2));
+        assert!((intel.view.bonuses.authoritative_trainer_xp_multiplier.unwrap()-1.32).abs()<1e-10);
+        assert!((intel.view.bonuses.live_capture_multiplier-1.15*1.15).abs()<1e-10);
+        assert!((intel.view.bonuses.live_shiny_multiplier-1.15).abs()<1e-10);
+        assert_eq!(intel.view.bonuses.raid_farm_pct,2.0);
+        intel.refresh_timed_xp_bonuses(now+Duration::from_secs(6));
+        assert!((intel.view.bonuses.authoritative_trainer_xp_multiplier.unwrap()-1.2).abs()<1e-10);
+        assert_eq!(intel.view.bonuses.live_capture_multiplier,1.0);
+        assert_eq!(intel.view.bonuses.raid_farm_pct,0.0);
+    }
+    #[test]
     fn partial_state_does_not_cancel_active_shop_boost() {
         let mut intel=HuntIntel::new();
         let now=Instant::now();
