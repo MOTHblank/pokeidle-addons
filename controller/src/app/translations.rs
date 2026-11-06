@@ -162,8 +162,9 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Entry" => "Entrada",
         "Inventory" => "Inventário",
         "Required level" => "Nível necessário",
-        "Strongest eligible team Pokémon" => "Pokémon elegível mais forte da equipe",
         "Boss combat level" => "Nível de combate do boss",
+        "Boss damage" => "Dano do boss",
+        "Next fight" => "Próxima luta",
         "Legendary Birds Trio" => "Trio Aves Lendárias",
         "Legendary Beasts Trio" => "Trio Bestas Lendárias",
         "Weather Trio" => "Trio Climático",
@@ -197,10 +198,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Level unavailable" => "Nível indisponível",
         "Requested" => "Solicitado",
         "Not enough tokens" => "Tokens insuficientes",
-        "Boss level is fixed for its region; stronger Pokémon do not raise it. Team strength still affects the boss's damage penalty." =>
-            "O nível do boss é fixo para a região; Pokémon mais fortes não aumentam esse nível. A força da equipe ainda afeta a penalidade de dano do boss.",
-        "The first fight starts immediately. The server waits 10 seconds between boss fights, including auto-repeat." =>
-            "A primeira luta começa imediatamente. O servidor espera 10 segundos entre lutas de boss, inclusive na repetição automática.",
         "Boss request in progress" => "Solicitação de boss em andamento",
         "Finish the current boss fight before starting another." =>
             "Conclua a batalha de boss atual antes de iniciar outra.",
