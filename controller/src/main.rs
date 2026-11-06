@@ -39,6 +39,7 @@ mod diagnostics_threads;
 mod diagnostics_recording;
 mod update;
 mod preferences;
+mod anonymous_usage;
 mod settings_backup;
 mod startup;
 mod alerts;
@@ -99,6 +100,7 @@ fn main() {
             "Rust panic in thread {name} at {location} (payload redacted)"
         ));
     }));
+    anonymous_usage::start();
     if let Err(error) = app::run(instance) {
         crate::logging::error(&format!("Controller UI exited with error: {error}"));
         eprintln!("moth-controller: {error}");
