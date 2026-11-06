@@ -1339,6 +1339,11 @@ impl ControllerApp {
     // Native game recovery signals wake the control-plane pump directly.
     // Display refresh throttling never blocks an expired-login transition.
     fn adopt_native_session(&mut self, index: usize, session: NativeSession) {
+        // A successfully adopted native session is authoritative proof that
+        // browser authentication is not currently required. Clear any stale
+        // fallback bit here centrally, including the path where native auth
+        // succeeded but Firefox cleanup failed and was closed manually later.
+        self.runtimes[index].session.require_browser_login = false;
         // Adopted sessions have independent settings lifetimes even when the
         // user reauthenticates without explicitly stopping the old session.
         self.invalidate_capture_session(index);
