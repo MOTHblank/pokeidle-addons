@@ -268,18 +268,18 @@ fn draw_boss_selector(
     let fight_level = entry.fight_level().to_string();
     let state = boss_card_state(entry, view, hunt, live, optimistic_request);
     let (availability, availability_color) = match state {
-        BossCardState::Offline => (Some(tr("Offline").to_owned()), DIM),
-        BossCardState::Loading => (Some(tr("Loading…").to_owned()), MUTED),
         BossCardState::Requested => (Some(tr("Requested").to_owned()), WARN),
         BossCardState::Fighting => (Some(tr("Fighting").to_owned()), GOOD),
         BossCardState::Farming => (Some(tr("Farming").to_owned()), GOOD),
-        BossCardState::OtherBossActive => (Some(tr("Another boss active").to_owned()), MUTED),
-        BossCardState::OperationBusy => (Some(boss_status_label(view, hunt, live).to_owned()), MUTED),
-        BossCardState::LevelUnavailable => (Some(tr("Level unavailable").to_owned()), DIM),
         BossCardState::LevelRequired =>
             (Some(format!("{} {}", tr("Required level"), entry.min_level)), WARN),
-        BossCardState::TokensMissing => (Some(tr("Not enough tokens").to_owned()), WARN),
-        BossCardState::Ready => (None, GOOD),
+        BossCardState::Offline
+        | BossCardState::Loading
+        | BossCardState::OtherBossActive
+        | BossCardState::OperationBusy
+        | BossCardState::LevelUnavailable
+        | BossCardState::TokensMissing
+        | BossCardState::Ready => (None, MUTED),
     };
     let emphasized = matches!(
         state,
