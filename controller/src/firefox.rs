@@ -158,16 +158,53 @@ pub fn open_twitch_stream(config: &Config, login: &str) -> Result<(), String> {
     if !config.profile_dir.is_dir() {
         return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
     }
+    let login = moth_twitch::normalize_login(login)
+        .ok_or_else(|| "Invalid Twitch channel".to_owned())?;
 
-    let mut command = twitch_stream_command(config, login)?;
+    // A new stream browser gets a short-lived BiDi endpoint so Moth can press
+    // Twitch's real Follow control. If this profile is already open, Firefox
+    // will route the new tab to it; the follow worker will attach only when
+    // that instance already exposes this profile's dedicated port.
+    if find_profile_process(config)?.is_none() {
+        ensure_debug_port_available(config.remote_debug_port)?;
+    }
+
+    let mut command = twitch_stream_command(config, &login)?;
     logging::info(&format!(
         "{}: opening Twitch channel in account Firefox profile",
         config.profile.label()
     ));
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(format_spawn_error)
+    command.spawn().map_err(format_spawn_error)?;
+
+    let port = config.remote_debug_port;
+    let account = config.profile.label().to_owned();
+    let follow_login = login.clone();
+    if let Err(error) = thread::Builder::new()
+        .name(format!("moth-twitch-follow-{}", config.profile.name()))
+        .spawn(move || {
+            match crate::monitor::ensure_twitch_follow(
+                port,
+                &follow_login,
+                Duration::from_secs(45),
+            ) {
+                Ok(true) => logging::info(&format!(
+                    "{account}: followed Twitch channel {follow_login}"
+                )),
+                Ok(false) => logging::info(&format!(
+                    "{account}: Twitch channel {follow_login} already followed"
+                )),
+                Err(error) => logging::warn(&format!(
+                    "{account}: automatic Twitch follow for {follow_login} unavailable: {error}"
+                )),
+            }
+        })
+    {
+        logging::warn(&format!(
+            "{}: could not start automatic Twitch follow worker: {error}",
+            config.profile.label()
+        ));
+    }
+    Ok(())
 }
 
 /// Open Twitch's device activation page in this account's ordinary Firefox
@@ -207,6 +244,7 @@ fn twitch_stream_command(config: &Config, login: &str) -> Result<Command, String
         .ok_or_else(|| "Invalid Twitch channel".to_owned())?;
     let mut command = Command::new(&config.firefox_executable);
     command
+        .arg(format!("--remote-debugging-port={}", config.remote_debug_port))
         .arg("--profile")
         .arg(&config.profile_dir)
         .arg("--new-tab")
@@ -849,7 +887,7 @@ mod unmonitored_login_tests {
     }
 
     #[test]
-    fn twitch_stream_uses_account_profile_without_automation_flags() {
+    fn twitch_stream_uses_account_profile_with_short_lived_follow_bidi() {
         let config = config();
         let command = twitch_stream_command(&config, "Some_Channel").unwrap();
         let args: Vec<_> = command.get_args()
@@ -858,9 +896,11 @@ mod unmonitored_login_tests {
         assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
         assert!(args.contains(&"--new-tab".to_owned()));
         assert!(args.contains(&"https://www.twitch.tv/some_channel".to_owned()));
+        assert!(args.contains(&format!(
+            "--remote-debugging-port={}", config.remote_debug_port
+        )));
         assert!(!args.iter().any(|arg| {
             arg.as_str() == "--no-remote" ||
-            arg.contains("remote-debugging") ||
             arg.contains("marionette") ||
             arg.contains("headless")
         }));
