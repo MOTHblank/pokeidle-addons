@@ -1427,6 +1427,7 @@ fn probe_twitch_follow_control(
         if (!marker) return JSON.stringify({state:'waiting'});
         const button = marker.matches('button') ? marker : marker.closest('button');
         if (!button || button.disabled) return JSON.stringify({state:'waiting'});
+        button.scrollIntoView({block:'center', inline:'center'});
         const rect = button.getBoundingClientRect();
         const style = getComputedStyle(button);
         if (rect.width < 2 || rect.height < 2
