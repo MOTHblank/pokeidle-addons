@@ -656,10 +656,12 @@ fn draw_boss_status_card(
             if let Some(original) = view.original_hunt.as_deref() {
                 detail_stat_line(ui, tr("Return destination"), original);
             }
-            if let Some(seconds) = boss_cooldown_remaining(view, Instant::now()) {
-                let remaining = format!("{}s", seconds);
-                detail_stat_line(ui, tr("Next fight"), &remaining);
-                ui.ctx().request_repaint_after(Duration::from_millis(250));
+            if view.auto || view.request_key.is_some() {
+                if let Some(seconds) = boss_cooldown_remaining(view, Instant::now()) {
+                    let remaining = format!("{}s", seconds);
+                    detail_stat_line(ui, tr("Next fight"), &remaining);
+                    ui.ctx().request_repaint_after(Duration::from_millis(250));
+                }
             }
             if let Some(warning) = view.warning.as_deref() {
                 ui.label(RichText::new(tr(warning)).size(10.0).color(WARN));
