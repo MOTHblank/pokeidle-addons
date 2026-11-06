@@ -356,6 +356,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "XP BONUS SOURCES" => "FONTES DE BÔNUS DE XP",
         "Stream bonus data unavailable until game data loads" => "Dados dos bônus de stream indisponíveis até os dados do jogo carregarem",
         "No active stream bonus" => "Nenhum bônus de stream ativo",
+        "No live Twitch/Kick capture or shiny bonus is active." => "Nenhum bônus ativo de captura ou shiny do Twitch/Kick.",
         "No active XP bonus detected" => "Nenhum bônus de XP ativo detectado",
         "XP bonus data unavailable" => "Dados de bônus de XP indisponíveis",
         "ACTIVE" => "ATIVO",
