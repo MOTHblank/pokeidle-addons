@@ -346,8 +346,8 @@ fn replace_cached_game_token(
     {
         return Err("PokéIdle returned an invalid renewed session token".into());
     }
-    let hello=cached.get_mut("bootstrap")
-        .and_then(|bootstrap|bootstrap.get_mut("hello"))
+    let hello=cached.get("bootstrap")
+        .and_then(|bootstrap|bootstrap.get("hello"))
         .and_then(Value::as_str)
         .ok_or_else(||"Protected native login is missing its game hello".to_owned())?;
     let mut frame:Value=serde_json::from_str(hello)
