@@ -464,7 +464,7 @@ pub fn estimate_with_aoe(
         view.seasonal_type.as_deref(),gym_damage_multiplier(view,mon,player))?;
     let kills_h=pace.kills_h;
     let loot_pct=(if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0})
-        + view.bonuses.extra_loot_pct;
+        + view.bonuses.extra_loot_pct + view.bonuses.raid_farm_pct;
     let combat_gold_h=gross_gold_per_kill(hunt.level,loot_pct)*kills_h;
     Some(Forecast {
         kills_h,
