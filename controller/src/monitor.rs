@@ -1316,6 +1316,292 @@ pub fn wait_for_twitch_auth_token(
         "Alternative Twitch login timed out before Firefox exposed a new auth token".into()))
 }
 
+
+#[derive(Debug, PartialEq)]
+enum TwitchFollowProbe {
+    Waiting,
+    AlreadyFollowing,
+    Ready { x: i64, y: i64 },
+}
+
+fn twitch_channel_url_matches(url: &str, login: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let rest = lower.strip_prefix("https://www.twitch.tv/")
+        .or_else(|| lower.strip_prefix("https://twitch.tv/"));
+    rest.and_then(|rest| rest.split(['/', '?', '#']).next())
+        .is_some_and(|channel| channel == login)
+}
+
+fn open_utility_session(port: u16) -> Result<BrowserSession, String> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let stream = TcpStream::connect_timeout(&address, BIDI_IO_TIMEOUT)
+        .map_err(|error| format!("BiDi TCP connection failed: {error}"))?;
+    stream.set_read_timeout(Some(BIDI_IO_TIMEOUT))
+        .map_err(|error| format!("BiDi read timeout setup failed: {error}"))?;
+    stream.set_write_timeout(Some(BIDI_IO_TIMEOUT))
+        .map_err(|error| format!("BiDi write timeout setup failed: {error}"))?;
+    let (mut socket, _) = client(
+        format!("ws://127.0.0.1:{port}/session"),
+        MaybeTlsStream::Plain(stream),
+    ).map_err(|error| format!("BiDi WebSocket handshake failed: {error}"))?;
+
+    if let Err(error) = send_and_wait(
+        &mut socket,
+        1,
+        json!({
+            "id": 1,
+            "method": "session.new",
+            "params": { "capabilities": {} }
+        }),
+    ) {
+        if !session_limit_exhausted(&error) {
+            let _ = send_and_wait(
+                &mut socket,
+                2,
+                json!({ "id": 2, "method": "session.end", "params": {} }),
+            );
+        }
+        let _ = socket.close(None);
+        return Err(error);
+    }
+
+    Ok(BrowserSession {
+        socket,
+        next_id: 2,
+        game_context: None,
+        tab_signature: Vec::new(),
+        native_capture_installed: false,
+        native_reloaded: BTreeSet::new(),
+        bridge_retry_after: None,
+    })
+}
+
+fn find_twitch_channel_context(
+    session: &mut BrowserSession,
+    login: &str,
+) -> Result<Option<String>, String> {
+    let id = session.next_id;
+    session.next_id += 1;
+    let tree = send_and_wait(
+        &mut session.socket,
+        id,
+        json!({
+            "id": id,
+            "method": "browsingContext.getTree",
+            "params": { "maxDepth": 1 }
+        }),
+    )?;
+    let mut contexts = Vec::new();
+    if let Some(items) = tree.get("result")
+        .and_then(|result| result.get("contexts"))
+        .and_then(Value::as_array)
+    {
+        for item in items {
+            collect_contexts(item, &mut contexts, 0);
+        }
+    }
+    Ok(contexts.into_iter()
+        .find(|context| context.depth == 0
+            && twitch_channel_url_matches(&context.url, login))
+        .map(|context| context.id))
+}
+
+fn probe_twitch_follow_control(
+    session: &mut BrowserSession,
+    context: &str,
+) -> Result<TwitchFollowProbe, String> {
+    let id = session.next_id;
+    session.next_id += 1;
+    // Scope to Twitch's main channel information area so a recommended
+    // channel's Follow button can never be clicked by mistake.
+    let expression = r#"(() => {
+        const root = document.querySelector('.channel-info-content');
+        if (!root) return JSON.stringify({state:'waiting'});
+        const unfollow = root.querySelector(
+            '[data-a-target="unfollow-button"],[data-test-selector="unfollow-button"]'
+        );
+        if (unfollow) return JSON.stringify({state:'already'});
+        const marker = root.querySelector(
+            '[data-a-target="follow-button"],[data-test-selector="follow-button"]'
+        );
+        if (!marker) return JSON.stringify({state:'waiting'});
+        const button = marker.matches('button') ? marker : marker.closest('button');
+        if (!button || button.disabled) return JSON.stringify({state:'waiting'});
+        button.scrollIntoView({block:'center', inline:'center'});
+        const rect = button.getBoundingClientRect();
+        const style = getComputedStyle(button);
+        if (rect.width < 2 || rect.height < 2
+            || style.visibility === 'hidden' || style.display === 'none') {
+            return JSON.stringify({state:'waiting'});
+        }
+        return JSON.stringify({
+            state:'ready',
+            x:Math.round(rect.left + rect.width / 2),
+            y:Math.round(rect.top + rect.height / 2)
+        });
+    })()"#;
+    let response = send_and_wait(
+        &mut session.socket,
+        id,
+        json!({
+            "id": id,
+            "method": "script.evaluate",
+            "params": {
+                "expression": expression,
+                "target": { "context": context },
+                "awaitPromise": false
+            }
+        }),
+    )?;
+    let raw = response.get("result")
+        .and_then(|result| result.get("result"))
+        .and_then(|result| result.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Firefox returned no Twitch follow-control state".to_owned())?;
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|error| format!("invalid Twitch follow-control state: {error}"))?;
+    match value.get("state").and_then(Value::as_str) {
+        Some("already") => Ok(TwitchFollowProbe::AlreadyFollowing),
+        Some("ready") => {
+            let x = value.get("x").and_then(Value::as_i64)
+                .ok_or_else(|| "Twitch Follow control has no horizontal position".to_owned())?;
+            let y = value.get("y").and_then(Value::as_i64)
+                .ok_or_else(|| "Twitch Follow control has no vertical position".to_owned())?;
+            Ok(TwitchFollowProbe::Ready { x, y })
+        }
+        _ => Ok(TwitchFollowProbe::Waiting),
+    }
+}
+
+fn click_twitch_follow_control(
+    session: &mut BrowserSession,
+    context: &str,
+    x: i64,
+    y: i64,
+) -> Result<(), String> {
+    let id = session.next_id;
+    session.next_id += 1;
+    send_and_wait(
+        &mut session.socket,
+        id,
+        json!({
+            "id": id,
+            "method": "input.performActions",
+            "params": {
+                "context": context,
+                "actions": [{
+                    "type": "pointer",
+                    "id": "moth-twitch-follow-mouse",
+                    "parameters": { "pointerType": "mouse" },
+                    "actions": [
+                        { "type": "pointerMove", "x": x, "y": y, "duration": 80, "origin": "viewport" },
+                        { "type": "pointerDown", "button": 0 },
+                        { "type": "pointerUp", "button": 0 }
+                    ]
+                }]
+            }
+        }),
+    ).map(|_| ())
+}
+
+/// Follow a Twitch channel through Twitch's own page UI.
+///
+/// Twitch retired its public follow-write API and protected the website
+/// mutation with browser integrity checks. This uses a short-lived BiDi
+/// session only to send a trusted pointer click to the real channel Follow
+/// control; Twitch's own page/Apollo client performs the authenticated write.
+/// An existing Unfollow control means the account already follows the channel,
+/// so no click or network mutation is attempted.
+pub fn ensure_twitch_follow(
+    port: u16,
+    login: &str,
+    timeout: Duration,
+) -> Result<bool, String> {
+    let login = moth_twitch::normalize_login(login)
+        .ok_or_else(|| "Invalid Twitch channel".to_owned())?;
+    let started = Instant::now();
+    let mut session = None;
+    let mut last_error = None;
+    let mut clicked = false;
+
+    while started.elapsed() < timeout {
+        if session.is_none() {
+            match open_utility_session(port) {
+                Ok(opened) => session = Some(opened),
+                Err(error) => {
+                    if session_limit_exhausted(&error) {
+                        return Err(
+                            "Firefox is already using its BiDi session; automatic Twitch follow was skipped".into()
+                        );
+                    }
+                    last_error = Some(error);
+                    thread::sleep(Duration::from_millis(300));
+                    continue;
+                }
+            }
+        }
+
+        let context_result = session.as_mut()
+            .ok_or_else(|| "Firefox BiDi session unavailable".to_owned())
+            .and_then(|current| find_twitch_channel_context(current, &login));
+        let context = match context_result {
+            Ok(Some(context)) => context,
+            Ok(None) => {
+                thread::sleep(Duration::from_millis(350));
+                continue;
+            }
+            Err(error) => {
+                if session_connection_is_closed(&error) {
+                    session = None;
+                } else {
+                    last_error = Some(error);
+                    thread::sleep(Duration::from_millis(300));
+                }
+                continue;
+            }
+        };
+
+        let probe = session.as_mut()
+            .ok_or_else(|| "Firefox BiDi session unavailable".to_owned())
+            .and_then(|current| probe_twitch_follow_control(current, &context));
+        match probe {
+            Ok(TwitchFollowProbe::AlreadyFollowing) => {
+                end_session(&mut session);
+                return Ok(clicked);
+            }
+            Ok(TwitchFollowProbe::Ready { x, y }) if !clicked => {
+                let click = session.as_mut()
+                    .ok_or_else(|| "Firefox BiDi session unavailable".to_owned())
+                    .and_then(|current| click_twitch_follow_control(current, &context, x, y));
+                if let Err(error) = click {
+                    end_session(&mut session);
+                    return Err(error);
+                }
+                clicked = true;
+                thread::sleep(Duration::from_millis(700));
+            }
+            Ok(_) => thread::sleep(Duration::from_millis(350)),
+            Err(error) => {
+                if session_connection_is_closed(&error) {
+                    session = None;
+                } else {
+                    last_error = Some(error);
+                    thread::sleep(Duration::from_millis(350));
+                }
+            }
+        }
+    }
+
+    end_session(&mut session);
+    Err(last_error.unwrap_or_else(|| {
+        if clicked {
+            format!("Twitch did not confirm following {login}; the stream remains open for manual verification")
+        } else {
+            format!("Twitch Follow control did not become available for {login}")
+        }
+    }))
+}
+
 fn open_session(port: u16) -> Result<BrowserSession, String> {
     // tungstenite::connect performs the WebSocket handshake *before* callers
     // can set I/O timeouts. A stalled Firefox listener could otherwise park
@@ -2204,6 +2490,30 @@ where
         return Ok(value);
     }
 }
+#[cfg(test)]
+mod twitch_follow_tests {
+    use super::twitch_channel_url_matches;
+
+    #[test]
+    fn matches_only_the_requested_twitch_channel() {
+        assert!(twitch_channel_url_matches(
+            "https://www.twitch.tv/Some_Channel", "some_channel"
+        ));
+        assert!(twitch_channel_url_matches(
+            "https://twitch.tv/some_channel?referrer=raid", "some_channel"
+        ));
+        assert!(!twitch_channel_url_matches(
+            "https://www.twitch.tv/another_channel", "some_channel"
+        ));
+        assert!(!twitch_channel_url_matches(
+            "https://www.twitch.tv/directory/category/some_channel", "some_channel"
+        ));
+        assert!(!twitch_channel_url_matches(
+            "https://example.com/some_channel", "some_channel"
+        ));
+    }
+}
+
 #[cfg(test)]
 mod command_tests {
     use super::{validate_open_tab, MAX_COMMAND_QUEUE};
