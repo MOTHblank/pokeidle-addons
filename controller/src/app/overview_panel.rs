@@ -738,9 +738,10 @@ fn overview_hunt(view: &HuntView) -> Option<&native_hunts::HuntEntry> {
 }
 
 fn overview_boss_key(view: &BossView) -> Option<&str> {
-    view.arena.as_deref().or_else(|| {
-        if view.auto { view.auto_key.as_deref() } else { None }
-    })
+    // Only the authoritative arena means a boss is actually being fought.
+    // Server repetition may stay enabled (auto + autoKey) while no arena is
+    // active, including while the account is visibly in a regular hunt.
+    view.arena.as_deref()
 }
 
 fn overview_boss(view: &BossView) -> Option<&BossEntry> {
@@ -1288,6 +1289,20 @@ mod history_ui_tests {
         assert_eq!(overview_boss_key(&view), Some("rayquaza"));
         assert!(overview_boss(&view).is_none(),
             "the UI must use the authoritative arena even if metadata is missing");
+    }
+
+    #[test]
+    fn boss_auto_target_is_not_a_current_fight_without_an_arena() {
+        let view = BossView {
+            state_known: true,
+            auto: true,
+            auto_key: Some("rayquaza".into()),
+            arena: None,
+            ..Default::default()
+        };
+        assert_eq!(overview_boss_key(&view), None,
+            "an armed/repeating boss target is not proof of an active boss encounter");
+        assert!(overview_boss(&view).is_none());
     }
     #[test]
     fn utc_epoch_date_and_leap_day_are_stable() {
