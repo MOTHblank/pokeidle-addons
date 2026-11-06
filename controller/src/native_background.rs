@@ -18,6 +18,7 @@ use crate::native_automation::{AutomationWriter, AutomationStatus};
 use crate::native_pvp::{PvpAutomation, PvpAction, PvpStatus};
 use crate::native_market::{MarketBuyer, MarketRules, MarketStatus};
 use crate::native_twitch_miner::{TwitchMinerControl, TwitchMinerSession};
+use crate::monitor::{StreamBonusState, StreamBonuses};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
@@ -120,10 +121,8 @@ pub struct NativeSnapshot {
     pub twitch_login: Option<String>,
     pub twitch_official_roster: Option<Vec<String>>,
     pub twitch_official_live: Option<Vec<String>>,
-    pub twitch_bonus_pct: f32,
-    pub twitch_xp_until: u64,
-    pub twitch_capture_until: u64,
-    pub twitch_shiny_until: u64,
+    /// Server-authoritative Twitch/Kick redemption percentages and expiry timestamps.
+    pub stream_bonuses: StreamBonuses,
     /// Live official Kick channels from the authenticated PokéIdle game state.
     /// None = the server has not supplied the roster; Some(empty) = no one live.
     pub kick_official_live: Option<Vec<String>>,
@@ -148,8 +147,7 @@ impl Default for NativeSnapshot {
             pokemon_sale_error: None,
             twitch_linked: None, twitch_login: None,
             twitch_official_roster: None, twitch_official_live: None,
-            twitch_bonus_pct: 0.0,
-            twitch_xp_until: 0, twitch_capture_until: 0, twitch_shiny_until: 0,
+            stream_bonuses: StreamBonuses::default(),
             kick_official_live: None, kick_official_roster: None,
             kick_roster_revision: 0,
         }
@@ -930,20 +928,32 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool
                 if let Some(login)=twitch.get("login").and_then(Value::as_str) {
                     status.twitch_login=Some(login.to_owned());
                 }
-                if let Some(pct)=twitch.get("pct").and_then(Value::as_f64) {
-                    status.twitch_bonus_pct=if pct.is_finite(){pct.max(0.0) as f32}else{0.0};
-                }
-                if let Some(bonus)=twitch.get("bonus") {
-                    if let Some(raw)=bonus.get("xp") {
-                        status.twitch_xp_until=raw.as_u64().unwrap_or(0);
-                    }
-                    if let Some(raw)=bonus.get("captura") {
-                        status.twitch_capture_until=raw.as_u64().unwrap_or(0);
-                    }
-                    if let Some(raw)=bonus.get("shiny") {
-                        status.twitch_shiny_until=raw.as_u64().unwrap_or(0);
-                    }
-                }
+                let pct=twitch.get("pct").and_then(Value::as_f64)
+                    .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
+                let bonus=twitch.get("bonus").cloned().unwrap_or(Value::Null);
+                status.stream_bonuses.twitch=StreamBonusState {
+                    pct,
+                    xp_until: bonus.get("xp").and_then(Value::as_u64).unwrap_or(0),
+                    capture_until: bonus.get("captura").and_then(Value::as_u64).unwrap_or(0),
+                    shiny_until: bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0),
+                };
+            }
+            if let Some(kick)=state.get("kick") {
+                let pct=kick.get("pct").and_then(Value::as_f64)
+                    .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
+                let bonus=kick.get("bonus").cloned().unwrap_or(Value::Null);
+                status.stream_bonuses.kick=StreamBonusState {
+                    pct,
+                    xp_until: bonus.get("xp").and_then(Value::as_u64).unwrap_or(0),
+                    capture_until: bonus.get("captura").and_then(Value::as_u64).unwrap_or(0),
+                    shiny_until: bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0),
+                };
+            }
+            if let Some(now)=state.get("servidorAgora").and_then(Value::as_u64) {
+                status.stream_bonuses.server_now_ms=
+                    if (1_000_000_000..10_000_000_000).contains(&now) {
+                        now.saturating_mul(1_000)
+                    } else { now };
             }
         }
     });
@@ -1920,10 +1930,25 @@ mod tests {
         let observed=status.lock().unwrap().clone();
         assert_eq!(observed.twitch_linked,Some(true));
         assert_eq!(observed.twitch_login.as_deref(),Some("trainer"));
-        assert_eq!(observed.twitch_bonus_pct,15.0);
-        assert_eq!(observed.twitch_xp_until,200);
-        assert_eq!(observed.twitch_capture_until,300);
-        assert_eq!(observed.twitch_shiny_until,400);
+        assert_eq!(observed.stream_bonuses.twitch.pct,15.0);
+        assert_eq!(observed.stream_bonuses.twitch.xp_until,200);
+        assert_eq!(observed.stream_bonuses.twitch.capture_until,300);
+        assert_eq!(observed.stream_bonuses.twitch.shiny_until,400);
+    }
+
+    #[test]
+    fn kick_redemption_state_uses_the_same_server_authoritative_model() {
+        let status = Arc::new(Mutex::new(NativeSnapshot::default()));
+        observe(&status, r#"{"t":"welcome","estado":{
+            "servidorAgora":100,
+            "kick":{"pct":15,"bonus":{"xp":18100100,"captura":10900100,"shiny":36100100}}
+        }}"#);
+        let observed=status.lock().unwrap().clone();
+        assert_eq!(observed.stream_bonuses.server_now_ms,100);
+        assert_eq!(observed.stream_bonuses.kick.pct,15.0);
+        assert_eq!(observed.stream_bonuses.kick.xp_until,18100100);
+        assert_eq!(observed.stream_bonuses.kick.capture_until,10900100);
+        assert_eq!(observed.stream_bonuses.kick.shiny_until,36100100);
     }
     #[test]
     fn cookie_scoping_and_hello_validation() {
