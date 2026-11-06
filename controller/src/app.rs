@@ -49,7 +49,7 @@ mod session_actions;
 
 // Each shared symbol is intentional: no wildcard panel imports.
 use localization::{pt_br, localize_status, tr_dynamic, tr};
-use workspace_nav::{draw_header_actions, draw_account_switcher, draw_sidebar, draw_instance_section};
+use workspace_nav::{draw_header_actions, draw_account_switcher, draw_seasonal_day_badge, draw_sidebar, draw_instance_section};
 use options_panel::draw_options_panel;
 use workspace_state::WorkspaceState;
 use account_runtime::AccountRuntime;
@@ -1711,9 +1711,15 @@ impl eframe::App for ControllerApp {
                     _ => None,
                 };
                 if let Some(selected) = active {
-                    let next = draw_account_switcher(
-                        self, ui, selected, self.workspace.panel_tab == PanelTab::Overview
-                    );
+                    let mut next=selected;
+                    ui.horizontal(|ui|{
+                        next = draw_account_switcher(
+                            self, ui, selected, self.workspace.panel_tab == PanelTab::Overview
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center),|ui|{
+                            draw_seasonal_day_badge(self,ui,selected);
+                        });
+                    });
                     if next != selected {
                         if let Some(index) = next {
                             self.select_workspace_account(index);
