@@ -1544,9 +1544,12 @@ pub fn ensure_twitch_follow(
                 continue;
             }
             Err(error) => {
-                last_error = Some(error);
-                session = None;
-                thread::sleep(Duration::from_millis(300));
+                if session_connection_is_closed(&error) {
+                    session = None;
+                } else {
+                    last_error = Some(error);
+                    thread::sleep(Duration::from_millis(300));
+                }
                 continue;
             }
         };
@@ -1557,7 +1560,10 @@ pub fn ensure_twitch_follow(
                 return Ok(clicked);
             }
             Ok(TwitchFollowProbe::Ready { x, y }) if !clicked => {
-                click_twitch_follow_control(current, &context, x, y)?;
+                if let Err(error) = click_twitch_follow_control(current, &context, x, y) {
+                    end_session(&mut session);
+                    return Err(error);
+                }
                 clicked = true;
                 thread::sleep(Duration::from_millis(700));
             }
