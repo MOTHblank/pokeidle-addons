@@ -139,6 +139,20 @@ const UI_MULTI_ACCOUNT_REPAINT_INTERVAL: Duration = Duration::from_secs(4);
 // deadline, so a burst becomes at most one visible frame per 100 ms.
 const UI_WORKER_REPAINT_DELAY: Duration = Duration::from_millis(100);
 
+// On Windows, the process returned by Command::spawn can be only Firefox's
+// launcher. It may exit before the real profile-owning browser is visible to
+// WMI. Keep the slot owned while that launcher -> browser transition settles;
+// otherwise a second launch can inherit the same profile and collide with the
+// still-active single BiDi session.
+const FIREFOX_PROFILE_RECONCILE_GRACE: Duration = Duration::from_secs(5);
+const FIREFOX_PROFILE_RECONCILE_RETRY: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Copy)]
+struct FirefoxProfileReconcile {
+    deadline: Instant,
+    next_check: Instant,
+}
+
 #[track_caller]
 fn request_worker_repaint(ctx: &egui::Context) {
     ctx.request_repaint_after(UI_WORKER_REPAINT_DELAY);
@@ -371,6 +385,10 @@ struct GameSlot {
     monitor: Option<MonitorHandle>,
     headless: bool,
     orphaned_pid: Option<u32>,
+    // Firefox's spawned launcher can exit before the real profile PID appears.
+    // While this is set, the slot remains owned and refresh_processes retries
+    // profile discovery instead of permitting a duplicate launch.
+    profile_reconcile: Option<FirefoxProfileReconcile>,
     // User explicitly chose visible Firefox; never auto-handoff this browser.
     browser_only: bool,
 }
@@ -387,6 +405,7 @@ impl GameSlot {
             monitor: None,
             headless: true,
             orphaned_pid: None,
+            profile_reconcile: None,
             browser_only: false,
         }
     }
@@ -406,9 +425,23 @@ impl GameSlot {
             if firefox::process_alive(pid) {
                 return true;
             }
+            // Do not unlock the slot merely because one observed Firefox PID
+            // disappeared. The profile owner can transition to another PID.
             self.orphaned_pid = None;
+            self.schedule_profile_reconcile();
+            return true;
         }
-        false
+        // A live monitor also owns Firefox's one BiDi session. Even if process
+        // discovery is between launcher and browser PIDs, never launch over it.
+        self.profile_reconcile.is_some() || self.monitor.is_some()
+    }
+
+    fn schedule_profile_reconcile(&mut self) {
+        let now = Instant::now();
+        self.profile_reconcile = Some(FirefoxProfileReconcile {
+            deadline: now + FIREFOX_PROFILE_RECONCILE_GRACE,
+            next_check: now + FIREFOX_PROFILE_RECONCILE_RETRY,
+        });
     }
 
     fn health(&self) -> Health {
