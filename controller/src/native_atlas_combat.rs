@@ -60,29 +60,37 @@ fn effective_tackle_type<'a>(types: &'a [String], target: &ReferenceSpecies, r: 
         types.get(1).map(String::as_str).unwrap_or(first)
     } else { first }
 }
+fn seasonal_damage_multiplier(seasonal:Option<&str>,attacker:&[String],defender:&[String])->f64 {
+    let Some(kind)=seasonal else{return 1.0};
+    let outgoing=if attacker.iter().any(|t|t==kind){2.0}else{1.0};
+    let incoming=if defender.iter().any(|t|t==kind){4.0}else{1.0};
+    outgoing/incoming
+}
 fn move_damage(
     r: &Reference, attacker_level: u32, power: f64,
     attack: f64, defense: f64, kind: &str, attacker_types: &[String],
-    target: &ReferenceSpecies,
+    target: &ReferenceSpecies, extra_multiplier:f64,
 ) -> f64 {
     damage(attacker_level, power.max(15.0), attack, defense,
-        attacker_types.iter().any(|t|t == kind), effect(r, kind, target))
+        attacker_types.iter().any(|t|t == kind), effect(r, kind, target))*extra_multiplier
 }
 fn incoming(
     r: &Reference, foe: &ReferenceSpecies, level: u32,
-    player: &ReferenceSpecies, stats: &[f64; 6],
+    player: &ReferenceSpecies, stats: &[f64; 6], seasonal:Option<&str>,
 ) -> Threat {
     let mut blows = Vec::new();
     for mv in foe.moves.iter().filter(|m| m.min_level <= level) {
         let atk = wild_stat(foe.base[if mv.special {3} else {1}], level, 16.0);
         let def = stats[if mv.special {4} else {2}];
         blows.push(move_damage(r, level, mv.power, atk, def,
-            &mv.move_type, &foe.types, player));
+            &mv.move_type, &foe.types, player,
+            seasonal_damage_multiplier(seasonal,&foe.types,&player.types)));
     }
     let tackle_type = effective_tackle_type(&foe.types, player, r);
     let inv = move_damage(r, level, TACKLE_POWER,
         wild_stat(foe.base[1], level, 16.0), stats[2],
-        tackle_type, &foe.types, player);
+        tackle_type, &foe.types, player,
+        seasonal_damage_multiplier(seasonal,&foe.types,&player.types));
     let mean = if blows.is_empty() { inv } else {
         blows.iter().sum::<f64>() / blows.len() as f64 * 0.92 + inv * 0.08
     };
@@ -186,7 +194,7 @@ fn aoe_kills(d:&[f64], ttk:f64, hunt:&HuntEntry)->f64 {
 pub(super) fn simulate(
     hunt: &HuntEntry, mon: &PokemonInfo, player: &ReferenceSpecies,
     r: &Reference, stats: &[f64;6], distances: Option<&Vec<f64>>,
-    aoe_enabled: bool,
+    aoe_enabled: bool, seasonal:Option<&str>, gym_multiplier:f64,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
     let d=spawn_distances(hunt,distances);
@@ -209,7 +217,8 @@ pub(super) fn simulate(
             let atk=stats[if mv.special {3}else{1}];
             let def=wild_stat(foe.base[if mv.special {4}else{2}],hunt.level,16.0);
             attacks.push(Attack {
-                damage:move_damage(r,mon.level,mv.power,atk,def,&mv.move_type,&player.types,foe),
+                damage:move_damage(r,mon.level,mv.power,atk,def,&mv.move_type,&player.types,foe,
+                    seasonal_damage_multiplier(seasonal,&player.types,&foe.types)*gym_multiplier),
                 cooldown_s:skill_cooldown_ms(mv.cooldown,player.base[5],mon)/1000.0,
             });
         }
@@ -219,7 +228,8 @@ pub(super) fn simulate(
             attacks.push(Attack{
                 damage:move_damage(r,mon.level,2800.0,stats[3],
                     wild_stat(foe.base[4],hunt.level,16.0),
-                    element,&player.types,foe),
+                    element,&player.types,foe,
+                    seasonal_damage_multiplier(seasonal,&player.types,&foe.types)*gym_multiplier),
                 cooldown_s:skill_cooldown_ms(60_000.0,player.base[5],mon)/1000.0,
             });
         }
@@ -227,7 +237,8 @@ pub(super) fn simulate(
         let basic=Attack {
             damage:move_damage(r,mon.level,TACKLE_POWER,stats[1],
                 wild_stat(foe.base[2],hunt.level,16.0),
-                tackle_type,&player.types,foe),
+                tackle_type,&player.types,foe,
+                seasonal_damage_multiplier(seasonal,&player.types,&foe.types)*gym_multiplier),
             cooldown_s:iv_cooldown_ms(TACKLE_COOLDOWN_MS,mon)/1000.0,
         };
         let mut hp=[0.0;32];
@@ -237,7 +248,7 @@ pub(super) fn simulate(
                 .max(24.0)*5.0;
         }
         let time=mean_ttk(&attacks,basic,gap_s,&hp,downtime)?;
-        let threat=incoming(r,foe,hunt.level,player,stats);
+        let threat=incoming(r,foe,hunt.level,player,stats,seasonal);
         weight+=w;
         ttk+=w*time;
         incoming_dps+=w*threat.dps;
@@ -292,6 +303,15 @@ pub(super) fn simulate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn seasonal_day_matches_upstream_attack_defense_hp_rule() {
+        let fire=vec!["FIRE".to_owned()];
+        let grass=vec!["GRASS".to_owned()];
+        assert_eq!(seasonal_damage_multiplier(Some("FIRE"),&fire,&grass),2.0);
+        assert_eq!(seasonal_damage_multiplier(Some("GRASS"),&fire,&grass),0.25);
+        assert_eq!(seasonal_damage_multiplier(Some("FIRE"),&fire,&fire),0.5);
+        assert_eq!(seasonal_damage_multiplier(None,&fire,&grass),1.0);
+    }
     #[test]
     fn cooldowns_survive_kills_and_strongest_ready_attack_goes_first() {
         let moves=[Attack{damage:100.0,cooldown_s:4.0},

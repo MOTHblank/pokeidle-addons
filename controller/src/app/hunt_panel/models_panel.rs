@@ -207,10 +207,22 @@ pub(super) fn draw_atlas_models(
                 .size(10.0).color(DIM));
         }
     });
+    let live_capture=view.bonuses.live_capture_multiplier.max(1.0);
+    let live_shiny=view.bonuses.live_shiny_multiplier.max(1.0);
+    ui.horizontal_wrapped(|ui|{
+        if live_capture>1.0 || live_shiny>1.0 {
+            ui.label(RichText::new(tr_dynamic(format!(
+                "Live game bonuses · capture ×{live_capture:.3} · shiny ×{live_shiny:.3}"
+            ))).size(10.0).color(GOOD));
+        } else {
+            ui.label(RichText::new(tr("No live Twitch/Kick capture or shiny bonus is active."))
+                .size(10.0).color(DIM));
+        }
+    });
     ui.horizontal_wrapped(|ui|{
         if ui.small_button(if scenario.modifiers_open{tr("▾ Hide modifiers")}else{tr("▸ Hypothetical modifiers")})
             .clicked(){scenario.modifiers_open=!scenario.modifiers_open}
-        ui.label(RichText::new(tr("No boost is treated as active automatically."))
+        ui.label(RichText::new(tr("What-if modifiers are separate from live game bonuses."))
             .size(10.0).color(DIM));
     });
     if scenario.modifiers_open {
@@ -241,6 +253,14 @@ pub(super) fn draw_atlas_models(
                 }
             });
     }
+    let mut effective_modifiers=scenario.modifiers.clone();
+    effective_modifiers.live_capture_multiplier=live_capture;
+    effective_modifiers.live_shiny_multiplier=live_shiny;
+    // A redeemed Kick bonus extends duration when redeemed again; it never
+    // stacks another +15%. Do not let the legacy what-if checkbox duplicate
+    // a source that is already active in the live state.
+    if view.bonuses.kick_capture_active {effective_modifiers.kick_capture=false;}
+    if view.bonuses.kick_shiny_active {effective_modifiers.kick_shiny=false;}
     ui.add_space(9.0);
     let f=if live{cache.get(&hunt.slug)}else{None};
     let kills=f.as_ref().map(|f|f.kills_h);
@@ -290,7 +310,7 @@ pub(super) fn draw_atlas_models(
             native_atlas::capture_inputs(r,spawn.id)).unwrap_or((None,None));
         let plan=kills.and_then(|speed|models::capture_scenario_with_stage(
             stage,rarity,efficiency,speed,share,
-            scenario.accepted_fraction_override,outland,&scenario.modifiers));
+            scenario.accepted_fraction_override,outland,&effective_modifiers));
         rows.push((spawn.id,name.to_owned(),share,stage,plan));
     }
     rows.sort_by(|a,b|b.2.total_cmp(&a.2));

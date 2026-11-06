@@ -156,11 +156,24 @@ pub struct HuntBonuses {
     pub guild_boost_known: bool,
     pub vip_known: bool,
     pub kick_xp_pct: f64,
+    /// Server-authoritative XP factors from estado.bonusXp. When present,
+    /// Hunt Atlas uses these instead of reconstructing the server formula.
+    pub authoritative_trainer_xp_multiplier: Option<f64>,
+    pub authoritative_pokemon_xp_multiplier: Option<f64>,
     pub shop_trainer_xp_multiplier: f64,
     pub shop_pokemon_xp_multiplier: f64,
     pub delayed_xp_multiplier: f64,
+    /// Timed Twitch/Kick capture and shiny redemptions currently active.
+    pub live_capture_multiplier: f64,
+    pub live_shiny_multiplier: f64,
+    pub twitch_capture_active: bool,
+    pub twitch_shiny_active: bool,
+    pub kick_capture_active: bool,
+    pub kick_shiny_active: bool,
     /// Store Loot Boost and active farming-event bonus, excluding guild ranking.
     pub extra_loot_pct:f64,
+    /// Raid reward farm component (0..5%), kept separate from XP.
+    pub raid_farm_pct:f64,
 }
 #[derive(Clone, Debug, Default)]
 pub struct HuntMeasurements {
@@ -258,6 +271,10 @@ pub struct HuntView {
     /// Missing delta fields preserve the last confirmed value; disconnects clear it.
     pub seasonal_type: Option<String>,
     pub bonuses: HuntBonuses,
+    /// Current map-hunt seasonal type when the server publishes it.
+    pub seasonal_type: Option<String>,
+    /// Best Gym podium place (1/2/3) for each elemental type.
+    pub gym_podium: Arc<BTreeMap<String,u8>>,
     pub measurements: HuntMeasurements,
     pub session: HuntSessionStats,
     pub sample_quality: String,
@@ -346,9 +363,17 @@ pub struct HuntIntel {
     // omit the expiry entirely.
     vip_flag:Option<bool>,
     twitch_xp_until:u64,
+    twitch_capture_until:u64,
+    twitch_shiny_until:u64,
     twitch_reported_pct:f64,
     kick_xp_until:u64,
+    kick_capture_until:u64,
+    kick_shiny_until:u64,
     kick_reported_pct:f64,
+    /// Raw server-authoritative XP snapshot; parts are expiry-filtered locally.
+    bonus_xp:Option<Value>,
+    raid_farm_reported_pct:f64,
+    raid_farm_until:u64,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
     geo_wave: Option<(String,Instant,Vec<f64>)>,
     geo_alive: BTreeMap<u64,bool>,
@@ -371,8 +396,11 @@ impl HuntIntel {
             store_boost_until:BTreeMap::new(),
             server_clock_seen_at:None,
             vip_flag:None,
-            twitch_xp_until:0,twitch_reported_pct:0.0,
-            kick_xp_until:0,kick_reported_pct:0.0,
+            twitch_xp_until:0,twitch_capture_until:0,twitch_shiny_until:0,
+            twitch_reported_pct:0.0,
+            kick_xp_until:0,kick_capture_until:0,kick_shiny_until:0,
+            kick_reported_pct:0.0,bonus_xp:None,
+            raid_farm_reported_pct:0.0,raid_farm_until:0,
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
@@ -832,8 +860,163 @@ impl HuntIntel {
         self.view.bonuses.kick_xp_pct=if self.kick_xp_until>clock {
             self.kick_reported_pct
         }else{0.0};
+
+        // Since v1.408 the server publishes the exact XP multipliers used by
+        // each kill. Mirror the official client's bonusXpAgora(): filter
+        // expired timed parts, then retain any unexplained remainder so a new
+        // server-side bonus never silently disappears from Atlas projections.
+        let auth_tr=None;
+        let auth_pk=None;
+        if let Some(raw)=self.bonus_xp.as_ref().filter(|v|v.is_object()) {
+            if let Some(parts)=raw.get("partes").and_then(Value::as_array) {
+                let factor=|v:&Value,key:&str|v.get(key).and_then(Value::as_f64)
+                    .filter(|n|n.is_finite()&&*n>0.0&&*n<=1000.0).unwrap_or(1.0);
+                let all_tr=parts.iter().map(|p|factor(p,"tr")).product::<f64>();
+                let all_pk=parts.iter().map(|p|factor(p,"pk")).product::<f64>();
+                let reported_tr=factor(raw,"tr");
+                let reported_pk=factor(raw,"pk");
+                let rem_tr=if all_tr>0.0 {reported_tr/all_tr}else{1.0};
+                let rem_pk=if all_pk>0.0 {reported_pk/all_pk}else{1.0};
+                let mut current_tr=rem_tr;
+                let mut current_pk=rem_pk;
+                for part in parts {
+                    let active=part.get("ate").and_then(Value::as_u64)
+                        .is_none_or(|until|until==0||until>clock);
+                    if active {
+                        current_tr*=factor(part,"tr");
+                        current_pk*=factor(part,"pk");
+                    }
+                }
+                if current_tr.is_finite()&&current_tr>0.0&&current_tr<=1000.0 {
+                    auth_tr=Some(current_tr);
+                }
+                if current_pk.is_finite()&&current_pk>0.0&&current_pk<=1000.0 {
+                    auth_pk=Some(current_pk);
+                }
+            }
+        }
+        self.view.bonuses.authoritative_trainer_xp_multiplier=auth_tr;
+        self.view.bonuses.authoritative_pokemon_xp_multiplier=auth_pk;
+
+        self.view.bonuses.twitch_capture_active=self.twitch_capture_until>clock;
+        self.view.bonuses.twitch_shiny_active=self.twitch_shiny_until>clock;
+        self.view.bonuses.kick_capture_active=self.kick_capture_until>clock;
+        self.view.bonuses.kick_shiny_active=self.kick_shiny_until>clock;
+        self.view.bonuses.live_capture_multiplier=
+            (if self.view.bonuses.twitch_capture_active {
+                1.0+self.twitch_reported_pct/100.0
+            }else{1.0})
+            *(if self.view.bonuses.kick_capture_active {
+                1.0+self.kick_reported_pct/100.0
+            }else{1.0});
+        self.view.bonuses.live_shiny_multiplier=
+            (if self.view.bonuses.twitch_shiny_active {
+                1.0+self.twitch_reported_pct/100.0
+            }else{1.0})
+            *(if self.view.bonuses.kick_shiny_active {
+                1.0+self.kick_reported_pct/100.0
+            }else{1.0});
+
+        // Raid's reward has a separate farm component (max +5%). Newer
+        // server snapshots can publish it alongside the raid XP part. Accept
+        // the explicit percentage/total forms only; never infer farm from XP.
+        let mut raid_farm=if self.raid_farm_reported_pct>0.0
+            && (self.raid_farm_until==0||self.raid_farm_until>clock) {
+            self.raid_farm_reported_pct
+        } else {0.0};
+        if let Some(raw)=self.bonus_xp.as_ref() {
+            for part in raw.get("partes").and_then(Value::as_array)
+                .into_iter().flatten() {
+                if part.get("id").and_then(Value::as_str)!=Some("raid") {continue}
+                let active=part.get("ate").and_then(Value::as_u64)
+                    .is_none_or(|until|until==0||until>clock);
+                if !active {continue}
+                let direct=part.get("farmPct").or_else(||part.get("farm"))
+                    .and_then(Value::as_f64);
+                let from_total=part.get("total").and_then(Value::as_f64)
+                    .map(|total|(total.clamp(0.0,25.0)*5.0/25.0).round());
+                raid_farm=direct.or(from_total).unwrap_or(0.0).clamp(0.0,5.0);
+                break;
+            }
+        }
+        self.view.bonuses.raid_farm_pct=raid_farm;
     }
     fn merge_state(&mut self, state: &Value, now: Instant) {
+        // Environmental combat modifiers. These fields are deliberately
+        // tolerant because older/newer shards have used both scalar and
+        // object wrappers for the seasonal type and Gym podium snapshot.
+        let valid_type=|raw:&str|{
+            let t=raw.trim().to_ascii_uppercase();
+            matches!(t.as_str(),"NORMAL"|"FIRE"|"WATER"|"GRASS"|"ELECTRIC"|"ICE"|
+                "FIGHTING"|"POISON"|"GROUND"|"FLYING"|"PSYCHIC"|"BUG"|"ROCK"|
+                "GHOST"|"DRAGON"|"DARK"|"STEEL"|"FAIRY").then_some(t)
+        };
+        let seasonal_keys=["tipoSazonal","sazonalTipo","tipoDoDia","diaTipo"];
+        let mut seasonal_seen=false;
+        let mut seasonal=None;
+        for key in seasonal_keys {
+            if let Some(raw)=state.get(key) {
+                seasonal_seen=true;
+                seasonal=raw.as_str().and_then(&valid_type);
+                break;
+            }
+        }
+        for key in ["diaSazonal","sazonal"] {
+            if seasonal_seen {break}
+            if let Some(raw)=state.get(key) {
+                seasonal_seen=true;
+                seasonal=raw.as_str().and_then(&valid_type).or_else(||raw.get("tipo")
+                    .and_then(Value::as_str).and_then(&valid_type));
+            }
+        }
+        if seasonal_seen {self.view.seasonal_type=seasonal;}
+
+        if let Some(raw)=state.get("ginasiosPodio").or_else(||state.get("ginasiosPodium")) {
+            let mut podium=BTreeMap::new();
+            if let Some(rows)=raw.as_object() {
+                for (kind,place) in rows {
+                    if let (Some(kind),Some(place))=(valid_type(kind),place.as_u64()
+                        .filter(|place|(1..=3).contains(place))) {
+                        podium.insert(kind,place as u8);
+                    }
+                }
+            } else if let Some(rows)=raw.as_array() {
+                for row in rows {
+                    let kind=row.get("tipo").and_then(Value::as_str).and_then(&valid_type);
+                    let place=row.get("lugar").or_else(||row.get("posicao"))
+                        .and_then(Value::as_u64).filter(|place|(1..=3).contains(place));
+                    if let (Some(kind),Some(place))=(kind,place) {
+                        podium.insert(kind,place as u8);
+                    }
+                }
+            }
+            self.view.gym_podium=Arc::new(podium);
+        } else if let Some(rows)=state.get("ginasios").and_then(Value::as_array) {
+            // Legacy snapshot exposes only Gym leaders.
+            self.view.gym_podium=Arc::new(rows.iter().filter_map(Value::as_str)
+                .filter_map(&valid_type).map(|kind|(kind,1u8)).collect());
+        }
+
+        if let Some(raw)=state.get("bonusXp") {
+            self.bonus_xp=raw.is_object().then(||raw.clone());
+        }
+        let direct_raid=state.get("raidFarmPct")
+            .or_else(||state.get("bonusRaidFarmPct"))
+            .and_then(Value::as_f64)
+            .or_else(||state.get("raid").and_then(|raid|
+                raid.get("farmPct").or_else(||raid.get("farm"))
+                    .and_then(Value::as_f64)));
+        if let Some(pct)=direct_raid.filter(|pct|pct.is_finite()) {
+            self.raid_farm_reported_pct=pct.clamp(0.0,5.0);
+            self.raid_farm_until=state.get("raidFarmAte")
+                .or_else(||state.get("bonusRaidFarmAte"))
+                .and_then(Value::as_u64)
+                .or_else(||state.get("raid").and_then(|raid|
+                    raid.get("ate").or_else(||raid.get("until"))
+                        .and_then(Value::as_u64)))
+                .unwrap_or(0);
+        }
+
         // Switch hunt before applying its opponent. On a welcome, the same
         // state already includes the new wild encounter; do not clear it after.
         if let Some(slug) = state.get("huntSlug").and_then(Value::as_str) {
@@ -973,8 +1156,10 @@ impl HuntIntel {
             // Since PokéIdle v1.400, Twitch matches Kick: pct is only the
             // configured reward amount. XP is active exclusively while the
             // independently redeemed bonus.xp expiry is in the future.
-            if let Some(raw)=twitch.get("bonus").and_then(|v|v.get("xp")) {
-                self.twitch_xp_until=raw.as_u64().unwrap_or(0);
+            if let Some(bonus)=twitch.get("bonus") {
+                self.twitch_xp_until=bonus.get("xp").and_then(Value::as_u64).unwrap_or(0);
+                self.twitch_capture_until=bonus.get("captura").and_then(Value::as_u64).unwrap_or(0);
+                self.twitch_shiny_until=bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0);
                 self.view.bonuses.twitch_known=true;
             }
             if let Some(pct)=twitch.get("pct").and_then(Value::as_f64) {
@@ -1013,8 +1198,10 @@ impl HuntIntel {
             }
         }
         if let Some(kick)=state.get("kick"){
-            if let Some(raw)=kick.get("bonus").and_then(|v|v.get("xp")) {
-                self.kick_xp_until=raw.as_u64().unwrap_or(0);
+            if let Some(bonus)=kick.get("bonus") {
+                self.kick_xp_until=bonus.get("xp").and_then(Value::as_u64).unwrap_or(0);
+                self.kick_capture_until=bonus.get("captura").and_then(Value::as_u64).unwrap_or(0);
+                self.kick_shiny_until=bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0);
             }
             if let Some(pct)=kick.get("pct").and_then(Value::as_f64) {
                 self.kick_reported_pct=if pct.is_finite(){pct.max(0.0)}else{0.0};
@@ -1111,6 +1298,19 @@ impl HuntIntel {
     pub fn ingest_value(&mut self, frame: &Value, now: Instant) {
         match frame.get("t").and_then(Value::as_str) {
             Some("welcome") => {
+                // A welcome replaces the account snapshot. Never carry timed
+                // modifiers from a previous login when an older shard omits them.
+                self.bonus_xp=None;
+                self.raid_farm_reported_pct=0.0;
+                self.raid_farm_until=0;
+                self.view.seasonal_type=None;
+                self.view.gym_podium=Arc::new(BTreeMap::new());
+                self.twitch_xp_until=0;
+                self.twitch_capture_until=0;
+                self.twitch_shiny_until=0;
+                self.kick_xp_until=0;
+                self.kick_capture_until=0;
+                self.kick_shiny_until=0;
                 if let Some(boosts)=frame.get("tiposBoost").and_then(Value::as_array){
                     self.boost_multipliers=boosts.iter().filter_map(|row|{
                         let key=row.get("chave").and_then(Value::as_str)?;
@@ -1498,6 +1698,33 @@ mod tests {
             "servidorAgora":2100,"automation":{"sacrificio":{"ate":3000}}
         }}),now);
         assert!(intel.view.bonuses.sacrifice_xp_active);
+    }
+    #[test]
+    fn live_atlas_modifiers_parse_authoritative_state_and_expire() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        let clock=1_800_000_000_000u64;
+        intel.ingest_value(&json!({"t":"welcome","estado":{
+            "servidorAgora":clock,
+            "tipoSazonal":"fire",
+            "ginasiosPodio":{"FIRE":2,"FLYING":3},
+            "bonusXp":{"tr":1.32,"pk":1.21,"partes":[
+                {"id":"evento","tr":1.2,"pk":1.1},
+                {"id":"raid","tr":1.1,"pk":1.1,"ate":clock+5000,"farmPct":2}
+            ]},
+            "twitch":{"pct":15,"bonus":{"captura":clock+5000,"shiny":clock+5000}},
+            "kick":{"pct":15,"bonus":{"captura":clock+5000}}
+        }}),now);
+        assert_eq!(intel.view.seasonal_type.as_deref(),Some("FIRE"));
+        assert_eq!(intel.view.gym_podium.get("FIRE"),Some(&2));
+        assert!((intel.view.bonuses.authoritative_trainer_xp_multiplier.unwrap()-1.32).abs()<1e-10);
+        assert!((intel.view.bonuses.live_capture_multiplier-1.15*1.15).abs()<1e-10);
+        assert!((intel.view.bonuses.live_shiny_multiplier-1.15).abs()<1e-10);
+        assert_eq!(intel.view.bonuses.raid_farm_pct,2.0);
+        intel.refresh_timed_xp_bonuses(now+Duration::from_secs(6));
+        assert!((intel.view.bonuses.authoritative_trainer_xp_multiplier.unwrap()-1.2).abs()<1e-10);
+        assert_eq!(intel.view.bonuses.live_capture_multiplier,1.0);
+        assert_eq!(intel.view.bonuses.raid_farm_pct,0.0);
     }
     #[test]
     fn partial_state_does_not_cancel_active_shop_boost() {
