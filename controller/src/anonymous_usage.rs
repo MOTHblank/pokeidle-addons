@@ -97,7 +97,7 @@ fn run_once(endpoint: &str) {
 /// Release builds without a configured HTTPS receiver create no thread or network call.
 pub fn start() {
     let Some(endpoint) = option_env!("MOTH_TELEMETRY_URL")
-        .filter(|url| url.starts_with("https://") && !url.contains([' ', '\n', '\r']))
+        .filter(|url| url.starts_with("https://") && !url.chars().any(char::is_whitespace))
     else { return };
     let endpoint = endpoint.to_string();
     let _ = std::thread::Builder::new()
