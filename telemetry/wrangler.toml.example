@@ -1,0 +1,8 @@
+name = "moth-active-users"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "moth-active-users"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
