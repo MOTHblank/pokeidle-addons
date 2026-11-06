@@ -846,9 +846,7 @@ fn draw_overview_matchup(
     let boss_species = boss.and_then(|entry|
         overview_boss_species_id(entry, app.hunt_reference.as_deref()))
         .or_else(|| boss_key.and_then(native_hunts::game_species_id_by_name));
-    let boss_level = boss.and_then(|entry|
-        view.and_then(|hunt| entry.fight_level(hunt)))
-        .or_else(|| boss.map(|entry| entry.min_level).filter(|level| *level > 0));
+    let boss_level = boss.map(|entry| entry.fight_level());
     let hunt = view.filter(|v| !v.in_center).and_then(overview_hunt);
     let hunt_species = view.filter(|v| !v.in_center)
         .and_then(overview_hunt_art_species);
