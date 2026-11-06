@@ -71,6 +71,29 @@ mod capture_handoff_tests {
     }
 
     #[test]
+    fn renewed_game_token_replaces_only_the_login_that_created_the_session() {
+        let mut cached=json!({
+            "bootstrap":{
+                "url":"wss://pokeidle.io",
+                "hello":r#"{"t":"hello","nick":"Trainer","token":"old","delta":1}"#
+            },
+            "cookies":[],
+            "autocatch":{"enabled":true}
+        });
+        assert!(replace_cached_game_token(&mut cached,"old","renewed").unwrap());
+        let hello:Value=serde_json::from_str(
+            cached["bootstrap"]["hello"].as_str().unwrap()).unwrap();
+        assert_eq!(hello["token"],"renewed");
+        assert_eq!(cached["autocatch"]["enabled"],true);
+
+        assert!(!replace_cached_game_token(&mut cached,"old","stale-worker").unwrap(),
+            "an older worker must not overwrite a newer protected login");
+        let hello:Value=serde_json::from_str(
+            cached["bootstrap"]["hello"].as_str().unwrap()).unwrap();
+        assert_eq!(hello["token"],"renewed");
+    }
+
+    #[test]
     fn classified_capture_failures_do_not_guess_from_message_text() {
         let storage=CaptureSaveFailure::vault("Windows user credential protection failed");
         assert!(storage.retryable);
@@ -310,6 +333,61 @@ pub fn load_for_auth(profile:GameProfile,
         return Err("Cached login canceled: launch changed".into());
     }
     Ok(cached)
+}
+
+fn replace_cached_game_token(
+    cached:&mut Value,
+    expected_token:&str,
+    renewed_token:&str,
+)->Result<bool,String> {
+    if renewed_token.is_empty() || renewed_token.len()>16*1024
+        || renewed_token.bytes().any(|byte|
+            byte.is_ascii_whitespace() || byte.is_ascii_control())
+    {
+        return Err("PokéIdle returned an invalid renewed session token".into());
+    }
+    let hello=cached.get_mut("bootstrap")
+        .and_then(|bootstrap|bootstrap.get_mut("hello"))
+        .and_then(Value::as_str)
+        .ok_or_else(||"Protected native login is missing its game hello".to_owned())?;
+    let mut frame:Value=serde_json::from_str(hello)
+        .map_err(|_|"Protected native login contains an invalid game hello".to_owned())?;
+    if frame.get("t").and_then(Value::as_str)!=Some("hello") {
+        return Err("Protected native login does not contain a game hello".into());
+    }
+    let Some(current)=frame.get("token").and_then(Value::as_str) else {
+        return Err("Protected native login is missing its session token".into());
+    };
+    // An older native worker must never overwrite credentials refreshed later
+    // by Firefox or another verified session.
+    if current!=expected_token {return Ok(false)}
+    if current==renewed_token {return Ok(false)}
+    frame["token"]=Value::String(renewed_token.to_owned());
+    let updated=serde_json::to_string(&frame)
+        .map_err(|_|"Could not encode renewed native login".to_owned())?;
+    if updated.len()>32768 {
+        return Err("Renewed native game hello exceeds safe size limit".into());
+    }
+    cached["bootstrap"]["hello"]=Value::String(updated);
+    Ok(true)
+}
+
+/// Persist PokéIdle's sliding session renewal without replacing a newer login.
+/// The official client saves the same renewed token to localStorage; Moth
+/// keeps its equivalent bootstrap only in the protected native vault.
+pub fn renew_game_token(
+    profile:GameProfile,
+    expected_token:&str,
+    renewed_token:&str,
+)->Result<bool,String> {
+    let _guard=preference_write(profile).lock()
+        .map_err(|_|"Native settings writer unavailable".to_owned())?;
+    let Some(mut cached)=load(profile)? else{return Ok(false)};
+    if !replace_cached_game_token(&mut cached,expected_token,renewed_token)? {
+        return Ok(false);
+    }
+    save(profile,&cached)?;
+    Ok(true)
 }
 
 /// Remove legacy Twitch material from the PokéIdle credential cache after
