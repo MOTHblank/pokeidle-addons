@@ -41,10 +41,10 @@ fn read_state(path: &Path) -> Result<Option<State>, String> {
 fn write_state(path: &Path, state: &State) -> Result<(), String> {
     let parent = path.parent().ok_or("missing usage state directory")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json!({"id": state.id, "last_sent": state.last_sent}).to_string())
-        .map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    // Windows cannot atomically rename over an existing destination.
+    // Keep the file tiny; malformed partial writes fail closed on next start.
+    std::fs::write(path, json!({"id": state.id, "last_sent": state.last_sent}).to_string())
+        .map_err(|e| e.to_string())
 }
 
 fn now_secs() -> Option<u64> {
