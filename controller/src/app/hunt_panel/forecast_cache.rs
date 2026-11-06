@@ -10,7 +10,9 @@ pub(in crate::app) struct EstimateCache {
     pub(super) active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     pub(super) active_species_id: Option<u64>,
     pub(super) active_max_hp: Option<u64>,
-    pub(super) bonus_signature: [u64;13],
+    pub(super) bonus_signature: [u64;17],
+    pub(super) seasonal_type:Option<String>,
+    pub(super) gym_signature:Vec<(String,u8)>,
     pub(super) geo_revisions:Option<Arc<std::collections::BTreeMap<String,u64>>>,
     pub(super) geometry_dirty:std::collections::BTreeSet<String>,
     pub(super) full_required:bool,
@@ -49,7 +51,13 @@ impl EstimateCache {
             b.shop_pokemon_xp_multiplier.to_bits(),
             b.delayed_xp_multiplier.to_bits(),b.extra_loot_pct.to_bits(),
             b.guild_known as u64,b.sacrifice_xp_active as u64,
+            b.authoritative_trainer_xp_multiplier.map(f64::to_bits).unwrap_or(0),
+            b.authoritative_pokemon_xp_multiplier.map(f64::to_bits).unwrap_or(0),
+            b.live_capture_multiplier.to_bits(),b.live_shiny_multiplier.to_bits(),
         ];
+        let seasonal_type=view.seasonal_type.clone();
+        let gym_signature=view.gym_podium.iter()
+            .map(|(kind,place)|(kind.clone(),*place)).collect::<Vec<_>>();
         let active_species_id=view.active_pokemon.as_ref().and_then(|p|p.species_id);
         let active_max_hp=view.active_pokemon.as_ref().and_then(|p|p.max_hp);
         // Catalog/lead/bonus changes affect all forecasts. Geometry changes
@@ -60,7 +68,9 @@ impl EstimateCache {
             self.active_signature!=active_signature ||
             self.active_species_id!=active_species_id ||
             self.active_max_hp!=active_max_hp ||
-            self.bonus_signature!=bonus_signature;
+            self.bonus_signature!=bonus_signature ||
+            self.seasonal_type!=seasonal_type ||
+            self.gym_signature!=gym_signature;
         let mut changed_geometry=std::collections::BTreeSet::new();
         if self.geo_revisions.as_ref().is_none_or(|old|
             !Arc::ptr_eq(old,&view.geo_revisions)) {
@@ -87,6 +97,8 @@ impl EstimateCache {
             self.active_species_id=active_species_id;
             self.active_max_hp=active_max_hp;
             self.bonus_signature=bonus_signature;
+            self.seasonal_type=seasonal_type;
+            self.gym_signature=gym_signature;
             self.live=live;
             self.refreshed=None;
             self.revision=self.revision.wrapping_add(1);
