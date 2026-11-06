@@ -98,7 +98,14 @@ pub fn launch(config: &Config, headless: bool) -> Result<(Child, MonitorHandle),
         .spawn()
         .map_err(format_spawn_error)?;
 
-    let monitor = MonitorHandle::start(config.remote_debug_port, headless);
+    // Let Firefox finish its launcher -> browser process handoff before
+    // creating its one allowed BiDi session. Existing-profile adoption still
+    // uses MonitorHandle::start() and attaches without this delay.
+    let monitor = MonitorHandle::start_after(
+        config.remote_debug_port,
+        headless,
+        Duration::from_secs(2),
+    );
     Ok((child, monitor))
 }
 
