@@ -424,23 +424,14 @@ fn draw_boss_details(
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(entry.name.chars().take(2)
-                        .collect::<String>().to_uppercase())
-                        .size(16.0).strong().color(ACCENT),
-                );
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(&entry.name).size(14.0).strong().color(TEXT));
-                    ui.horizontal_wrapped(|ui| {
-                        for kind in &entry.types {
-                            ui.label(RichText::new(atlas_type_name(kind)).size(10.0).color(ACCENT));
-                        }
-                        if entry.types.is_empty() {
-                            ui.label(RichText::new(tr("Type data unavailable")).size(10.0).color(DIM));
-                        }
-                    });
-                });
+            ui.label(RichText::new(&entry.name).size(14.0).strong().color(TEXT));
+            ui.horizontal_wrapped(|ui| {
+                for kind in &entry.types {
+                    ui.label(RichText::new(atlas_type_name(kind)).size(10.0).color(ACCENT));
+                }
+                if entry.types.is_empty() {
+                    ui.label(RichText::new(tr("Type data unavailable")).size(10.0).color(DIM));
+                }
             });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
@@ -494,7 +485,6 @@ fn draw_boss_details(
                 && has_level
                 && has_tokens;
             ui.add_space(9.0);
-            let compact_actions = ui.available_width() < 340.0;
             ui.horizontal_wrapped(|ui| {
                 let farm_label = tr("Auto farm");
                 if pending_mode == Some(true) {
