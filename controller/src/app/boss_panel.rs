@@ -1147,11 +1147,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(list_width);
-                            ui.label(
-                                RichText::new(tr("BOSSES"))
-                                    .size(10.0).strong().color(DIM),
-                            );
-                            ui.add_space(5.0);
                             draw_boss_catalog(
                                 ui, &view, &hunt, live,
                                 pending_start.as_ref().map(|(key, _)| key.as_str()),
@@ -1172,11 +1167,6 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         });
                     });
                 } else {
-                    ui.label(
-                        RichText::new(tr("BOSSES"))
-                            .size(10.0).strong().color(DIM),
-                    );
-                    ui.add_space(5.0);
                     draw_boss_catalog(
                         ui, &view, &hunt, live,
                         pending_start.as_ref().map(|(key, _)| key.as_str()),
