@@ -271,8 +271,6 @@ pub struct HuntView {
     /// Missing delta fields preserve the last confirmed value; disconnects clear it.
     pub seasonal_type: Option<String>,
     pub bonuses: HuntBonuses,
-    /// Current map-hunt seasonal type when the server publishes it.
-    pub seasonal_type: Option<String>,
     /// Best Gym podium place (1/2/3) for each elemental type.
     pub gym_podium: Arc<BTreeMap<String,u8>>,
     pub measurements: HuntMeasurements,
@@ -865,8 +863,8 @@ impl HuntIntel {
         // each kill. Mirror the official client's bonusXpAgora(): filter
         // expired timed parts, then retain any unexplained remainder so a new
         // server-side bonus never silently disappears from Atlas projections.
-        let auth_tr=None;
-        let auth_pk=None;
+        let mut auth_tr=None;
+        let mut auth_pk=None;
         if let Some(raw)=self.bonus_xp.as_ref().filter(|v|v.is_object()) {
             if let Some(parts)=raw.get("partes").and_then(Value::as_array) {
                 let factor=|v:&Value,key:&str|v.get(key).and_then(Value::as_f64)
