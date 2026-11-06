@@ -75,7 +75,10 @@ impl BossEntry {
 
     pub fn damage_multiplier(&self, hunt: &HuntView) -> Option<f64> {
         let strength = self.team_strength(hunt)?;
-        let deficit = (f64::from(self.team_ideal.max(1)) - strength).max(0.0);
+        // Zero only occurs in synthetic/default entries; the live upstream
+        // default and advertised value are both five.
+        let ideal = if self.team_ideal == 0 { 5 } else { self.team_ideal };
+        let deficit = (f64::from(ideal) - strength).max(0.0);
         Some(3.0_f64.powf(deficit))
     }
 
