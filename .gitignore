@@ -24,3 +24,7 @@ probe.csv
 /controller/dist
 /dist
 controller/Cargo.lock
+/telemetry/node_modules
+telemetry/wrangler.toml
+telemetry/package.json
+telemetry/package-lock.json
