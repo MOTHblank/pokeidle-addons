@@ -443,11 +443,18 @@ pub fn cache_browser_handoff(profile: GameProfile, fresh: &Value,
             Err(error)=>format!("Canceled login cache rollback failed: {error}"),
         }));
     }
-    let warning=match saved {
-        Err(error)=>Some(error),
-        Ok(())=>read_error,
-    };
-    (merged,warning)
+    if saved.is_ok() {
+        if let Some(error)=read_error {
+            crate::logging::warn(&format!(
+                "{} previous protected native login could not be read; fresh login was saved successfully: {error}",
+                profile.name()
+            ));
+        }
+    }
+    // Only failure to save the fresh login means the next launch may need
+    // Firefox again. A failure reading the superseded cache can lose old
+    // native preferences, but it does not make the new credential unsaved.
+    (merged,saved.err())
 }
 
 
