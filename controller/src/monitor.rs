@@ -89,6 +89,21 @@ pub struct TabInfo {
     pub url: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StreamBonusState {
+    pub pct: f32,
+    pub xp_until: u64,
+    pub capture_until: u64,
+    pub shiny_until: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StreamBonuses {
+    pub twitch: StreamBonusState,
+    pub kick: StreamBonusState,
+    pub server_now_ms: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct Health {
     pub state: String,
@@ -128,11 +143,7 @@ pub struct Health {
     pub orbs: u64,
     pub twitch_linked: Option<bool>,
     pub twitch_login: String,
-    pub twitch_bonus_pct: f32,
-    pub twitch_xp_until: u64,
-    pub twitch_capture_until: u64,
-    pub twitch_shiny_until: u64,
-    pub twitch_server_now_ms: u64,
+    pub stream_bonuses: StreamBonuses,
     pub xp_sources: Vec<String>,
     pub bridge_connected: bool,
     /// The bridge snapshot was actually readable, regardless of game socket state.
@@ -188,11 +199,7 @@ impl Default for Health {
             orbs: 0,
             twitch_linked: None,
             twitch_login: String::new(),
-            twitch_bonus_pct: 0.0,
-            twitch_xp_until: 0,
-            twitch_capture_until: 0,
-            twitch_shiny_until: 0,
-            twitch_server_now_ms: 0,
+            stream_bonuses: StreamBonuses::default(),
             xp_sources: Vec::new(),
             bridge_connected: false,
             bridge_snapshot_ok: false,
@@ -537,11 +544,7 @@ struct RuntimeProbe {
     stream_scan_opened: u32,
     twitch_linked: Option<bool>,
     twitch_login: String,
-    twitch_bonus_pct: f32,
-    twitch_xp_until: u64,
-    twitch_capture_until: u64,
-    twitch_shiny_until: u64,
-    twitch_server_now_ms: u64,
+    stream_bonuses: StreamBonuses,
     xp_sources: Vec<String>,
     last_game_message_ms: u64,
     xp_bonuses: Vec<String>,
@@ -584,11 +587,7 @@ struct Probe {
     orbs: u64,
     twitch_linked: Option<bool>,
     twitch_login: String,
-    twitch_bonus_pct: f32,
-    twitch_xp_until: u64,
-    twitch_capture_until: u64,
-    twitch_shiny_until: u64,
-    twitch_server_now_ms: u64,
+    stream_bonuses: StreamBonuses,
     xp_sources: Vec<String>,
     bridge_connected: bool,
     bridge_snapshot_ok: bool,
@@ -922,11 +921,7 @@ fn monitor_loop(
                         current.orbs = probe.orbs;
                         current.twitch_linked = probe.twitch_linked;
                         current.twitch_login = probe.twitch_login;
-                        current.twitch_bonus_pct = probe.twitch_bonus_pct;
-                        current.twitch_xp_until = probe.twitch_xp_until;
-                        current.twitch_capture_until = probe.twitch_capture_until;
-                        current.twitch_shiny_until = probe.twitch_shiny_until;
-                        current.twitch_server_now_ms = probe.twitch_server_now_ms;
+                        current.stream_bonuses = probe.stream_bonuses;
                         current.xp_sources = probe.xp_sources;
                         current.bridge_connected = probe.bridge_connected;
                         current.bridge_snapshot_ok = probe.bridge_snapshot_ok;
@@ -1926,11 +1921,7 @@ fn probe_page(
         orbs: runtime.orbs,
         twitch_linked: runtime.twitch_linked,
         twitch_login: runtime.twitch_login,
-        twitch_bonus_pct: runtime.twitch_bonus_pct,
-        twitch_xp_until: runtime.twitch_xp_until,
-        twitch_capture_until: runtime.twitch_capture_until,
-        twitch_shiny_until: runtime.twitch_shiny_until,
-        twitch_server_now_ms: runtime.twitch_server_now_ms,
+        stream_bonuses: runtime.stream_bonuses,
         xp_sources: runtime.xp_sources,
         bridge_connected: runtime.bridge_connected,
         bridge_snapshot_ok: runtime.bridge_snapshot_ok,
@@ -2156,18 +2147,28 @@ fn probe_runtime_details(
     };
     let twitch_login=twitch.get("login").and_then(Value::as_str)
         .unwrap_or_default().to_string();
-    let twitch_bonus_pct=twitch.get("pct").and_then(Value::as_f64)
-        .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
-    let twitch_bonus=twitch.get("bonus").cloned().unwrap_or(Value::Null);
-    let twitch_xp_until=twitch_bonus.get("xp").and_then(Value::as_u64).unwrap_or(0);
-    let twitch_capture_until=twitch_bonus.get("captura").and_then(Value::as_u64).unwrap_or(0);
-    let twitch_shiny_until=twitch_bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0);
-    let twitch_server_now_ms=state.get("servidorAgora").and_then(Value::as_u64)
-        .map(|value|if (1_000_000_000..10_000_000_000).contains(&value) {
-            value.saturating_mul(1_000)
-        }else{value})
-        .unwrap_or_else(||std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
+    let stream_bonus_state=|raw:&Value| {
+        let pct=raw.get("pct").and_then(Value::as_f64)
+            .filter(|pct|pct.is_finite()).unwrap_or(0.0).max(0.0) as f32;
+        let bonus=raw.get("bonus").cloned().unwrap_or(Value::Null);
+        StreamBonusState {
+            pct,
+            xp_until: bonus.get("xp").and_then(Value::as_u64).unwrap_or(0),
+            capture_until: bonus.get("captura").and_then(Value::as_u64).unwrap_or(0),
+            shiny_until: bonus.get("shiny").and_then(Value::as_u64).unwrap_or(0),
+        }
+    };
+    let kick=state.get("kick").cloned().unwrap_or(Value::Null);
+    let stream_bonuses=StreamBonuses {
+        twitch: stream_bonus_state(&twitch),
+        kick: stream_bonus_state(&kick),
+        server_now_ms: state.get("servidorAgora").and_then(Value::as_u64)
+            .map(|value|if (1_000_000_000..10_000_000_000).contains(&value) {
+                value.saturating_mul(1_000)
+            }else{value})
+            .unwrap_or_else(||std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64),
+    };
 
     let mut xp_sources=Vec::new();
     let event = state.get("evento").cloned().unwrap_or(Value::Null);
@@ -2180,10 +2181,15 @@ fn probe_runtime_details(
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
 
-    if event_trainer > 0.0 || event_pokemon > 0.0 {
+    if event_trainer > 0.0 {
         xp_sources.push(format!(
-            "Event +{}% trainer / +{}% Pokémon XP",
-            trim_pct(event_trainer as f32),
+            "Event +{}% trainer XP",
+            trim_pct(event_trainer as f32)
+        ));
+    }
+    if event_pokemon > 0.0 {
+        xp_sources.push(format!(
+            "Event +{}% Pokémon XP",
             trim_pct(event_pokemon as f32)
         ));
     }
@@ -2195,6 +2201,11 @@ fn probe_runtime_details(
 
     if guild_bonus > 0.0 {
         xp_sources.push(format!("Guild +{}% XP", trim_pct(guild_bonus as f32)));
+    }
+    let guild_boost_until=state.get("guild").and_then(|guild|guild.get("boostAte"))
+        .and_then(Value::as_u64).unwrap_or(0);
+    if guild_boost_until>stream_bonuses.server_now_ms {
+        xp_sources.push("Guild +10%".to_string());
     }
 
     if state
@@ -2215,11 +2226,19 @@ fn probe_runtime_details(
         xp_sources.push("Shop XP boost active".to_string());
     }
 
-    xp_bonuses.retain(|item|!item.to_ascii_lowercase().contains("twitch"));
-    if twitch_xp_until>twitch_server_now_ms && twitch_bonus_pct>0.0 {
-        let source=format!("Twitch +{}% XP",trim_pct(twitch_bonus_pct));
-        if !xp_sources.iter().any(|item|item==&source){xp_sources.push(source.clone());}
-        if !xp_bonuses.iter().any(|item|item==&source){xp_bonuses.push(source);}
+    xp_bonuses.retain(|item|{
+        let lower=item.to_ascii_lowercase();
+        !lower.contains("twitch") && !lower.contains("kick") && !lower.contains("+0%")
+    });
+    for (name, bonus) in [
+        ("Twitch", stream_bonuses.twitch),
+        ("Kick", stream_bonuses.kick),
+    ] {
+        if bonus.xp_until>stream_bonuses.server_now_ms && bonus.pct>0.0 {
+            let source=format!("{name} +{}% XP",trim_pct(bonus.pct));
+            if !xp_sources.iter().any(|item|item==&source){xp_sources.push(source.clone());}
+            if !xp_bonuses.iter().any(|item|item==&source){xp_bonuses.push(source);}
+        }
     }
 
     Ok(RuntimeProbe {
@@ -2248,11 +2267,7 @@ fn probe_runtime_details(
         stream_scan_opened: state.get("streamScanOpened").and_then(Value::as_u64).unwrap_or(0) as u32,
         twitch_linked,
         twitch_login,
-        twitch_bonus_pct,
-        twitch_xp_until,
-        twitch_capture_until,
-        twitch_shiny_until,
-        twitch_server_now_ms,
+        stream_bonuses,
         xp_sources,
         last_game_message_ms,
         xp_bonuses,
