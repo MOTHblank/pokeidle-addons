@@ -845,7 +845,9 @@ impl ControllerApp {
                self.runtimes[index].session.native_handoff_busy || self.runtimes[index].game.native.is_some() ||
                self.runtimes[index].session.native_verifying ||
                self.runtimes[index].game.handoff_closing || self.runtimes[index].game.stopping ||
-               self.runtimes[index].game.shutdown_failed || self.runtimes[index].game.monitor.is_none() {
+               self.runtimes[index].game.shutdown_failed ||
+               self.runtimes[index].game.profile_reconcile.is_some() ||
+               self.runtimes[index].game.monitor.is_none() {
                 continue;
             }
             let health = self.runtimes[index].game.health();
