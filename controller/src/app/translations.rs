@@ -162,7 +162,6 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Entry" => "Entrada",
         "Inventory" => "Inventário",
         "Required level" => "Nível necessário",
-        "Strongest eligible team Pokémon" => "Pokémon elegível mais forte da equipe",
         "Boss combat level" => "Nível de combate do boss",
         "Boss damage" => "Dano do boss",
         "Next fight" => "Próxima luta",
