@@ -18,7 +18,7 @@ use crate::native_automation::{AutomationWriter, AutomationStatus};
 use crate::native_pvp::{PvpAutomation, PvpAction, PvpStatus};
 use crate::native_market::{MarketBuyer, MarketRules, MarketStatus};
 use crate::native_twitch_miner::{TwitchMinerControl, TwitchMinerSession};
-use crate::monitor::{StreamBonusState, StreamBonuses};
+use crate::monitor::StreamBonuses;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
