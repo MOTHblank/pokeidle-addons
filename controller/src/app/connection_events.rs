@@ -66,6 +66,7 @@ impl ControllerApp {
                 // Process and monitor were already closed in the worker.
                 self.runtimes[index].game.child = None;
                 self.runtimes[index].game.orphaned_pid = None;
+                self.runtimes[index].game.profile_reconcile = None;
                 self.runtimes[index].game.monitor = None;
                 self.runtimes[index].game.shutdown_failed = false;
                 if let Some(action) = self.runtimes[index].session.after_stop.take() {
@@ -81,6 +82,7 @@ impl ControllerApp {
                 self.runtimes[index].game.shutdown_failed = true;
                 self.runtimes[index].game.child = ownership.child;
                 self.runtimes[index].game.orphaned_pid = ownership.orphaned_pid;
+                self.runtimes[index].game.profile_reconcile = None;
                 self.runtimes[index].game.monitor = ownership.monitor;
                 logging::error(&format!(
                     "{} Firefox shutdown failed: {}", self.account_name(profile), error
@@ -504,15 +506,19 @@ impl ControllerApp {
                 continue;
             }
             if event.existing_firefox {
-                // A stale managed Firefox process still owns this profile.
-                // This is process ownership protection, not evidence that the
-                // PokéIdle login expired. Adopt that browser rather than create
-                // a competing game socket from the valid native cache.
+                // A leftover managed Firefox profile is an ownership problem,
+                // not an authentication failure. Clean it up first, then retry
+                // the saved native login. Only an actual missing/rejected cache
+                // may open visible Firefox afterward.
+                let headless = self.runtimes[event.index].game.headless;
                 logging::info(&format!(
-                    "{} browser handoff required because its Firefox profile is already running",
+                    "{} stale Firefox profile detected; closing it before retrying saved native login",
                     self.account_name(profile)));
-                self.runtimes[event.index].session.require_browser_login = true;
-                self.launch_firefox_bootstrap(profile, false);
+                self.runtimes[event.index].session.require_browser_login = false;
+                if self.stop_one(profile) {
+                    self.runtimes[event.index].session.after_stop =
+                        Some(AfterStop::Native { headless });
+                }
                 continue;
             }
             if self.runtimes[event.index].session.require_browser_login {
@@ -727,39 +733,100 @@ impl ControllerApp {
             };
             if exited {
                 let account_name = self.accounts[slot.profile.index()].name.clone();
-                logging::info(&format!("{} Firefox child process exited", account_name));
+                logging::info(&format!("{} Firefox launcher process exited", account_name));
                 slot.child = None;
 
-                // Firefox can outlive the original launcher handle. Keep the
-                // existing BiDi monitor for that same profile rather than
-                // permanently discarding telemetry from a still-open game.
+                // Command::spawn can return Firefox's short-lived Windows
+                // launcher rather than the eventual profile-owning process.
+                // A single WMI miss here is not proof that Firefox is gone:
+                // keep the monitor/session owned and retry discovery for a
+                // bounded grace period instead of permitting a second launch.
                 match Config::for_profile(slot.profile)
                     .and_then(|config| firefox::find_profile_process(&config))
                 {
                     Ok(Some(pid)) => {
                         slot.orphaned_pid = Some(pid);
-                        logging::warn(&format!(
-                            "{} Firefox launcher exited; profile PID {} is still running, preserving monitor",
+                        slot.profile_reconcile = None;
+                        logging::info(&format!(
+                            "{} Firefox launcher handed off to profile PID {}; preserving BiDi monitor",
                             account_name, pid
                         ));
                     }
                     Ok(None) => {
                         slot.orphaned_pid = None;
-                        if let Some(monitor) = slot.monitor.take() {
-                            monitor.stop();
-                        }
+                        slot.schedule_profile_reconcile();
+                        logging::info(&format!(
+                            "{} Firefox launcher exited before the profile PID became visible; reconciling ownership",
+                            account_name
+                        ));
                     }
-                    Err(error) => logging::warn(&format!(
-                        "{} profile recovery failed (keeping monitor until ownership is known): {}",
-                        account_name, error
-                    )),
+                    Err(error) => {
+                        slot.orphaned_pid = None;
+                        slot.schedule_profile_reconcile();
+                        logging::warn(&format!(
+                            "{} profile discovery failed after launcher exit; preserving monitor while retrying: {}",
+                            account_name, error
+                        ));
+                    }
                 }
             }
+
             if let Some(pid) = slot.orphaned_pid {
                 if !firefox::process_alive(pid) {
+                    // Firefox may replace a profile-owning PID during startup
+                    // or shutdown. Reconcile the profile before releasing the
+                    // monitor/session and making Launch available again.
                     slot.orphaned_pid = None;
-                    if let Some(monitor) = slot.monitor.take() {
-                        monitor.stop();
+                    slot.schedule_profile_reconcile();
+                }
+            }
+
+            if let Some(reconcile) = slot.profile_reconcile {
+                let now = Instant::now();
+                if now >= reconcile.next_check {
+                    let account_name = self.accounts[slot.profile.index()].name.clone();
+                    match Config::for_profile(slot.profile)
+                        .and_then(|config| firefox::find_profile_process(&config))
+                    {
+                        Ok(Some(pid)) => {
+                            slot.orphaned_pid = Some(pid);
+                            slot.profile_reconcile = None;
+                            logging::info(&format!(
+                                "{} Firefox profile PID {} appeared after launcher handoff; BiDi ownership preserved",
+                                account_name, pid
+                            ));
+                        }
+                        Ok(None) if now >= reconcile.deadline => {
+                            slot.profile_reconcile = None;
+                            slot.orphaned_pid = None;
+                            if let Some(monitor) = slot.monitor.take() {
+                                monitor.stop();
+                            }
+                            logging::info(&format!(
+                                "{} Firefox profile did not materialize after launcher exit; released BiDi monitor",
+                                account_name
+                            ));
+                        }
+                        Ok(None) => {
+                            slot.profile_reconcile = Some(FirefoxProfileReconcile {
+                                deadline: reconcile.deadline,
+                                next_check: now + FIREFOX_PROFILE_RECONCILE_RETRY,
+                            });
+                        }
+                        Err(_) => {
+                            // Process ownership is unknown, so fail closed:
+                            // keep the slot unavailable to Launch and retry at
+                            // a slower cadence rather than risking a duplicate
+                            // Firefox + BiDi session on the same profile.
+                            slot.profile_reconcile = Some(FirefoxProfileReconcile {
+                                deadline: if now >= reconcile.deadline {
+                                    now + FIREFOX_PROFILE_RECONCILE_GRACE
+                                } else {
+                                    reconcile.deadline
+                                },
+                                next_check: now + Duration::from_secs(1),
+                            });
+                        }
                     }
                 }
             }
