@@ -204,6 +204,66 @@ impl Credentials {
         Ok(Self { url: url.to_owned(), host, port,
             hello: hello.to_owned(), cookies: cookie_parts.join("; ") })
     }
+
+    fn apply_renewed_token(&mut self, renewed_token:&str)->Result<Option<String>,String> {
+        if renewed_token.is_empty() || renewed_token.len()>16*1024
+            || renewed_token.bytes().any(|byte|
+                byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            return Err("PokéIdle returned an invalid renewed session token".into());
+        }
+        let mut hello:Value=serde_json::from_str(&self.hello)
+            .map_err(|_|"Native game hello became invalid".to_owned())?;
+        let current=hello.get("token").and_then(Value::as_str)
+            .ok_or_else(||"Native game hello is missing its session token".to_owned())?
+            .to_owned();
+        if current==renewed_token {return Ok(None)}
+        hello["token"]=Value::String(renewed_token.to_owned());
+        let updated=serde_json::to_string(&hello)
+            .map_err(|_|"Could not encode renewed native game hello".to_owned())?;
+        if updated.len()>32768 {
+            return Err("Renewed native game hello exceeds safe size limit".into());
+        }
+        self.hello=updated;
+        Ok(Some(current))
+    }
+}
+
+fn browser_login_required_frame(frame:&Value)->Option<&str> {
+    if frame.get("t").and_then(Value::as_str)!=Some("erro") {return None}
+    match frame.get("chave").and_then(Value::as_str) {
+        Some(key @ ("auth.sessaoInvalida" | "auth.precisaLogin" | "login.precisaNick")) =>
+            Some(key),
+        _=>None,
+    }
+}
+
+fn apply_session_renewal(
+    profile:GameProfile,
+    credentials:&mut Credentials,
+    frame:&Value,
+) {
+    if frame.get("t").and_then(Value::as_str)!=Some("sessao.renovada") {return}
+    let Some(token)=frame.get("token").and_then(Value::as_str) else {
+        crate::logging::warn(&format!(
+            "{}: PokéIdle sent a session renewal without a token",profile.label()));
+        return;
+    };
+    match credentials.apply_renewed_token(token) {
+        Ok(Some(previous))=>{
+            match crate::native_auth::renew_game_token(profile,&previous,token) {
+                Ok(true)=>crate::logging::info(&format!(
+                    "{}: protected native login renewed",profile.label())),
+                Ok(false)=>{},
+                Err(error)=>crate::logging::warn(&format!(
+                    "{}: renewed native login is active but could not be saved: {error}",
+                    profile.label())),
+            }
+        }
+        Ok(None)=>{},
+        Err(error)=>crate::logging::warn(&format!(
+            "{}: ignored invalid native session renewal: {error}",profile.label())),
+    }
 }
 
 fn websocket_authority(url: &str) -> Result<(String, u16), String> {
@@ -392,8 +452,8 @@ impl NativeSession {
     /// Establish the verified game WebSocket before handing ownership away
     /// from Firefox. This is blocking and MUST run on a background thread.
     pub fn start_verified(profile: GameProfile, bootstrap: Value) -> Result<Self, String> {
-        let credentials = Credentials::parse(&bootstrap)?;
-        let initial = open_session(&credentials)?;
+        let mut credentials = Credentials::parse(&bootstrap)?;
+        let initial = open_session(profile,&mut credentials)?;
         let legacy_twitch = bootstrap.get("twitch")
             .and_then(|value|value.get("token"))
             .and_then(Value::as_str)
@@ -730,7 +790,7 @@ fn set_live_read_timeout(socket: &mut GameSocket) -> Result<(), String> {
     result.map_err(|error| format!("Could not configure live PokéIdle updates: {error}"))
 }
 
-fn open_session(credentials: &Credentials) -> Result<(GameSocket, Value), String> {
+fn open_session(profile:GameProfile, credentials: &mut Credentials) -> Result<(GameSocket, Value), String> {
     crate::native_tls::ensure()?;
     let addrs = (credentials.host.as_str(), credentials.port)
         .to_socket_addrs().map_err(|_| "Could not find the PokéIdle server. Check your connection.".to_owned())?;
@@ -778,6 +838,14 @@ fn open_session(credentials: &Credentials) -> Result<(GameSocket, Value), String
         match socket.read() {
             Ok(Message::Text(text)) => {
                 if let Ok(frame) = serde_json::from_str::<Value>(text.as_ref()) {
+                    if let Some(key)=browser_login_required_frame(&frame) {
+                        return Err(format!(
+                            "AUTH_REQUIRED: PokéIdle rejected the saved session ({key})"));
+                    }
+                    if frame.get("t").and_then(Value::as_str)==Some("sessao.renovada") {
+                        apply_session_renewal(profile,credentials,&frame);
+                        continue;
+                    }
                     if frame.get("t").and_then(Value::as_str) == Some("welcome") {
                         // Preserve the parsed welcome across the verified handoff.
                         // The game worker must not parse this large frame twice.
@@ -930,7 +998,7 @@ fn pvp_uses_vip_path(view:&HuntView)->bool {
     view.bonuses.vip_known && view.bonuses.vip_active
 }
 
-fn session_loop(profile: GameProfile, credentials: Credentials,
+fn session_loop(profile: GameProfile, mut credentials: Credentials,
     snapshot: Arc<Mutex<NativeSnapshot>>, stop: Arc<AtomicBool>,
     twitch_miner:TwitchMinerControl, first_session: Option<(GameSocket, Value)>,
     mut gameplay: Gameplay, mut restock: Restock,
@@ -967,7 +1035,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
     let mut item_metadata: Option<crate::native_items::ItemCatalog> = None;
     let mut last_metadata_attempt: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
-        match first_session.take().map(Ok).unwrap_or_else(|| open_session(&credentials)) {
+        match first_session.take().map(Ok).unwrap_or_else(|| open_session(profile,&mut credentials)) {
             Ok((mut socket, frame)) => {
                 crate::logging::info("Native PokéIdle WSS received authenticated welcome");
                 // The handshake already parsed this frame; all consumers borrow it.
@@ -1031,6 +1099,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                 // Summarize them at most once every five minutes per game socket.
                 let mut delayed_capture_receipts = 0usize;
                 let mut last_capture_delay_summary = Instant::now();
+                let mut login_required:Option<String>=None;
                 loop {
                     if stop.load(Ordering::Relaxed) {
                         let _ = socket.close(None);
@@ -1508,6 +1577,16 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         Ok(Message::Text(text)) => {
                             if let Ok(frame)=serde_json::from_str::<Value>(text.as_ref()) {
                                 let received_at = Instant::now();
+                                if let Some(key)=browser_login_required_frame(&frame) {
+                                    login_required=Some(format!(
+                                        "AUTH_REQUIRED: PokéIdle rejected the saved session ({key})"));
+                                    break;
+                                }
+                                if frame.get("t").and_then(Value::as_str)==Some("sessao.renovada") {
+                                    apply_session_renewal(profile,&mut credentials,&frame);
+                                    update(&snapshot,|state|state.last_received=Some(received_at));
+                                    continue;
+                                }
                                 gameplay.ingest_value(&frame, received_at);
                                 restock.ingest_value(&frame, received_at);
                                 market.ingest_value(&frame, received_at, &market_cfg);
@@ -1625,8 +1704,14 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                     boss_manager.on_disconnect(&navigator, &hunt_intel.view);
                     boss_manager.publish(&boss);
                     if let Ok(mut view) = hunts.lock() { *view = hunt_intel.snapshot(); }
+                    let login_error=login_required.clone();
                     update(&snapshot, |s| {
-                        s.phase = "Reconnecting".into();
+                        s.phase = if login_error.is_some() {
+                            "NeedsLogin"
+                        } else {
+                            "Reconnecting"
+                        }.into();
+                        if let Some(error)=login_error.clone() {s.error=Some(error);}
                         s.native_restock = restock.status.clone();
                         s.native_automation = automation_writer.status.clone();
                         s.native_pvp = PvpStatus::default();
@@ -1638,6 +1723,7 @@ fn session_loop(profile: GameProfile, credentials: Credentials,
                         s.pokemon_sale_error=Some("Connection lost before Pokémon sale confirmation".into());
                     });
                     notify_phase_change(&phase_wake);
+                    if login_required.is_some() {break;}
                 }
             }
             Err(error) => {
@@ -1695,6 +1781,37 @@ mod tests {
         notify_phase_change(&wake);
         assert_eq!(calls.load(Ordering::Relaxed),1);
     }
+    #[test]
+    fn websocket_auth_error_frames_require_browser_refresh() {
+        for key in ["auth.sessaoInvalida","auth.precisaLogin","login.precisaNick"] {
+            let frame=json!({"t":"erro","chave":key});
+            assert_eq!(browser_login_required_frame(&frame),Some(key));
+        }
+        for key in ["auth.contaBanida","auth.ipBanido","login.limiteOnlineIp"] {
+            let frame=json!({"t":"erro","chave":key});
+            assert_eq!(browser_login_required_frame(&frame),None,
+                "{key} must not be misreported as an expired login");
+        }
+    }
+
+    #[test]
+    fn native_session_renewal_rewrites_the_reconnect_hello() {
+        let mut credentials=Credentials::parse(&json!({
+            "bootstrap":{
+                "url":"wss://pokeidle.io",
+                "hello":r#"{"t":"hello","nick":"Trainer","token":"old","delta":1}"#
+            },
+            "cookies":[]
+        })).unwrap();
+        assert_eq!(
+            credentials.apply_renewed_token("renewed").unwrap().as_deref(),
+            Some("old"));
+        let hello:Value=serde_json::from_str(&credentials.hello).unwrap();
+        assert_eq!(hello["token"],"renewed");
+        assert_eq!(hello["nick"],"Trainer");
+        assert_eq!(hello["delta"],1);
+    }
+
     #[test]
     fn only_explicit_auth_rejection_requires_browser_refresh() {
         assert!(authentication_rejected(
