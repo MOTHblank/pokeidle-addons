@@ -91,10 +91,21 @@ pub(super) fn xp_bonus_summary(b:&native_hunts::HuntBonuses)->String {
     let altar=if b.sacrifice_xp_active {
         format!(" · {} ×1.2",tr("Sacrifice boost"))
     } else {String::new()};
-    format!("Twitch {} · {} {} · VIP {}{}",
+    let authoritative=match (
+        b.authoritative_trainer_xp_multiplier,
+        b.authoritative_pokemon_xp_multiplier
+    ) {
+        (Some(trainer),Some(pokemon))=>format!(
+            " · {} ×{trainer:.3} / ×{pokemon:.3}",tr("Server XP")),
+        _=>String::new(),
+    };
+    let raid=if b.raid_farm_pct>0.0 {
+        format!(" · {} +{:.1}%",tr("Raid farm"),b.raid_farm_pct)
+    } else {String::new()};
+    format!("Twitch {} · {} {} · VIP {}{}{}{}",
         known_percent(b.twitch_pct,b.twitch_known),
         tr("Guild boost"),known_boost(b.guild_boost_active,b.guild_boost_known,1.1),
-        known_boost(b.vip_active,b.vip_known,1.5),altar)
+        known_boost(b.vip_active,b.vip_known,1.5),altar,authoritative,raid)
 }
 #[derive(Clone,Copy,PartialEq,Eq,Debug)]
 pub(super) enum AtlasAoeCue { NoLead, SingleTarget, Enabled }
