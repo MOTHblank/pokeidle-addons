@@ -1065,7 +1065,7 @@ mod tests {
                                 escaped = false;
                                 return None;
                             }
-                            if ch == '\\\\' {
+                            if ch == '\\' {
                                 escaped = true;
                                 return None;
                             }
