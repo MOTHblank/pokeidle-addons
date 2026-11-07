@@ -672,6 +672,16 @@ impl BossManager {
             for event in events {
                 match event.get("k").and_then(Value::as_str) {
                     Some("bossMorto") => {
+                        // batalha events are newer than the last estado snapshot.
+                        // If the server omits an immediate estado.boss delta after
+                        // the encounter ends, retaining arena would make Overview
+                        // report a boss fight indefinitely during a normal hunt.
+                        let ended_key = event.get("key").and_then(Value::as_str);
+                        if self.view.arena.is_some() &&
+                            ended_key.is_none_or(|key|
+                                self.view.arena.as_deref() == Some(key)) {
+                            self.view.arena = None;
+                        }
                         self.view.cooldown_until =
                             Some(Instant::now() + BOSS_NEXT_FIGHT_DELAY);
                         let drops = event.get("drops").and_then(Value::as_array)
@@ -703,6 +713,12 @@ impl BossManager {
                         }
                     }
                     Some("bossPerdeu") | Some("bossSaiu") => {
+                        let ended_key = event.get("key").and_then(Value::as_str);
+                        if self.view.arena.is_some() &&
+                            ended_key.is_none_or(|key|
+                                self.view.arena.as_deref() == Some(key)) {
+                            self.view.arena = None;
+                        }
                         self.view.cooldown_until =
                             Some(Instant::now() + BOSS_NEXT_FIGHT_DELAY);
                         if let Some(trip) = self.trip.as_mut() {
@@ -1130,6 +1146,41 @@ mod tests {
             manager.next_action(&view, &mut navigator, now + Duration::from_secs(11)),
             Some(GameCommand::BossEnter(key)) if key == "bronze"
         ));
+    }
+
+    #[test]
+    fn terminal_boss_events_clear_stale_arena_without_clobbering_a_new_fight() {
+        let mut manager = manager();
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":false,"arena":{"key":"bronze"}
+        }}}));
+        assert_eq!(manager.view.arena.as_deref(), Some("bronze"));
+
+        // A delayed terminal event from another boss must not erase a newer
+        // encounter, but the matching terminal event must immediately retire it.
+        manager.ingest(&json!({"t":"batalha","ev":[{
+            "k":"bossMorto","key":"other","nome":"Other","drops":[]
+        }]}));
+        assert_eq!(manager.view.arena.as_deref(), Some("bronze"));
+        manager.ingest(&json!({"t":"batalha","ev":[{
+            "k":"bossMorto","key":"bronze","nome":"Bronze Boss","drops":[]
+        }]}));
+        assert_eq!(manager.view.arena, None);
+
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":false,"arena":{"key":"bronze"}
+        }}}));
+        manager.ingest(&json!({"t":"batalha","ev":[{"k":"bossPerdeu"}]}));
+        assert_eq!(manager.view.arena, None,
+            "a terminal event without a key still ends the current encounter");
+
+        manager.ingest(&json!({"t":"estado","estado":{"boss":{
+            "auto":false,"arena":{"key":"bronze"}
+        }}}));
+        manager.ingest(&json!({"t":"batalha","ev":[{
+            "k":"bossSaiu","key":"bronze"
+        }]}));
+        assert_eq!(manager.view.arena, None);
     }
 
     #[test]
