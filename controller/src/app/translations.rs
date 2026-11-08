@@ -289,7 +289,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
             "O combate continua impedindo a viagem. Este adversário pode ser forte demais para sair sem desistir. Aguarde uma abertura ou escolha Centro Pokémon (Desistir) manualmente. Desistir nocauteia seu Pokémon e pode causar perda de XP.",
         "No confirmed hunt to return to" => "Nenhuma hunt confirmada para retornar",
         "COMBAT PROFILE" => "PERFIL DE COMBATE",
-        "≈ Generic movement pacing" => "≈ Ritmo de movimento genérico",
+        "≈ Map pacing · game 1.409.0" => "≈ Ritmo por mapa · jogo 1.409.0",
         "Lead unavailable" => "Pokémon principal indisponível",
         "AoE disabled · single-target" => "AoE desativado · alvo único",
         "AoE enabled · multiple targets" => "AoE ativado · múltiplos alvos",
