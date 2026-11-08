@@ -182,9 +182,11 @@ No visual runtime acceptance is asserted by this document.
 
 - The synthetic per-slot replenishment cap and entry-radius geometry model
   have been removed. Hunt forecasts no longer consume `campo.init` spawn
-  coordinates, Euclidean radii, or inferred full-wave layouts. Until measured
-  map-paced calibration replaces it, movement uses one explicit global fallback
-  transition; `campo.init.mapa` remains location identity only, not a KPH input.
+  coordinates, Euclidean radii, or inferred full-wave layouts. Pacing is now
+  resolved from the vendored /hunt 1.0.17 `ritmo.js` dataset generated from
+  PokeIdle 1.409.0: 1,043 hunt→map mappings and 500 map-specific `s`/`sAoe`
+  records, with the dataset p10/median/p90 fallback for unknown hunts.
+  `campo.init.mapa` remains location identity only, not a KPH input.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
