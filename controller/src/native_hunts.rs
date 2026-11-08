@@ -1029,6 +1029,9 @@ impl HuntIntel {
 
         // State packets are deltas: only an explicit bicicleta field changes
         // the equipped bike. BookIdle follows the same merged-state contract.
+        if state.get("cheio").and_then(Value::as_bool)==Some(true) {
+            self.bicycle_state=None;
+        }
         if let Some(raw)=state.get("bicicleta") {
             let before=self.view.bicycle_factor.unwrap_or(1.0);
             if let Some(delta)=raw.as_object() {
