@@ -279,10 +279,10 @@ pub(super) fn simulate(
     let downtime=pacing.base_seconds_per_kill;
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
     let mut weight=0.0;
-    let mut ttk=0.0;
     let mut hit_mean=0.0;
     let mut hit_max=0.0f64;
     let mut incoming_dps=0.0;
+    let mut samples=Vec::new();
     for encounter in &hunt.species {
         let foe=match r.species.get(&encounter.id) {
             Some(s) if s.base.len()>=6 => s, _=>continue
@@ -324,57 +324,68 @@ pub(super) fn simulate(
             *value=(wild_stat(foe.base[0],hunt.level,iv)*12.0).round()
                 .max(24.0)*5.0;
         }
-        let time=mean_ttk(&attacks,basic,gap_s,&hp,downtime)?;
         let threat=incoming(r,foe,hunt.level,player,stats,seasonal);
         weight+=w;
-        ttk+=w*time;
         incoming_dps+=w*threat.dps;
         hit_mean+=w*threat.mean_hit;
         hit_max=hit_max.max(threat.worst_hit);
+        samples.push(CombatSample {weight:w,attacks,tackle:basic,hp});
     }
     let total=hunt.species.iter().map(|x|x.weight.max(0.0)).sum::<f64>();
     if weight<=0.0||total<=0.0{return None}
     let coverage=weight/total;
     if coverage<0.6{return None}
-    ttk/=weight;
     hit_mean/=weight;
     incoming_dps/=weight;
-    let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
-    // ritmo.js gives the one-shot, on-foot total pace per map. Combat slower
-    // than the one-shot floor is added on top; bicycles divide only the
-    // movement component inferred from that authoritative baseline.
-    let solo_kills_h=single_target_kills(pacing.base_seconds_per_kill,cycle,bicycle_factor);
+
+    let solo_pace=paced_kill(&samples,gap_s,pacing.base_seconds_per_kill,bicycle_factor)?;
+    let solo_kills_h=kills_per_hour(solo_pace);
+    let mut selected_pace=solo_pace;
+    let mut selected_baseline=pacing.base_seconds_per_kill;
     let mut kills_h=solo_kills_h;
     let aoe=aoe_enabled;
     let mut engaged=1.0;
     if aoe_enabled {
-        // Only an explicit per-account Atlas checkbox activates this mode.
-        // Never infer it from a live monster's partially populated TM flags.
-        // The AoE scenario is never modeled as slower than single-target.
-        kills_h=kills_h.max(aoe_kills(pacing.aoe_seconds_per_kill,cycle,ttk,bicycle_factor));
-        engaged=(1.0+kills_h*ttk/3600.0).min(MAX_AOE_ENGAGED);
+        // AoE keeps its own authoritative one-shot map baseline. Combat still
+        // interacts with dead time through the same curve; the engagement cap
+        // remains a separate simultaneous-target ceiling.
+        let aoe_pace=paced_kill(&samples,gap_s,pacing.aoe_seconds_per_kill,bicycle_factor)?;
+        let candidate=aoe_kills_per_hour(aoe_pace);
+        if candidate>kills_h {
+            kills_h=candidate;
+            selected_pace=aoe_pace;
+            selected_baseline=pacing.aoe_seconds_per_kill;
+        }
+        engaged=(1.0+kills_h*selected_pace.combat_s/3600.0).min(MAX_AOE_ENGAGED);
     }
     let own_hp=mon.max_hp.filter(|hp|*hp>0).map(|hp|hp as f64)
         .unwrap_or_else(||(stats[0]*12.0).round().max(24.0));
     let fatal_hit=hit_max+(engaged-1.0)*hit_mean;
     let one_hit=fatal_hit>=own_hp;
-    let incoming_damage_per_kill=incoming_dps*engaged*ttk;
+    let incoming_damage_per_kill=incoming_dps*engaged*selected_pace.combat_s;
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
-    let recovery=RESPAWN_S+movement_component_s(pacing.base_seconds_per_kill,bicycle_factor);
+    let recovery=RESPAWN_S+
+        walking_dead_time_s(selected_baseline,selected_pace.combat_s,bicycle_factor);
     let alive_s=kills_per_life*3600.0/kills_h.max(1e-6);
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
     kills_h*=uptime;
     if aoe_enabled {
         let solo_life=if hit_max>=own_hp {own_hp/hit_max.max(1e-6)} else {999.0};
+        let solo_recovery=RESPAWN_S+
+            walking_dead_time_s(pacing.base_seconds_per_kill,solo_pace.combat_s,bicycle_factor);
         let solo_alive_s=solo_life*3600.0/solo_kills_h.max(1e-6);
-        let solo_uptime=solo_alive_s/(solo_alive_s+recovery);
+        let solo_uptime=solo_alive_s/(solo_alive_s+solo_recovery);
         kills_h=kills_h.max(solo_kills_h*solo_uptime);
     }
-    if !kills_h.is_finite()||!ttk.is_finite() {return None}
+    if !kills_h.is_finite()||!selected_pace.total_s.is_finite() {return None}
     Some(CombatPace {
-        kills_h,seconds_per_kill:ttk,coverage,deaths_h,one_hit,aoe,engaged,
+        kills_h,
+        seconds_per_kill:selected_pace.total_s,
+        combat_seconds_per_kill:selected_pace.combat_s,
+        dead_time_seconds_per_kill:selected_pace.dead_time_s,
+        coverage,deaths_h,one_hit,aoe,engaged,
         worst_hit_fraction:fatal_hit/own_hp,
         incoming_damage_per_kill,
     })
