@@ -184,7 +184,10 @@ impl HuntPacingCollector {
         inner.current_target = None;
         inner.last_kill_monotonic_ms = None;
         inner.last_kill_server_ts = None;
-        let record = inner.base_record("connection.open", received_at, view, None);
+        let mut record = inner.base_record("connection.open", received_at, view, None);
+        record["available_hunts"] = Value::Array(
+            view.hunts.iter().map(|hunt| Value::String(hunt.slug.clone())).collect()
+        );
         inner.write_record(record, true);
     }
 
