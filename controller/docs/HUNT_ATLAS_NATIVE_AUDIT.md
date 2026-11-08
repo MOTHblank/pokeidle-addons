@@ -192,8 +192,11 @@ No visual runtime acceptance is asserted by this document.
   dead time + effective combat time. On foot, the dead-time curve keeps 83% of
   the map baseline as the initial walking portion, decays that walking toward
   a 1.41 s floor as combat grows, and uses a 2.8 s interaction tau. These three
-  calibration values live together in `PACING_MODEL`; bicycles divide only the
-  walking component.
+  calibration values live together in `PACING_MODEL`. The baseline is split
+  explicitly into fixed delay and player walking; enemy-approach reduction is
+  applied only to walking, then the bicycle factor divides only that walking
+  time. Fixed delay is never accelerated. Attack cooldowns continue through the
+  complete resulting dead time (fixed + walking).
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
