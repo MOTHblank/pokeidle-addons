@@ -465,6 +465,29 @@ use super::*;
         assert!(cache.refreshed.is_none(),"Sacrifice boost expiry must invalidate forecasts");
     }
     #[test]
+    fn seasonal_and_gym_damage_modifiers_invalidate_forecast_cache(){
+        let mut view=HuntView::default();
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+
+        cache.refreshed=Some(Instant::now());
+        let seasonal_revision=cache.revision;
+        view.seasonal_type=Some("FIRE".into());
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,seasonal_revision);
+
+        cache.refreshed=Some(Instant::now());
+        let gym_revision=cache.revision;
+        view.gym_podium=Arc::new(std::collections::BTreeMap::from([
+            ("FIRE".to_owned(),1u8)
+        ]));
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,gym_revision);
+    }
+
+    #[test]
     fn timed_guild_and_vip_are_displayed_independently_of_guild_rank(){
         let mut b=native_hunts::HuntBonuses::default();
         b.twitch_known=true;
@@ -583,6 +606,29 @@ use super::*;
             crate::native_atlas_pacing::PacingSource::HuntSlugMapping);
         assert_eq!(cache.pacing_profiles[0].map_id.as_deref(),Some("heracross"));
     }
+    #[test]
+    fn pokemon_tm_combat_state_invalidates_forecast_cache(){
+        let mut view=HuntView::default();
+        view.active_pokemon=Some(native_hunts::PokemonInfo{
+            id:1,species_id:Some(25),level:100,..Default::default()
+        });
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        cache.refreshed=Some(Instant::now());
+        let elemental_revision=cache.revision;
+        view.active_pokemon.as_mut().unwrap().tm_elemental=Some("FIRE".into());
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,elemental_revision);
+
+        cache.refreshed=Some(Instant::now());
+        let aoe_tm_revision=cache.revision;
+        view.active_pokemon.as_mut().unwrap().tm_aoe=true;
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,aoe_tm_revision);
+    }
+
     #[test]
     fn combat_cache_invalidates_when_max_hp_or_species_changes(){
         let mut view=HuntView::default();
