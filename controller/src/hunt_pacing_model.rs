@@ -4,7 +4,7 @@
 //! forecast path evaluate the exact same bicycle/dead-time model.
 
 pub const WALKING_PORTION: f64 = 0.83;
-pub const WALKING_FLOOR_S: f64 = 1.41;
+pub const FIXED_FLOOR_S: f64 = 1.41;
 pub const COMBAT_INTERACTION_TAU_S: f64 = 2.8;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,7 +31,7 @@ pub fn normalized_bicycle_factor(factor: f64) -> f64 {
 /// The 1.41 s floor belongs to fixed time. Only walk0 is speeded by bicycles.
 pub fn baseline_dead_time(map_baseline_s: f64) -> DeadTimeParts {
     let baseline = map_baseline_s.max(0.0);
-    let walking = (WALKING_PORTION * baseline - WALKING_FLOOR_S).max(0.0);
+    let walking = (WALKING_PORTION * baseline - FIXED_FLOOR_S).max(0.0);
     DeadTimeParts {
         fixed_s: (baseline - walking).max(0.0),
         walking_s: walking,
@@ -97,6 +97,6 @@ mod tests {
         let s = 3.422;
         let parts = dead_time_parts(s, f64::INFINITY, 2.0);
         assert!(parts.walking_s.abs() < 1e-12);
-        assert!(parts.fixed_s >= WALKING_FLOOR_S);
+        assert!(parts.fixed_s >= FIXED_FLOOR_S);
     }
 }
