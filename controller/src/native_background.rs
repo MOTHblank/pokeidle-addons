@@ -1105,7 +1105,7 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                     restock.merge_item_metadata(catalog);
                 }
                 hunt_intel.ingest_value(&frame, received_at);
-                pacing_collector.connection_open(&hunt_intel.view, received_at);
+                pacing_collector.connection_open(&frame, &hunt_intel.view, received_at);
                 pvp.on_frame(&frame, received_at);
                 boss_manager.ingest(&frame);
                 let mut navigator = HuntNavigator::default();
