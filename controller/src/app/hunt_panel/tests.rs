@@ -545,7 +545,8 @@ use super::*;
         let mut cache=EstimateCache::default();
         cache.refresh(0,&view,None,true,false);
         assert_eq!(cache.pacing_profiles.len(),1);
-        assert_eq!(cache.pacing_profiles[0].source,2); // global fallback
+        assert_eq!(cache.pacing_profiles[0].source,
+            crate::native_atlas_pacing::PacingSource::GlobalFallback);
         cache.refreshed=Some(Instant::now());
         let baseline=cache.revision;
         view.learned_hunt_maps=Arc::new(std::collections::BTreeMap::from([
@@ -555,7 +556,8 @@ use super::*;
         cache.refresh(0,&view,None,true,false);
         assert!(cache.refreshed.is_none());
         assert_ne!(baseline,cache.revision);
-        assert_eq!(cache.pacing_profiles[0].source,1); // learned campo.init map
+        assert_eq!(cache.pacing_profiles[0].source,
+            crate::native_atlas_pacing::PacingSource::LearnedCampoInit);
         assert_eq!(cache.pacing_profiles[0].map_id.as_deref(),Some("gerado_normal_01"));
     }
 
@@ -577,7 +579,8 @@ use super::*;
         assert_eq!(cache.revision,baseline,
             "cache key is the resolved profile, not an ignored raw learned map");
         assert!(cache.refreshed.is_some());
-        assert_eq!(cache.pacing_profiles[0].source,0); // exact vendored mapping
+        assert_eq!(cache.pacing_profiles[0].source,
+            crate::native_atlas_pacing::PacingSource::HuntSlugMapping);
         assert_eq!(cache.pacing_profiles[0].map_id.as_deref(),Some("heracross"));
     }
     #[test]
