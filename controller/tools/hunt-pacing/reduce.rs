@@ -96,6 +96,7 @@ struct Segment {
     kill_batch_sizes: Vec<u64>,
     attack_actions_since_kill: u32,
     max_attack_actions_between_kills: u32,
+    last_active_hp: Option<u64>,
     invalid_reason: Option<String>,
 }
 
@@ -191,6 +192,7 @@ fn reduce_session(
         let current_fingerprint = fingerprint(record);
         let should_split = segment.as_ref().is_some_and(|current| {
             current.map_id != map_id
+                || current.hunt_slug != record.hunt_slug
                 || current.profile != profile
                 || current.scene_generation != record.scene_generation
                 || current.connection_generation != record.connection_generation
@@ -207,7 +209,7 @@ fn reduce_session(
                 session_id: record.session_id.clone(),
                 map_id: map_id.to_owned(),
                 hunt_slug: record.hunt_slug.clone(),
-                profile: profile.to_owned(),
+                profile: profile.clone(),
                 bicycle_factor: bicycle_factor(record),
                 scene_generation: record.scene_generation,
                 fingerprint: current_fingerprint,
@@ -218,6 +220,7 @@ fn reduce_session(
                 kill_batch_sizes: Vec::new(),
                 attack_actions_since_kill: 0,
                 max_attack_actions_between_kills: 0,
+                last_active_hp: active_hp(record),
                 invalid_reason: None,
             });
         }
@@ -229,6 +232,14 @@ fn reduce_session(
             current.invalid_reason = Some(reason);
             finish_segment(segment.take(), config, windows, rejected);
             continue;
+        }
+        if let Some(hp) = active_hp(record) {
+            if current.last_active_hp.is_some_and(|previous| hp > previous) {
+                current.invalid_reason = Some("active-hp-increase".into());
+                finish_segment(segment.take(), config, windows, rejected);
+                continue;
+            }
+            current.last_active_hp = Some(hp);
         }
 
         if record.packet_type.as_deref() == Some("batalha") {
@@ -264,22 +275,36 @@ fn reduce_session(
     finish_segment(segment.take(), config, windows, rejected);
 }
 
-fn accepted_profile(record: &TraceRecord) -> Option<&'static str> {
+fn accepted_profile(record: &TraceRecord) -> Option<String> {
     if is_special_scene(record) || in_center(record) || active_pokemon_id(record).is_none() {
         return None;
     }
     let bike = bicycle_factor(record);
     let aoe = aoe_enabled(record);
     match record.declared_profile.as_str() {
-        "st1" if bike <= 1.000_001 && !aoe => Some("st1"),
-        "aoe" if bike <= 1.000_001 && aoe => Some("aoe"),
-        "bike-validation" => Some("bike-validation"),
-        "deadtime-validation" => Some("deadtime-validation"),
+        "st1" if bike <= 1.000_001 && !aoe => Some("st1".into()),
+        "aoe" if bike <= 1.000_001 && aoe => Some("aoe".into()),
+        "bike-validation" if !aoe => {
+            let rarity = record.calibration.get("bicycle")
+                .and_then(|bike| bike.get("rarity"))
+                .and_then(Value::as_str)
+                .unwrap_or("foot");
+            Some(format!("bike-validation:{rarity}:{bike:.3}"))
+        }
+        "deadtime-validation" if bike <= 1.000_001 && !aoe => {
+            Some("deadtime-validation".into())
+        }
         _ => None,
     }
 }
 
 fn hard_interruption(record: &TraceRecord) -> Option<String> {
+    if record.packet.get("manual").and_then(Value::as_bool) == Some(true)
+        || record.packet.get("movimentoManual").and_then(Value::as_bool) == Some(true)
+        || record.packet.get("manualMovement").and_then(Value::as_bool) == Some(true)
+    {
+        return Some("manual-movement".into());
+    }
     if in_center(record) {
         return Some("center".into());
     }
