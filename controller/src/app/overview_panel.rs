@@ -844,6 +844,26 @@ fn draw_overview_team_menu(
     fresh: bool,
     view: Option<&HuntView>,
 ) {
+    let active_id = view.and_then(|view|
+        view.active_pokemon.as_ref().map(|pokemon| pokemon.id));
+    if let Some((target_id, requested_at)) = app.workspace.pokemon_switch_pending[index] {
+        if active_id == Some(target_id) {
+            app.workspace.pokemon_switch_pending[index] = None;
+            if let Some(name) = view.and_then(|view|
+                view.active_pokemon.as_ref().map(|pokemon| pokemon.name.as_str())) {
+                app.set_status(format!("{}: {name}", tr("Active Pokémon")), false);
+            }
+        } else if !fresh {
+            app.workspace.pokemon_switch_pending[index] = None;
+            app.set_status(tr("No live connection"), true);
+        } else if requested_at.elapsed() > Duration::from_secs(8) {
+            app.workspace.pokemon_switch_pending[index] = None;
+            app.set_status(tr("Pokémon switch was not confirmed by the game"), true);
+        }
+    }
+    let pending_id = app.workspace.pokemon_switch_pending[index]
+        .map(|(pokemon_id, _)| pokemon_id);
+
     ui.menu_button(
         RichText::new(tr("Your Pokémon")).size(9.0).color(DIM),
         |ui| {
@@ -866,14 +886,15 @@ fn draw_overview_team_menu(
                 return;
             }
 
-            let active_id = view.active_pokemon.as_ref().map(|pokemon| pokemon.id);
             for pokemon in team {
                 let active = active_id == Some(pokemon.id);
+                let pending = pending_id == Some(pokemon.id);
                 let usable = overview_team_member_usable(view, pokemon);
-                let can_switch = fresh && !active && usable;
+                let can_switch = fresh && pending_id.is_none() && !active && usable;
                 let label = format!(
-                    "{}{}{} · Lv. {}",
+                    "{}{}{}{} · Lv. {}",
                     if active { "● " } else { "" },
+                    if pending { "… " } else { "" },
                     if pokemon.shiny { "★ " } else { "" },
                     compact_text(&pokemon.name, 22),
                     pokemon.level,
@@ -885,6 +906,8 @@ fn draw_overview_team_menu(
                 );
                 if active {
                     response = response.on_hover_text(tr("Active"));
+                } else if pending {
+                    response = response.on_hover_text(tr("Switching…"));
                 } else if !fresh {
                     response = response.on_hover_text(tr("No live connection"));
                 } else if !usable {
@@ -892,6 +915,8 @@ fn draw_overview_team_menu(
                     response = response.on_hover_text(
                         tr_dynamic(format!("Requires trainer Lv {minimum}"))
                     );
+                } else if pending_id.is_some() {
+                    response = response.on_hover_text(tr("Switching…"));
                 }
                 if response.clicked() {
                     let result = app.runtimes[index].game.native.as_ref()
@@ -900,13 +925,15 @@ fn draw_overview_team_menu(
                             native.send_command(GameCommand::TeamActive(pokemon.id)));
                     match result {
                         Ok(()) => {
+                            app.workspace.pokemon_switch_pending[index] =
+                                Some((pokemon.id, Instant::now()));
                             app.set_status(
                                 format!("{} {}", tr("Switching…"), pokemon.name),
                                 false,
                             );
                             ui.close();
                         }
-                        Err(error) => app.set_status(error, true),
+                        Err(error) => app.set_status(tr_dynamic(error), true),
                     }
                 }
             }
