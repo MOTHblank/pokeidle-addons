@@ -45,6 +45,9 @@ struct EnabledCollector {
     mob_dead: BTreeMap<String, bool>,
     packet_sequence: u64,
     last_kill_monotonic_ms: Option<u64>,
+    last_kill_server_ts: Option<u64>,
+    validation_hits: Option<u32>,
+    validation_combat_seconds: Option<f64>,
     writes_since_flush: u32,
     failed: bool,
 }
@@ -102,6 +105,12 @@ impl HuntPacingCollector {
             .ok().map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "unknown".into());
+        let validation_hits = std::env::var("MOTH_HUNT_PACING_HITS").ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|hits| *hits > 0);
+        let validation_combat_seconds = std::env::var("MOTH_HUNT_PACING_COMBAT_SECONDS").ok()
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
 
         crate::logging::info(&format!(
             "Hunt pacing trace enabled for {} ({declared_profile}) -> {}",
@@ -125,6 +134,9 @@ impl HuntPacingCollector {
                 mob_dead: BTreeMap::new(),
                 packet_sequence: 0,
                 last_kill_monotonic_ms: None,
+                last_kill_server_ts: None,
+                validation_hits,
+                validation_combat_seconds,
                 writes_since_flush: 0,
                 failed: false,
             }),
@@ -150,6 +162,7 @@ impl HuntPacingCollector {
         inner.removed_slots.clear();
         inner.mob_dead.clear();
         inner.last_kill_monotonic_ms = None;
+        inner.last_kill_server_ts = None;
         let record = inner.base_record("connection.open", received_at, view, None);
         inner.write_record(record, true);
     }
@@ -160,6 +173,7 @@ impl HuntPacingCollector {
         record["reason"] = Value::String(reason.to_owned());
         inner.write_record(record, true);
         inner.last_kill_monotonic_ms = None;
+        inner.last_kill_server_ts = None;
     }
 
     pub fn observe(&mut self, frame: &Value, view: &HuntView, received_at: Instant) {
@@ -180,6 +194,7 @@ impl HuntPacingCollector {
             inner.removed_slots.clear();
             inner.mob_dead.clear();
             inner.last_kill_monotonic_ms = None;
+            inner.last_kill_server_ts = None;
         }
 
         inner.packet_sequence = inner.packet_sequence.wrapping_add(1);
@@ -197,6 +212,7 @@ impl HuntPacingCollector {
                 "box": frame.get("box").cloned().unwrap_or(Value::Null),
                 "groundZ": frame.get("groundZ").cloned().unwrap_or(Value::Null),
                 "entered_at_server": server_ts,
+                "entered_at_unix_ms": record["recv_unix_ms"].clone(),
             });
         }
         if matches!(kind, "campo.init" | "campo") {
@@ -235,7 +251,8 @@ impl EnabledCollector {
             "hunt_slug": view.hunt_slug,
             "field_slug": self.field_slug,
             "map_id": self.map_id,
-            "calibration": calibration_snapshot(view),
+            "calibration": calibration_snapshot(
+                view,self.validation_hits,self.validation_combat_seconds),
         })
     }
 
@@ -313,9 +330,17 @@ impl EnabledCollector {
                 continue;
             }
             let previous = self.last_kill_monotonic_ms.replace(now);
+            let kill_server_ts = number_u64(event.get("ts"))
+                .or_else(|| number_u64(frame.get("ts")));
+            let previous_server = self.last_kill_server_ts;
+            if kill_server_ts.is_some() {
+                self.last_kill_server_ts = kill_server_ts;
+            }
             kills.push(json!({
                 "kill_recv_monotonic_ms": now,
                 "previous_kill_recv_monotonic_ms": previous,
+                "kill_server_ts": kill_server_ts,
+                "previous_kill_server_ts": previous_server,
                 "slot": event.get("slot").cloned().unwrap_or(Value::Null),
                 "species": event.get("speciesId").or_else(|| event.get("pokeId"))
                     .cloned().unwrap_or(Value::Null),
@@ -365,9 +390,11 @@ fn movement(entity: &str, slot: Option<Value>, raw: &Value) -> Option<Value> {
     let to_row = raw.get("r")?.clone();
     let from_col = raw.get("dc").cloned().unwrap_or_else(|| to_col.clone());
     let from_row = raw.get("dr").cloned().unwrap_or_else(|| to_row.clone());
+    let transition = from_col != to_col || from_row != to_row;
     Some(json!({
         "entity": entity,
         "slot": slot,
+        "transition": transition,
         "from_col": from_col,
         "from_row": from_row,
         "to_col": to_col,
@@ -378,7 +405,11 @@ fn movement(entity: &str, slot: Option<Value>, raw: &Value) -> Option<Value> {
     }))
 }
 
-fn calibration_snapshot(view: &HuntView) -> Value {
+fn calibration_snapshot(
+    view: &HuntView,
+    validation_hits: Option<u32>,
+    validation_combat_seconds: Option<f64>,
+) -> Value {
     let active = view.active_pokemon.as_ref();
     let fingerprint = json!({
         "active_id": active.map(|p| p.id),
@@ -401,6 +432,8 @@ fn calibration_snapshot(view: &HuntView) -> Value {
         "outland_tier": view.outland_tier,
         "gym_podium": &*view.gym_podium,
         "automation": view.automation,
+        "validation_hits": validation_hits,
+        "validation_combat_seconds": validation_combat_seconds,
     });
     json!({
         "fingerprint": fingerprint,
@@ -430,6 +463,10 @@ fn calibration_snapshot(view: &HuntView) -> Value {
         "seasonal_type": view.seasonal_type,
         "outland_tier": view.outland_tier,
         "in_center": view.in_center,
+        "validation": {
+            "declared_hits": validation_hits,
+            "combat_seconds": validation_combat_seconds,
+        },
         "bonuses": {
             "trainer_event_pct": view.bonuses.trainer_event_pct,
             "pokemon_event_pct": view.bonuses.pokemon_event_pct,
@@ -509,6 +546,7 @@ mod tests {
         assert_eq!(value["to_col"], 12);
         assert_eq!(value["step_started_at"], 1234);
         assert_eq!(value["step_duration_ms"], 275);
+        assert_eq!(value["transition"], true);
     }
 
     #[test]
@@ -517,5 +555,6 @@ mod tests {
         assert_eq!(value["from_col"], 3);
         assert_eq!(value["from_row"], 4);
         assert_eq!(value["step_duration_ms"], 300);
+        assert_eq!(value["transition"], false);
     }
 }
