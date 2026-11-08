@@ -449,8 +449,10 @@ mod tests {
         assert!(solo.combat_s.abs()<1e-12);
         assert!((solo.dead_time_s-3.422).abs()<1e-12);
         assert!((solo.total_s-3.422).abs()<1e-12);
+        assert!((3600.0/kills_per_hour(solo)-3.422).abs()<1e-12);
         let aoe=paced_kill(&one,0.9,pace.aoe_seconds_per_kill,1.0).unwrap();
         assert!((aoe.total_s-3.12).abs()<1e-12);
+        assert!((3600.0/kills_per_hour(aoe)-3.12).abs()<1e-12);
     }
 
     #[test]
