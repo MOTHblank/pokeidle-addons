@@ -52,6 +52,15 @@ struct CombatSample {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct DeadTime {
+    fixed_s: f64,
+    walking_s: f64,
+}
+impl DeadTime {
+    fn total_s(self)->f64 { self.fixed_s+self.walking_s }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct PacedKill {
     dead_time_s: f64,
     combat_s: f64,
@@ -166,31 +175,38 @@ fn normalized_bicycle_factor(factor:f64)->f64 {
     if factor.is_finite()&&factor>1.0 {factor} else {1.0}
 }
 
-/// Dead time is everything outside active combat: walking plus the map's
-/// non-walking cadence. The vendored map `s` is the zero-combat, on-foot
-/// baseline. As combat grows, enemies close distance while the player fights,
-/// so only the walking portion decays toward its calibrated floor.
-fn dead_time_s(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->f64 {
+fn baseline_dead_time(map_baseline_s:f64)->DeadTime {
     let baseline=map_baseline_s.max(0.0);
-    let initial_walk=(PACING_MODEL.walking_portion*baseline).max(0.0);
-    let reducible=(initial_walk-PACING_MODEL.walking_floor_s).max(0.0);
-    let interaction=if combat_s.is_finite() {
-        (-combat_s.max(0.0)/PACING_MODEL.combat_interaction_tau_s).exp()
-    } else {0.0};
-    let walk=initial_walk-reducible*(1.0-interaction);
-    let fixed=(baseline-initial_walk).max(0.0);
-    fixed+walk/normalized_bicycle_factor(bicycle_factor)
+    let walking=(PACING_MODEL.walking_portion*baseline).max(0.0);
+    DeadTime {
+        fixed_s:(baseline-walking).max(0.0),
+        walking_s:walking,
+    }
 }
 
-fn walking_dead_time_s(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->f64 {
-    let baseline=map_baseline_s.max(0.0);
-    let initial_walk=(PACING_MODEL.walking_portion*baseline).max(0.0);
-    let reducible=(initial_walk-PACING_MODEL.walking_floor_s).max(0.0);
+/// Reduce only the player's on-foot walking component as combat gives enemies
+/// time to approach. The calibrated 1.41 s floor is also on-foot walking time;
+/// bicycle speed is applied afterward, so neither fixed map delay nor combat is
+/// accelerated.
+fn approached_walking_s(on_foot_walking_s:f64,combat_s:f64)->f64 {
+    let reducible=(on_foot_walking_s-PACING_MODEL.walking_floor_s).max(0.0);
     let interaction=if combat_s.is_finite() {
         (-combat_s.max(0.0)/PACING_MODEL.combat_interaction_tau_s).exp()
     } else {0.0};
-    let walk=initial_walk-reducible*(1.0-interaction);
-    walk/normalized_bicycle_factor(bicycle_factor)
+    on_foot_walking_s-reducible*(1.0-interaction)
+}
+
+fn dead_time(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->DeadTime {
+    let baseline=baseline_dead_time(map_baseline_s);
+    DeadTime {
+        fixed_s:baseline.fixed_s,
+        walking_s:approached_walking_s(baseline.walking_s,combat_s)
+            /normalized_bicycle_factor(bicycle_factor),
+    }
+}
+
+fn dead_time_s(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->f64 {
+    dead_time(map_baseline_s,combat_s,bicycle_factor).total_s()
 }
 
 fn weighted_ttk(samples:&[CombatSample],global_gap_s:f64,downtime_s:f64)->Option<f64> {
@@ -273,10 +289,6 @@ pub(super) fn simulate(
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
     let pacing=native_atlas_pacing::resolve(&hunt.slug,learned_map);
-    // The vendored map pace is the authoritative one-shot downtime baseline.
-    // Passing it through the attack scheduler also lets cooldowns advance during
-    // the same map-specific between-kill time used by the final throughput.
-    let downtime=pacing.base_seconds_per_kill;
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
     let mut weight=0.0;
     let mut hit_mean=0.0;
@@ -366,7 +378,7 @@ pub(super) fn simulate(
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
     let recovery=RESPAWN_S+
-        walking_dead_time_s(selected_baseline,selected_pace.combat_s,bicycle_factor);
+        dead_time(selected_baseline,selected_pace.combat_s,bicycle_factor).walking_s;
     let alive_s=kills_per_life*3600.0/kills_h.max(1e-6);
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
@@ -374,7 +386,7 @@ pub(super) fn simulate(
     if aoe_enabled {
         let solo_life=if hit_max>=own_hp {own_hp/hit_max.max(1e-6)} else {999.0};
         let solo_recovery=RESPAWN_S+
-            walking_dead_time_s(pacing.base_seconds_per_kill,solo_pace.combat_s,bicycle_factor);
+            dead_time(pacing.base_seconds_per_kill,solo_pace.combat_s,bicycle_factor).walking_s;
         let solo_alive_s=solo_life*3600.0/solo_kills_h.max(1e-6);
         let solo_uptime=solo_alive_s/(solo_alive_s+solo_recovery);
         kills_h=kills_h.max(solo_kills_h*solo_uptime);
