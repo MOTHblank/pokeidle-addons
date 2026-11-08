@@ -33,6 +33,7 @@ mod native_atlas;
 mod native_atlas_models;
 mod native_atlas_pacing;
 mod hunt_pacing_trace;
+mod hunt_pacing_model;
 mod native_restock;
 mod native_tls;
 mod logging;
