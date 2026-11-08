@@ -1834,6 +1834,14 @@ mod tests {
         assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
         assert_eq!(intel.snapshot().learned_hunt_maps.get("forest").map(String::as_str),
             Some("forest-map"));
+        assert_eq!(intel.snapshot().pacing_revision,1);
+        // Repeating the same authoritative mapping must not churn forecast keys.
+        intel.ingest(r#"{"t":"campo.init","slug":"forest","mapa":"forest-map"}"#, now);
+        assert_eq!(intel.snapshot().pacing_revision,1);
+        intel.ingest(r#"{"t":"campo.init","slug":"forest","mapa":"forest-map-2"}"#, now);
+        assert_eq!(intel.snapshot().pacing_revision,2);
+        assert_eq!(intel.snapshot().learned_hunt_maps.get("forest").map(String::as_str),
+            Some("forest-map-2"));
         assert!(!intel.snapshot().in_center);
         intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#, now);
         assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
