@@ -161,14 +161,6 @@ fn spawn_distances(hunt: &HuntEntry, measurements: Option<&Vec<f64>>) -> Vec<f64
         None=>vec![DEFAULT_DISTANCE;n],
     }
 }
-fn replenishment_cap(hunt: &HuntEntry, n: usize) -> f64 {
-    if hunt.level<=150 {return f64::INFINITY}
-    // Upstream v1.377+ applies the Unova-style grouped-spawn cadence to
-    // every map region. Sinnoh no longer warrants its legacy 30-second
-    // special case. Keep this as a conservative per-slot upper bound,
-    // not an assertion about the actual arrival time at every location.
-    n as f64*3600.0/65.0
-}
 fn player_tile_s(bicycle_factor:f64)->f64 {
     let factor=if bicycle_factor.is_finite()&&bicycle_factor>1.0 {
         bicycle_factor
@@ -176,7 +168,7 @@ fn player_tile_s(bicycle_factor:f64)->f64 {
     PLAYER_TILE_S/factor
 }
 fn single_target_kills(
-    d: &[f64], cycle_s: f64, hunt: &HuntEntry, player_tile_s:f64
+    d: &[f64], cycle_s: f64, player_tile_s:f64
 ) -> f64 {
     let n=d.len();
     let average=d.iter().sum::<f64>()/n as f64;
@@ -186,14 +178,12 @@ fn single_target_kills(
     for x in d { t=(t+cycle_s+walk).max(x*meeting); }
     (3600.0/cycle_s)
         .min(n as f64*3600.0/(t+WAVE_GAP_S))
-        .min(replenishment_cap(hunt,n))
 }
-fn aoe_kills(d:&[f64], ttk:f64, hunt:&HuntEntry)->f64 {
+fn aoe_kills(d:&[f64], ttk:f64)->f64 {
     let n=d.len();
     let rhythm=if n>1 {d[n-2]} else {d[0]};
     let arrival=(rhythm-5.0).max(0.0)*WILD_TILE_S;
     (n as f64*3600.0/(arrival+WAVE_GAP_S))
-        .min(replenishment_cap(hunt,n))
         .min(3600.0*MAX_AOE_ENGAGED/ttk.max(MIN_CYCLE_S))
 }
 
@@ -275,7 +265,7 @@ pub(super) fn simulate(
     // Bicycle speed divides only the player's walking step. It does not
     // accelerate attacks, wild movement, retargeting, wave gaps or respawns.
     let player_tile_s=player_tile_s(bicycle_factor);
-    let solo_kills_h=single_target_kills(&d,cycle,hunt,player_tile_s);
+    let solo_kills_h=single_target_kills(&d,cycle,player_tile_s);
     let mut kills_h=solo_kills_h;
     let aoe=aoe_enabled;
     let mut engaged=1.0;
@@ -283,7 +273,7 @@ pub(super) fn simulate(
         // Only an explicit per-account Atlas checkbox activates this mode.
         // Never infer it from a live monster's partially populated TM flags.
         // The AoE scenario is never modeled as slower than single-target.
-        kills_h=kills_h.max(aoe_kills(&d,ttk,hunt));
+        kills_h=kills_h.max(aoe_kills(&d,ttk));
         engaged=(1.0+kills_h*ttk/3600.0).min(MAX_AOE_ENGAGED);
     }
     let own_hp=mon.max_hp.filter(|hp|*hp>0).map(|hp|hp as f64)
@@ -334,24 +324,12 @@ mod tests {
         assert!(t>0.0&&t<5.0);
     }
     #[test]
-    fn aoe_is_spawn_limited_and_per_slot_respawn_applies() {
-        let hunt=HuntEntry{level:1000,region:"sinnoh".into(),..Default::default()};
+    fn grouped_wave_throughput_has_no_synthetic_per_slot_respawn_cap() {
         let d=vec![20.6;16];
-        assert!(aoe_kills(&d,0.01,&hunt)<=16.0*3600.0/30.0);
-        assert!(aoe_kills(&d,10000.0,&hunt)<20.0);
-    }
-    #[test]
-    fn grouped_spawn_throughput_has_no_obsolete_sinnoh_exception() {
-        let sinnoh=HuntEntry{
-            level:1000,region:"Sinnoh".into(),slug:"test_sinnoh".into(),
-            ..Default::default()
-        };
-        let unova=HuntEntry{level:1000,region:"Unova".into(),..Default::default()};
-        let cap=16.0*3600.0/65.0;
-        assert_eq!(replenishment_cap(&sinnoh,16),cap);
-        assert_eq!(replenishment_cap(&unova,16),cap);
-        assert_eq!(replenishment_cap(
-            &HuntEntry{level:150,..Default::default()},16),f64::INFINITY);
+        let obsolete_cap=16.0*3600.0/65.0;
+        assert!(single_target_kills(&d,MIN_CYCLE_S,player_tile_s(1.0))>obsolete_cap);
+        assert!(aoe_kills(&d,0.01)>obsolete_cap);
+        assert!(aoe_kills(&d,10000.0)<20.0);
     }
     #[test]
     fn measured_group_geometry_overrides_fallback_distances() {
@@ -365,10 +343,9 @@ mod tests {
         assert!((player_tile_s(1.0)-0.26).abs()<1e-12);
         assert!((player_tile_s(2.0)-0.13).abs()<1e-12);
         assert!((player_tile_s(f64::NAN)-0.26).abs()<1e-12);
-        let hunt=HuntEntry{level:150,total_spawns:16,..Default::default()};
         let distances=vec![40.0;16];
-        let foot=single_target_kills(&distances,2.0,&hunt,player_tile_s(1.0));
-        let legendary=single_target_kills(&distances,2.0,&hunt,player_tile_s(2.0));
+        let foot=single_target_kills(&distances,2.0,player_tile_s(1.0));
+        let legendary=single_target_kills(&distances,2.0,player_tile_s(2.0));
         assert!(legendary>foot);
         // AoE arrival is wild movement only; the bicycle still affects its
         // death-recovery walk in simulate(), but never wild movement itself.
