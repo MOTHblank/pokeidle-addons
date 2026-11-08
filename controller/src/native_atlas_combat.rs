@@ -2,16 +2,13 @@
 //! Pure, deterministic forecasts: no writes to game state, sessions or server hunt statistics.
 use super::{damage, effect, Reference, ReferenceSpecies};
 use crate::native_hunts::{HuntEntry, PokemonInfo};
+use crate::native_atlas_pacing;
 
 const PLAYER_GAP_MS: f64 = 900.0;
 const TACKLE_COOLDOWN_MS: f64 = 2000.0;
 const TACKLE_POWER: f64 = 30.0;
 const RETARGET_S: f64 = 1.0;
 const MIN_CYCLE_S: f64 = 1.8;
-const WAVE_GAP_S: f64 = 2.8;
-const WAVE_JITTER_S: f64 = 2.6;
-const DEFAULT_WALK_TRANSITION_S: f64 = 1.66036;
-const MAX_WAVE_SPAWNS: usize = 16;
 const MAX_AOE_ENGAGED: f64 = 15.0;
 const WILD_DAMAGE_MULT: f64 = 1.8;
 const WILD_ATTACK_GAP_S: f64 = 1.4;
@@ -138,32 +135,24 @@ fn mean_ttk(moves: &[Attack], tackle: Attack, global_gap_s: f64,
     }
     Some(spent/hp.len() as f64)
 }
-fn spawn_count(hunt: &HuntEntry) -> usize {
-    let weighted_points=hunt.species.iter().map(|p|p.weight.max(0.0)).sum::<f64>();
-    let n=if hunt.total_spawns>0 {hunt.total_spawns as usize}
-        else if weighted_points>0.0 {weighted_points.round() as usize}
-        else {15};
-    n.clamp(1,MAX_WAVE_SPAWNS)
+fn normalized_bicycle_factor(factor:f64)->f64 {
+    if factor.is_finite()&&factor>1.0 {factor} else {1.0}
 }
-fn walk_transition_s(bicycle_factor:f64)->f64 {
-    let factor=if bicycle_factor.is_finite()&&bicycle_factor>1.0 {
-        bicycle_factor
-    } else {1.0};
-    // Explicit global fallback until map-paced calibration replaces it.
-    // This is deliberately not derived from spawn coordinates or entry radius.
-    DEFAULT_WALK_TRANSITION_S/factor
+fn movement_component_s(base_pace_s:f64,bicycle_factor:f64)->f64 {
+    // ritmo.js is an on-foot one-shot total pace. Preserve the combat floor
+    // and apply bicycles only to the movement portion above that floor.
+    (base_pace_s-MIN_CYCLE_S).max(0.0)/normalized_bicycle_factor(bicycle_factor)
 }
-fn single_target_kills(count:usize,cycle_s:f64,transition_s:f64)->f64 {
-    let per_kill=(cycle_s+transition_s).max(MIN_CYCLE_S);
-    let wave_s=count as f64*per_kill+WAVE_GAP_S;
-    (3600.0/per_kill).min(count as f64*3600.0/wave_s)
+fn paced_per_kill_s(base_pace_s:f64,cycle_s:f64,bicycle_factor:f64)->f64 {
+    MIN_CYCLE_S+movement_component_s(base_pace_s,bicycle_factor)
+        +(cycle_s-MIN_CYCLE_S).max(0.0)
 }
-fn aoe_kills(count:usize,ttk:f64)->f64 {
-    // No radial-arrival guess: use only the generic grouped-wave cadence and
-    // the explicit simultaneous-engagement throughput ceiling.
-    let wave_s=count as f64*MIN_CYCLE_S+WAVE_GAP_S;
-    (count as f64*3600.0/wave_s)
-        .min(3600.0*MAX_AOE_ENGAGED/ttk.max(MIN_CYCLE_S))
+fn single_target_kills(base_pace_s:f64,cycle_s:f64,bicycle_factor:f64)->f64 {
+    3600.0/paced_per_kill_s(base_pace_s,cycle_s,bicycle_factor).max(0.001)
+}
+fn aoe_kills(base_pace_s:f64,cycle_s:f64,ttk:f64,bicycle_factor:f64)->f64 {
+    let paced=3600.0/paced_per_kill_s(base_pace_s,cycle_s,bicycle_factor).max(0.001);
+    paced.min(3600.0*MAX_AOE_ENGAGED/ttk.max(MIN_CYCLE_S))
 }
 
 /// Pure forecast, no observed-kill calibration: comparable full-wave conditions
@@ -175,8 +164,11 @@ pub(super) fn simulate(
     bicycle_factor:f64,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
-    let count=spawn_count(hunt);
-    let downtime=WAVE_JITTER_S/count as f64+RETARGET_S;
+    let pacing=native_atlas_pacing::resolve(&hunt.slug);
+    // The vendored map pace is the authoritative one-shot downtime baseline.
+    // Passing it through the attack scheduler also lets cooldowns advance during
+    // the same map-specific between-kill time used by the final throughput.
+    let downtime=pacing.s;
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
     let mut weight=0.0;
     let mut ttk=0.0;
@@ -240,10 +232,10 @@ pub(super) fn simulate(
     hit_mean/=weight;
     incoming_dps/=weight;
     let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
-    // Bicycle speed divides only the player's walking step. It does not
-    // accelerate attacks, wild movement, retargeting, wave gaps or respawns.
-    let transition_s=walk_transition_s(bicycle_factor);
-    let solo_kills_h=single_target_kills(count,cycle,transition_s);
+    // ritmo.js gives the one-shot, on-foot total pace per map. Combat slower
+    // than the one-shot floor is added on top; bicycles divide only the
+    // movement component inferred from that authoritative baseline.
+    let solo_kills_h=single_target_kills(pacing.s,cycle,bicycle_factor);
     let mut kills_h=solo_kills_h;
     let aoe=aoe_enabled;
     let mut engaged=1.0;
@@ -251,7 +243,7 @@ pub(super) fn simulate(
         // Only an explicit per-account Atlas checkbox activates this mode.
         // Never infer it from a live monster's partially populated TM flags.
         // The AoE scenario is never modeled as slower than single-target.
-        kills_h=kills_h.max(aoe_kills(count,ttk));
+        kills_h=kills_h.max(aoe_kills(pacing.s_aoe,cycle,ttk,bicycle_factor));
         engaged=(1.0+kills_h*ttk/3600.0).min(MAX_AOE_ENGAGED);
     }
     let own_hp=mon.max_hp.filter(|hp|*hp>0).map(|hp|hp as f64)
@@ -261,7 +253,7 @@ pub(super) fn simulate(
     let incoming_damage_per_kill=incoming_dps*engaged*ttk;
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
-    let recovery=RESPAWN_S+transition_s;
+    let recovery=RESPAWN_S+movement_component_s(pacing.s,bicycle_factor);
     let alive_s=kills_per_life*3600.0/kills_h.max(1e-6);
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
@@ -302,24 +294,28 @@ mod tests {
         assert!(t>0.0&&t<5.0);
     }
     #[test]
-    fn grouped_wave_throughput_has_no_synthetic_per_slot_respawn_cap() {
-        let obsolete_cap=16.0*3600.0/65.0;
-        assert!(single_target_kills(16,MIN_CYCLE_S,walk_transition_s(1.0))>obsolete_cap);
-        assert!(aoe_kills(16,0.01)>obsolete_cap);
-        assert!(aoe_kills(16,10000.0)<20.0);
+    fn one_shot_foot_pace_matches_vendored_map_dataset() {
+        let pace=native_atlas_pacing::resolve("caterpie");
+        let kills=single_target_kills(pace.s,MIN_CYCLE_S,1.0);
+        assert!((3600.0/kills-3.422).abs()<1e-12);
+        let aoe=aoe_kills(pace.s_aoe,MIN_CYCLE_S,0.01,1.0);
+        assert!((3600.0/aoe-3.12).abs()<1e-12);
     }
     #[test]
-    fn spawn_count_uses_catalog_without_geometry() {
-        assert_eq!(spawn_count(&HuntEntry{total_spawns:8,..Default::default()}),8);
-        assert_eq!(spawn_count(&HuntEntry{total_spawns:99,..Default::default()}),16);
+    fn unknown_hunt_uses_vendored_global_median() {
+        let pace=native_atlas_pacing::resolve("__unknown_hunt__");
+        assert!(pace.fallback);
+        let kills=single_target_kills(pace.s,MIN_CYCLE_S,1.0);
+        assert!((3600.0/kills-3.406).abs()<1e-12);
     }
     #[test]
-    fn bicycle_factor_divides_only_generic_walking_transition() {
-        assert!((walk_transition_s(1.0)-DEFAULT_WALK_TRANSITION_S).abs()<1e-12);
-        assert!((walk_transition_s(2.0)-DEFAULT_WALK_TRANSITION_S/2.0).abs()<1e-12);
-        assert!((walk_transition_s(f64::NAN)-DEFAULT_WALK_TRANSITION_S).abs()<1e-12);
-        let foot=single_target_kills(16,2.0,walk_transition_s(1.0));
-        let legendary=single_target_kills(16,2.0,walk_transition_s(2.0));
+    fn bicycle_factor_divides_only_map_movement_component() {
+        let pace=native_atlas_pacing::resolve("caterpie");
+        assert!((movement_component_s(pace.s,1.0)-(pace.s-MIN_CYCLE_S)).abs()<1e-12);
+        assert!((movement_component_s(pace.s,2.0)-(pace.s-MIN_CYCLE_S)/2.0).abs()<1e-12);
+        assert!((movement_component_s(pace.s,f64::NAN)-(pace.s-MIN_CYCLE_S)).abs()<1e-12);
+        let foot=single_target_kills(pace.s,2.0,1.0);
+        let legendary=single_target_kills(pace.s,2.0,2.0);
         assert!(legendary>foot);
     }
     #[test]
