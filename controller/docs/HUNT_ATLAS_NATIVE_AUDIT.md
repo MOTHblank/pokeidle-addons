@@ -188,7 +188,12 @@ No visual runtime acceptance is asserted by this document.
   records. Resolution is `hunt slug mapping → learned campo.init map → global
   fallback`; learned map identity is used only when the vendored slug mapping is
   absent. Shared-map hunts therefore resolve through the same map pacing record.
-  Unknown maps use the dataset p10/median/p90 fallback.
+  Unknown maps use the dataset p10/median/p90 fallback. KPH is then rebuilt as
+  dead time + effective combat time. On foot, the dead-time curve keeps 83% of
+  the map baseline as the initial walking portion, decays that walking toward
+  a 1.41 s floor as combat grows, and uses a 2.8 s interaction tau. These three
+  calibration values live together in `PACING_MODEL`; bicycles divide only the
+  walking component.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
