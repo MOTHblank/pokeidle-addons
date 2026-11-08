@@ -216,7 +216,7 @@ impl HuntPacingCollector {
             });
         }
         if matches!(kind, "campo.init" | "campo") {
-            record["field_observation"] = inner.field_observation(frame);
+            record["field_observation"] = inner.field_observation(frame, view);
         }
         if kind == "batalha" {
             record["kills"] = inner.kill_observations(frame, received_at);
@@ -256,9 +256,16 @@ impl EnabledCollector {
         })
     }
 
-    fn field_observation(&mut self, frame: &Value) -> Value {
-        let hero = frame.get("heroi")
-            .and_then(|raw| movement("hero", None, raw));
+    fn field_observation(&mut self, frame: &Value, view: &HuntView) -> Value {
+        let server_ts = number_u64(frame.get("ts"));
+        let mut hero = frame.get("heroi")
+            .and_then(|raw| movement("hero", None, raw, server_ts));
+        if let Some(Value::Object(fields)) = hero.as_mut() {
+            fields.insert("bicycle_rarity".into(),
+                view.bicycle_rarity.clone().map(Value::String).unwrap_or(Value::Null));
+            fields.insert("bicycle_factor".into(),
+                json!(view.bicycle_factor.unwrap_or(1.0)));
+        }
         let mut mobs = Vec::new();
         for raw in frame.get("mobs").and_then(Value::as_array)
             .into_iter().flatten()
@@ -287,7 +294,7 @@ impl EnabledCollector {
             mobs.push(json!({
                 "slot": slot_value,
                 "lifecycle": lifecycle,
-                "movement": movement("mob", Some(slot_value.clone()), raw),
+                "movement": movement("mob", Some(slot_value.clone()), raw, server_ts),
                 "dead": raw.get("x").cloned().unwrap_or(Value::Null),
                 "hp": raw.get("hp").cloned().unwrap_or(Value::Null),
                 "max_hp": raw.get("mhp").cloned().unwrap_or(Value::Null),
@@ -385,7 +392,12 @@ impl Drop for EnabledCollector {
     }
 }
 
-fn movement(entity: &str, slot: Option<Value>, raw: &Value) -> Option<Value> {
+fn movement(
+    entity: &str,
+    slot: Option<Value>,
+    raw: &Value,
+    server_ts: Option<u64>,
+) -> Option<Value> {
     let to_col = raw.get("c")?.clone();
     let to_row = raw.get("r")?.clone();
     let from_col = raw.get("dc").cloned().unwrap_or_else(|| to_col.clone());
@@ -401,6 +413,7 @@ fn movement(entity: &str, slot: Option<Value>, raw: &Value) -> Option<Value> {
         "to_row": to_row,
         "step_started_at": raw.get("em").cloned().unwrap_or_else(|| json!(0)),
         "step_duration_ms": raw.get("ms").cloned().unwrap_or_else(|| json!(300)),
+        "server_timestamp": server_ts,
         "direction": raw.get("d").cloned().unwrap_or(Value::Null),
     }))
 }
@@ -541,17 +554,18 @@ mod tests {
     fn movement_uses_server_origin_and_duration_without_geometry() {
         let value = movement("hero", None, &json!({
             "c": 12, "r": 8, "dc": 11, "dr": 8, "em": 1234, "ms": 275
-        })).unwrap();
+        }), Some(1500)).unwrap();
         assert_eq!(value["from_col"], 11);
         assert_eq!(value["to_col"], 12);
         assert_eq!(value["step_started_at"], 1234);
         assert_eq!(value["step_duration_ms"], 275);
         assert_eq!(value["transition"], true);
+        assert_eq!(value["server_timestamp"], 1500);
     }
 
     #[test]
     fn movement_defaults_match_campo_client_contract() {
-        let value = movement("mob", Some(json!(7)), &json!({"c": 3, "r": 4})).unwrap();
+        let value = movement("mob", Some(json!(7)), &json!({"c": 3, "r": 4}), None).unwrap();
         assert_eq!(value["from_col"], 3);
         assert_eq!(value["from_row"], 4);
         assert_eq!(value["step_duration_ms"], 300);
