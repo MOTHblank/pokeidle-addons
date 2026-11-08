@@ -123,16 +123,20 @@ pub fn dataset() -> &'static PacingDataset {
 
 fn known_map(source:PacingSource,map_id:&str,map:MapPacing)->ResolvedPacing {
     let r=MAP_RELATIVE_UNCERTAINTY;
+    // sAoe is a pacing input only. It must not make enabling AoE slower than
+    // the same map's ordinary one-shot baseline because a few simulator rows
+    // contain millisecond-scale sampling noise in that direction.
+    let aoe_s=map.s_aoe.min(map.s);
     ResolvedPacing {
         source,
         map_id:Some(map_id.to_owned()),
         base_seconds_per_kill:map.s,
-        aoe_seconds_per_kill:map.s_aoe,
+        aoe_seconds_per_kill:aoe_s,
         uncertainty:PacingRange {
             p10:map.s*(1.0-r), median:map.s, p90:map.s*(1.0+r),
         },
         aoe_uncertainty:PacingRange {
-            p10:map.s_aoe*(1.0-r), median:map.s_aoe, p90:map.s_aoe*(1.0+r),
+            p10:aoe_s*(1.0-r), median:aoe_s, p90:aoe_s*(1.0+r),
         },
     }
 }
@@ -151,7 +155,7 @@ pub fn resolve(slug:&str, learned_map:Option<&str>) -> ResolvedPacing {
         }
     }
     let base=data.fallback.median;
-    let aoe=base/data.aoe_gain;
+    let aoe=(base/data.aoe_gain).min(base);
     let r=MAP_RELATIVE_UNCERTAINTY;
     ResolvedPacing {
         source:PacingSource::GlobalFallback,
@@ -201,6 +205,21 @@ mod tests {
         assert!((pace.aoe_seconds_per_kill-3.12).abs()<1e-12);
         assert_eq!(pace.uncertainty.median,pace.base_seconds_per_kill);
         assert_eq!(capture_ceiling("caterpie"),Some(20));
+    }
+
+    #[test]
+    fn aoe_pacing_never_exceeds_single_target_baseline() {
+        // scizor is one of the vendored rows where raw sAoe is slightly above s.
+        let raw=dataset().maps.get("scizor").unwrap();
+        assert!(raw.s_aoe>raw.s);
+        let pace=resolve("beedrill",None);
+        assert_eq!(pace.map_id.as_deref(),Some("scizor"));
+        assert_eq!(pace.aoe_seconds_per_kill,pace.base_seconds_per_kill);
+        assert_eq!(pace.aoe_uncertainty.median,pace.base_seconds_per_kill);
+
+        // Normal rows keep their faster AoE pacing.
+        let caterpie=resolve("caterpie",None);
+        assert!(caterpie.aoe_seconds_per_kill<caterpie.base_seconds_per_kill);
     }
 
     #[test]
