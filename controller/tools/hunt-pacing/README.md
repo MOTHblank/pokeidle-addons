@@ -126,8 +126,10 @@ moth-pacing.tsv
 coverage.txt
 ```
 
-The JSON is the rich source of truth. The TSV uses the same logical records as
-the existing `ritmo-v1409.tsv` loader. It only emits a map row once both ST1
+The JSON is the rich source of truth. The reducer refuses to combine traces
+that report multiple known game versions; cross-version pacing must be reduced
+separately. The TSV uses the same logical records as the existing
+`ritmo-v1409.tsv` loader. It only emits a map row once both ST1
 and AOE have been measured; missing data is never fabricated.
 
 Coverage uses the exact 500 map IDs (and 1,043 hunt identifiers) in the current
