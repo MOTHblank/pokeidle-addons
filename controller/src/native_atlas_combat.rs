@@ -7,9 +7,19 @@ use crate::native_atlas_pacing;
 const PLAYER_GAP_MS: f64 = 900.0;
 const TACKLE_COOLDOWN_MS: f64 = 2000.0;
 const TACKLE_POWER: f64 = 30.0;
-const RETARGET_S: f64 = 1.0;
-const MIN_CYCLE_S: f64 = 1.8;
 const MAX_AOE_ENGAGED: f64 = 15.0;
+
+#[derive(Clone, Copy)]
+struct PacingModelConstants {
+    walking_portion: f64,
+    walking_floor_s: f64,
+    combat_interaction_tau_s: f64,
+}
+const PACING_MODEL: PacingModelConstants = PacingModelConstants {
+    walking_portion: 0.83,
+    walking_floor_s: 1.41,
+    combat_interaction_tau_s: 2.8,
+};
 const WILD_DAMAGE_MULT: f64 = 1.8;
 const WILD_ATTACK_GAP_S: f64 = 1.4;
 const RESPAWN_S: f64 = 3.0;
@@ -18,6 +28,8 @@ const RESPAWN_S: f64 = 3.0;
 pub(super) struct CombatPace {
     pub kills_h: f64,
     pub seconds_per_kill: f64,
+    pub combat_seconds_per_kill: f64,
+    pub dead_time_seconds_per_kill: f64,
     pub coverage: f64,
     pub deaths_h: f64,
     pub one_hit: bool,
@@ -30,6 +42,21 @@ pub(super) struct CombatPace {
 struct Attack { damage: f64, cooldown_s: f64 }
 #[derive(Clone, Copy)]
 struct Threat { dps: f64, mean_hit: f64, worst_hit: f64 }
+
+#[derive(Clone)]
+struct CombatSample {
+    weight: f64,
+    attacks: Vec<Attack>,
+    tackle: Attack,
+    hp: [f64;32],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PacedKill {
+    dead_time_s: f64,
+    combat_s: f64,
+    total_s: f64,
+}
 
 fn speed_iv(mon: &PokemonInfo) -> f64 {
     mon.ivs[5].unwrap_or(1).clamp(1, 32) as f64
@@ -138,21 +165,102 @@ fn mean_ttk(moves: &[Attack], tackle: Attack, global_gap_s: f64,
 fn normalized_bicycle_factor(factor:f64)->f64 {
     if factor.is_finite()&&factor>1.0 {factor} else {1.0}
 }
-fn movement_component_s(base_pace_s:f64,bicycle_factor:f64)->f64 {
-    // ritmo.js is an on-foot one-shot total pace. Preserve the combat floor
-    // and apply bicycles only to the movement portion above that floor.
-    (base_pace_s-MIN_CYCLE_S).max(0.0)/normalized_bicycle_factor(bicycle_factor)
+
+/// Dead time is everything outside active combat: walking plus the map's
+/// non-walking cadence. The vendored map `s` is the zero-combat, on-foot
+/// baseline. As combat grows, enemies close distance while the player fights,
+/// so only the walking portion decays toward its calibrated floor.
+fn dead_time_s(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->f64 {
+    let baseline=map_baseline_s.max(0.0);
+    let initial_walk=(PACING_MODEL.walking_portion*baseline).max(0.0);
+    let reducible=(initial_walk-PACING_MODEL.walking_floor_s).max(0.0);
+    let interaction=if combat_s.is_finite() {
+        (-combat_s.max(0.0)/PACING_MODEL.combat_interaction_tau_s).exp()
+    } else {0.0};
+    let walk=initial_walk-reducible*(1.0-interaction);
+    let fixed=(baseline-initial_walk).max(0.0);
+    fixed+walk/normalized_bicycle_factor(bicycle_factor)
 }
-fn paced_per_kill_s(base_pace_s:f64,cycle_s:f64,bicycle_factor:f64)->f64 {
-    MIN_CYCLE_S+movement_component_s(base_pace_s,bicycle_factor)
-        +(cycle_s-MIN_CYCLE_S).max(0.0)
+
+fn walking_dead_time_s(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->f64 {
+    let baseline=map_baseline_s.max(0.0);
+    let initial_walk=(PACING_MODEL.walking_portion*baseline).max(0.0);
+    let reducible=(initial_walk-PACING_MODEL.walking_floor_s).max(0.0);
+    let interaction=if combat_s.is_finite() {
+        (-combat_s.max(0.0)/PACING_MODEL.combat_interaction_tau_s).exp()
+    } else {0.0};
+    let walk=initial_walk-reducible*(1.0-interaction);
+    walk/normalized_bicycle_factor(bicycle_factor)
 }
-fn single_target_kills(base_pace_s:f64,cycle_s:f64,bicycle_factor:f64)->f64 {
-    3600.0/paced_per_kill_s(base_pace_s,cycle_s,bicycle_factor).max(0.001)
+
+fn weighted_ttk(samples:&[CombatSample],global_gap_s:f64,downtime_s:f64)->Option<f64> {
+    let mut weighted=0.0;
+    let mut total_weight=0.0;
+    for sample in samples {
+        let time=mean_ttk(&sample.attacks,sample.tackle,global_gap_s,&sample.hp,downtime_s)?;
+        weighted+=sample.weight*time;
+        total_weight+=sample.weight;
+    }
+    (total_weight>0.0).then_some(weighted/total_weight)
 }
-fn aoe_kills(base_pace_s:f64,cycle_s:f64,ttk:f64,bicycle_factor:f64)->f64 {
-    let paced=3600.0/paced_per_kill_s(base_pace_s,cycle_s,bicycle_factor).max(0.001);
-    paced.min(3600.0*MAX_AOE_ENGAGED/ttk.max(MIN_CYCLE_S))
+
+/// Resolve the feedback loop between dead time and combat cooldowns without
+/// iterating the discontinuous attack scheduler directly. This mirrors /hunt:
+/// simulate combat at the zero-combat map baseline and at the long-fight dead
+/// time floor, interpolate combat between those endpoints, then solve the
+/// dead-time curve against that interpolation.
+fn paced_kill(
+    samples:&[CombatSample],global_gap_s:f64,map_baseline_s:f64,bicycle_factor:f64,
+)->Option<PacedKill> {
+    let no_combat_dead=dead_time_s(map_baseline_s,0.0,bicycle_factor);
+    let floor_dead=dead_time_s(map_baseline_s,f64::INFINITY,bicycle_factor);
+    let combat_at_baseline=weighted_ttk(samples,global_gap_s,no_combat_dead)?;
+    if !combat_at_baseline.is_finite(){return None}
+
+    if combat_at_baseline<=0.02 || no_combat_dead-floor_dead<=0.02 {
+        let dead=dead_time_s(map_baseline_s,combat_at_baseline,bicycle_factor);
+        return Some(PacedKill {
+            dead_time_s:dead,
+            combat_s:combat_at_baseline,
+            total_s:dead+combat_at_baseline,
+        });
+    }
+
+    let combat_at_floor=weighted_ttk(samples,global_gap_s,floor_dead)?;
+    if !combat_at_floor.is_finite(){return None}
+    let span=(no_combat_dead-floor_dead).max(1e-9);
+    let combat_with_dead=|dead:f64| {
+        let t=((no_combat_dead-dead)/span).clamp(0.0,1.0);
+        combat_at_baseline+t*(combat_at_floor-combat_at_baseline)
+    };
+
+    let mut lo=floor_dead;
+    let mut hi=no_combat_dead;
+    for _ in 0..30 {
+        let mid=(lo+hi)/2.0;
+        let combat=combat_with_dead(mid);
+        if dead_time_s(map_baseline_s,combat,bicycle_factor)>=mid {
+            lo=mid;
+        } else {
+            hi=mid;
+        }
+    }
+    let solved_dead=(lo+hi)/2.0;
+    let combat=combat_with_dead(solved_dead);
+    let dead=dead_time_s(map_baseline_s,combat,bicycle_factor);
+    Some(PacedKill {
+        dead_time_s:dead,
+        combat_s:combat,
+        total_s:dead+combat,
+    })
+}
+
+fn kills_per_hour(pace:PacedKill)->f64 {
+    3600.0/pace.total_s.max(0.001)
+}
+fn aoe_kills_per_hour(pace:PacedKill)->f64 {
+    kills_per_hour(pace)
+        .min(3600.0*MAX_AOE_ENGAGED/pace.combat_s.max(0.001))
 }
 
 /// Pure forecast, no observed-kill calibration: comparable full-wave conditions
