@@ -293,5 +293,7 @@ mod tests {
         assert!(purposes.contains("standard-map-pilot"));
         assert!(plan.jobs.iter().all(|job|
             job.env.get("MOTH_HUNT_PACING_EXPECT_HUNT") == Some(&job.hunt_slug)));
+        assert!(plan.jobs.iter().all(|job|
+            job.env.keys().all(|key| !key.contains("MAP"))));
     }
 }
