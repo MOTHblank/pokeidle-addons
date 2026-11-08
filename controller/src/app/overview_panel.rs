@@ -1360,8 +1360,25 @@ fn history_day_label(day:u64)->String {
 }
 #[cfg(test)]
 mod history_ui_tests {
-    use super::{history_day_label, overview_boss, overview_boss_key};
+    use super::{
+        history_day_label, overview_boss, overview_boss_key, overview_team_member_usable,
+    };
     use crate::native_boss::BossView;
+    use crate::native_hunts::{HuntView, PokemonInfo};
+
+    #[test]
+    fn team_switch_uses_upstream_trainer_level_allowance() {
+        let view = HuntView { trainer_level: Some(20), ..Default::default() };
+        let allowed = PokemonInfo { level: 25, ..Default::default() };
+        let blocked = PokemonInfo { level: 26, ..Default::default() };
+        let starter = PokemonInfo { level: 999, starter: true, ..Default::default() };
+        assert!(overview_team_member_usable(&view, &allowed));
+        assert!(!overview_team_member_usable(&view, &blocked));
+        assert!(overview_team_member_usable(&view, &starter));
+
+        let unknown = HuntView::default();
+        assert!(!overview_team_member_usable(&unknown, &allowed));
+    }
 
     #[test]
     fn active_boss_remains_visible_without_playable_catalog() {
