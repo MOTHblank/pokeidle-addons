@@ -479,18 +479,21 @@ fn observe_hunt_mapping(
     let Some(slug) = record.hunt_slug.as_deref().filter(|slug| !slug.is_empty()) else {
         return;
     };
-    let map = record.map_id.as_deref().filter(|map| !map.is_empty());
+    // Only authoritative campo.init-derived identities enter this table.
+    // Records before the first scene have no map identity and are ignored.
+    let Some(map) = record.map_id.as_deref().filter(|map| !map.is_empty()) else {
+        return;
+    };
     match observed.get_mut(slug) {
         None => {
-            observed.insert(slug.to_owned(), map.map(str::to_owned));
+            observed.insert(slug.to_owned(), Some(map.to_owned()));
         }
-        Some(current) => match (current.as_deref(), map) {
-            (Some(old), Some(new)) if old != new => *current = None,
-            (None, _) => {}
-            (Some(_), None) => {}
-            (None, Some(_)) => {}
-            _ => {}
-        },
+        Some(Some(current)) if current != map => {
+            // A conflict is retained as unknown rather than choosing whichever
+            // observation happened to arrive first.
+            *observed.get_mut(slug).unwrap() = None;
+        }
+        Some(_) => {}
     }
 }
 
