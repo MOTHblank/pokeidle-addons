@@ -190,10 +190,16 @@ work. With a reduced dataset it first finishes already observed live maps, then
 adds a second hunt where useful to test shared-map convergence, and finally
 fills the queue with diverse new pilot work.
 
+When traces contain a current authenticated account hunt catalog, the planner
+filters candidates to hunts present in at least one collected account and lists
+which controller profile(s) can run each job. Older reductions without that
+metadata remain usable and simply show account availability as unknown.
+
 Each job contains:
 
 - a stable run ID;
 - the hunt slug that this run is allowed to measure;
+- account profile(s) whose authoritative server catalog contains that hunt;
 - ST1 or AoE profile;
 - target/completed independent windows;
 - a borrowed map ID **hint** for operator orientation only;
