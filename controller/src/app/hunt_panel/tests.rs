@@ -531,20 +531,48 @@ use super::*;
         assert_eq!(cache.refreshed,Some(old));
     }
     #[test]
-    fn combat_cache_invalidates_when_a_learned_pacing_map_arrives(){
+    fn combat_cache_invalidates_when_resolved_pacing_profile_changes(){
         let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"future-hunt".into(),name:"Future".into(),..Default::default()
+        }]);
         let mut cache=EstimateCache::default();
         cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.pacing_profiles.len(),1);
+        assert_eq!(cache.pacing_profiles[0].source,2); // global fallback
         cache.refreshed=Some(Instant::now());
         let baseline=cache.revision;
         view.learned_hunt_maps=Arc::new(std::collections::BTreeMap::from([
             ("future-hunt".to_owned(),"gerado_normal_01".to_owned())
         ]));
+        view.pacing_revision=view.pacing_revision.wrapping_add(1);
         cache.refresh(0,&view,None,true,false);
         assert!(cache.refreshed.is_none());
         assert_ne!(baseline,cache.revision);
-        assert_eq!(cache.learned_pacing_signature,
-            vec![("future-hunt".to_owned(),"gerado_normal_01".to_owned())]);
+        assert_eq!(cache.pacing_profiles[0].source,1); // learned campo.init map
+        assert_eq!(cache.pacing_profiles[0].map_id.as_deref(),Some("gerado_normal_01"));
+    }
+
+    #[test]
+    fn learned_map_that_loses_to_vendored_mapping_does_not_invalidate_forecast(){
+        let mut view=HuntView::default();
+        view.hunts=Arc::new(vec![native_hunts::HuntEntry{
+            slug:"caterpie".into(),name:"Caterpie".into(),..Default::default()
+        }]);
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        cache.refreshed=Some(Instant::now());
+        let baseline=cache.revision;
+        view.learned_hunt_maps=Arc::new(std::collections::BTreeMap::from([
+            ("caterpie".to_owned(),"gerado_normal_01".to_owned())
+        ]));
+        view.pacing_revision=view.pacing_revision.wrapping_add(1);
+        cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.revision,baseline,
+            "cache key is the resolved profile, not an ignored raw learned map");
+        assert!(cache.refreshed.is_some());
+        assert_eq!(cache.pacing_profiles[0].source,0); // exact vendored mapping
+        assert_eq!(cache.pacing_profiles[0].map_id.as_deref(),Some("heracross"));
     }
     #[test]
     fn combat_cache_invalidates_when_max_hp_or_species_changes(){
@@ -723,20 +751,33 @@ use super::*;
         assert_eq!(atlas_aoe_cue(Some(&mon),true),AtlasAoeCue::Enabled);
     }
     #[test]
-    fn changing_account_aoe_checkbox_invalidates_forecast_cache() {
+    fn changing_account_aoe_checkbox_invalidates_forecast_cache_immediately() {
         let mut view=HuntView::default();
         view.active_pokemon=Some(native_hunts::PokemonInfo {
             id:99,level:100,..Default::default()
         });
         let mut cache=EstimateCache::default();
         cache.refresh(0,&view,None,true,false);
-        let single=cache.active_signature.clone();
+        cache.refreshed=Some(Instant::now());
+        let baseline=cache.revision;
         cache.refresh(0,&view,None,true,true);
-        assert_ne!(cache.active_signature,single);
-        let enabled=cache.active_signature.clone();
+        assert!(cache.aoe_enabled);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,baseline);
+    }
+
+    #[test]
+    fn changing_bicycle_factor_invalidates_forecast_cache_immediately() {
+        let mut view=HuntView::default();
+        let mut cache=EstimateCache::default();
         cache.refresh(0,&view,None,true,false);
-        assert_eq!(cache.active_signature,single);
-        assert_ne!(enabled,single);
+        cache.refreshed=Some(Instant::now());
+        let baseline=cache.revision;
+        view.bicycle_factor=Some(1.5);
+        cache.refresh(0,&view,None,true,false);
+        assert_eq!(cache.bicycle_factor_bits,1.5f64.to_bits());
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,baseline);
     }
     #[test]
     fn explorer_speed_sort_uses_simulated_throughput_for_all_hunts() {
