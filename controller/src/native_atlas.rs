@@ -111,6 +111,38 @@ pub fn mkt_sale_estimate(
     let value=(base*(1.0+captured_level as f64/50.0)).floor().max(1.0);
     value.is_finite().then_some(value)
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForecastPacingSource {
+    ExactVendoredMap,
+    LearnedMapId,
+    GlobalFallback,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ForecastPacing {
+    pub source:ForecastPacingSource,
+    pub map_id:Option<String>,
+    /// Effective single/AoE map baseline used by this prediction.
+    pub baseline_seconds_per_kill:f64,
+    /// Pacing-only confidence bounds. Exact maps use the dataset's existing
+    /// per-map error allowance; fallback uses global p10/p90 plus that allowance.
+    pub p10_seconds_per_kill:f64,
+    pub p90_seconds_per_kill:f64,
+}
+
+fn forecast_pacing_source(source:crate::native_atlas_pacing::PacingSource)
+    ->ForecastPacingSource
+{
+    match source {
+        crate::native_atlas_pacing::PacingSource::HuntSlugMapping=>
+            ForecastPacingSource::ExactVendoredMap,
+        crate::native_atlas_pacing::PacingSource::LearnedCampoInit=>
+            ForecastPacingSource::LearnedMapId,
+        crate::native_atlas_pacing::PacingSource::GlobalFallback=>
+            ForecastPacingSource::GlobalFallback,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Forecast {
     pub kills_h: f64,
@@ -125,6 +157,7 @@ pub struct Forecast {
     pub seconds_per_kill: f64,
     pub combat_seconds_per_kill: f64,
     pub dead_time_seconds_per_kill: f64,
+    pub pacing:ForecastPacing,
     pub coverage: f64,
     pub calibrated: bool,
     pub deaths_h: f64,
@@ -481,6 +514,13 @@ pub fn estimate_with_aoe(
         seconds_per_kill:pace.seconds_per_kill,
         combat_seconds_per_kill:pace.combat_seconds_per_kill,
         dead_time_seconds_per_kill:pace.dead_time_seconds_per_kill,
+        pacing:ForecastPacing {
+            source:forecast_pacing_source(pace.pacing_source),
+            map_id:pace.pacing_map_id,
+            baseline_seconds_per_kill:pace.pacing_baseline_seconds_per_kill,
+            p10_seconds_per_kill:pace.pacing_uncertainty.p10,
+            p90_seconds_per_kill:pace.pacing_uncertainty.p90,
+        },
         coverage:pace.coverage,
         calibrated:false, // model is independent of observed current-hunt pace
         deaths_h:pace.deaths_h,
