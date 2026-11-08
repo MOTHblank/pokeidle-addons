@@ -853,11 +853,12 @@ fn draw_overview_team_menu(
                 view.active_pokemon.as_ref().map(|pokemon| pokemon.name.as_str())) {
                 app.set_status(format!("{}: {name}", tr("Active Pokémon")), false);
             }
-        } else if !fresh || requested_at.elapsed() > Duration::from_secs(8) {
+        } else if !fresh {
             app.workspace.pokemon_switch_pending[index] = None;
-            if fresh {
-                app.set_status(tr("Pokémon switch was not confirmed by the game"), true);
-            }
+            app.set_status(tr("No live connection"), true);
+        } else if requested_at.elapsed() > Duration::from_secs(8) {
+            app.workspace.pokemon_switch_pending[index] = None;
+            app.set_status(tr("Pokémon switch was not confirmed by the game"), true);
         }
     }
     let pending_id = app.workspace.pokemon_switch_pending[index]
