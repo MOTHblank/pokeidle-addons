@@ -13,6 +13,7 @@ pub(in crate::app) struct EstimateCache {
     pub(super) bonus_signature: [u64;19],
     pub(super) seasonal_type:Option<String>,
     pub(super) gym_signature:Vec<(String,u8)>,
+    pub(super) learned_pacing_signature:Vec<(String,String)>,
     pub(super) full_required:bool,
     pub(super) live: bool,
     pub(super) refreshed: Option<Instant>,
@@ -58,6 +59,8 @@ impl EstimateCache {
         let seasonal_type=view.seasonal_type.clone();
         let gym_signature=view.gym_podium.iter()
             .map(|(kind,place)|(kind.clone(),*place)).collect::<Vec<_>>();
+        let learned_pacing_signature=view.learned_hunt_maps.iter()
+            .map(|(slug,map)|(slug.clone(),map.clone())).collect::<Vec<_>>();
         let active_species_id=view.active_pokemon.as_ref().and_then(|p|p.species_id);
         let active_max_hp=view.active_pokemon.as_ref().and_then(|p|p.max_hp);
         let full_changed=self.account!=Some(account) ||
@@ -68,7 +71,8 @@ impl EstimateCache {
             self.active_max_hp!=active_max_hp ||
             self.bonus_signature!=bonus_signature ||
             self.seasonal_type!=seasonal_type ||
-            self.gym_signature!=gym_signature;
+            self.gym_signature!=gym_signature ||
+            self.learned_pacing_signature!=learned_pacing_signature;
         if full_changed {
             self.account=Some(account);
             self.catalog_ptr=catalog_ptr;
@@ -79,6 +83,7 @@ impl EstimateCache {
             self.bonus_signature=bonus_signature;
             self.seasonal_type=seasonal_type;
             self.gym_signature=gym_signature;
+            self.learned_pacing_signature=learned_pacing_signature;
             self.live=live;
             self.refreshed=None;
             self.revision=self.revision.wrapping_add(1);
