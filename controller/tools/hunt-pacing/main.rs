@@ -116,13 +116,20 @@ fn run() -> Result<(), String> {
             let dataset_path = out.join("moth-pacing.json");
             let tsv_path = out.join("moth-pacing.tsv");
             let coverage_path = out.join("coverage.txt");
+            let next_plan_path = out.join("next-plan.json");
+            let next_plan_text_path = out.join("next-plan.txt");
             export::write_reduced(&reduced_path, &reduced)?;
             export::write_dataset_json(&dataset_path, &reduced)?;
             export::write_dataset_tsv(&tsv_path, &reduced)?;
             let coverage = export::coverage_report(&reduced);
             fs::write(&coverage_path, &coverage)
                 .map_err(|error| format!("could not write {}: {error}", coverage_path.display()))?;
-            print!("{coverage}");
+            let next_plan = plan::build(Some(&reduced), 12);
+            plan::write_json(&next_plan_path, &next_plan)?;
+            let next_plan_text = plan::render(&next_plan);
+            fs::write(&next_plan_text_path, &next_plan_text)
+                .map_err(|error| format!("could not write {}: {error}", next_plan_text_path.display()))?;
+            print!("{coverage}\n{next_plan_text}");
         }
         "help" | "--help" | "-h" => print_usage(),
         other => return Err(format!("unknown command: {other}")),
