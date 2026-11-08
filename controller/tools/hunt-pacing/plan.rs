@@ -53,12 +53,14 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
                 add_job(
                     &mut jobs, &mut seen, reduced, &corpus, &hunt, "st1",
                     "finish-observed-map", "Complete ST1 reproducibility on an already observed live map.",
+                    Some(map.profiles.get("st1").map(|stats| stats.samples).unwrap_or(0)),
                 );
             }
             if map.profiles.get("aoe").map(|stats| stats.samples).unwrap_or(0) < ENOUGH_WINDOWS {
                 add_job(
                     &mut jobs, &mut seen, reduced, &corpus, &hunt, "aoe",
                     "finish-observed-map", "Complete AoE pacing on an already observed live map.",
+                    Some(map.profiles.get("aoe").map(|stats| stats.samples).unwrap_or(0)),
                 );
             }
         }
@@ -80,6 +82,7 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
                     &mut jobs, &mut seen, reduced, &corpus, &hunt, "st1",
                     "shared-map-convergence",
                     "Measure a second hunt that the borrowed corpus says shares this map. The live campo.init map ID decides whether it actually does.",
+                    None,
                 );
             }
         }
@@ -91,7 +94,7 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
         add_job(
             &mut jobs, &mut seen,
             baseline,
-            &corpus, &hunt, &profile, purpose, notes,
+            &corpus, &hunt, &profile, purpose, notes, None,
         );
     }
 
@@ -144,11 +147,13 @@ fn add_job(
     profile: &str,
     purpose: &str,
     notes: &str,
+    completed_override: Option<usize>,
 ) {
     let key = (hunt.to_owned(), profile.to_owned());
     if !seen.insert(key) { return; }
     let borrowed_map_hint = corpus.hunts.get(hunt).cloned().unwrap_or_else(|| "unknown".into());
-    let completed_windows = completed_windows(reduced, hunt, profile);
+    let completed_windows = completed_override
+        .unwrap_or_else(|| completed_windows(reduced, hunt, profile));
     if completed_windows >= ENOUGH_WINDOWS { return; }
     let id = safe_id(&format!("{purpose}-{hunt}-{profile}"));
     let mut env = BTreeMap::new();
