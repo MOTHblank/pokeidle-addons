@@ -712,6 +712,68 @@ fn reject(rejected: &mut BTreeMap<String, u64>, reason: &str) {
 mod tests {
     use super::*;
 
+    fn trace_record(field_slug: &str, field_observation: Value) -> TraceRecord {
+        TraceRecord {
+            schema: 1,
+            event_type: "packet".into(),
+            session_id: "test".into(),
+            profile: "test".into(),
+            declared_profile: "st1".into(),
+            game_version: "1.0".into(),
+            recv_unix_ms: 1,
+            recv_monotonic_ms: 1,
+            server_ts: Some(1),
+            connection_generation: 1,
+            scene_generation: 1,
+            hunt_slug: Some(field_slug.into()),
+            field_slug: Some(field_slug.into()),
+            map_id: Some("map".into()),
+            calibration: serde_json::json!({}),
+            packet_type: Some("campo".into()),
+            packet: serde_json::json!({}),
+            field_observation,
+            kills: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn special_scene_filter_does_not_match_hunt_name_substrings() {
+        let ordinary = trace_record("mabosstiff_alola", serde_json::json!({}));
+        assert!(!is_special_scene(&ordinary));
+        let safari = trace_record("safari", serde_json::json!({}));
+        assert!(is_special_scene(&safari));
+        let mystic = trace_record("arena_mistica", serde_json::json!({}));
+        assert!(is_special_scene(&mystic));
+    }
+
+    #[test]
+    fn stationary_field_update_is_not_reported_as_post_kill_movement() {
+        let stationary = trace_record("aipom", serde_json::json!({
+            "hero_movement": {
+                "transition": false,
+                "from_col": 10, "from_row": 10,
+                "to_col": 10, "to_row": 10
+            },
+            "mob_updates": [{
+                "movement": {
+                    "transition": false,
+                    "from_col": 11, "from_row": 10,
+                    "to_col": 11, "to_row": 10
+                }
+            }]
+        }));
+        assert!(first_field_movement(&stationary).is_none());
+
+        let moving = trace_record("aipom", serde_json::json!({
+            "hero_movement": {
+                "transition": true,
+                "from_col": 10, "from_row": 10,
+                "to_col": 11, "to_row": 10
+            }
+        }));
+        assert_eq!(first_field_movement(&moving).unwrap()["to_col"], 11);
+    }
+
     #[test]
     fn quantiles_and_mad_are_deterministic() {
         let values = vec![3.0, 3.2, 3.4, 3.6, 3.8];
