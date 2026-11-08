@@ -185,8 +185,10 @@ No visual runtime acceptance is asserted by this document.
   coordinates, Euclidean radii, or inferred full-wave layouts. Pacing is now
   resolved from the vendored /hunt 1.0.17 `ritmo.js` dataset generated from
   PokeIdle 1.409.0: 1,043 hunt→map mappings and 500 map-specific `s`/`sAoe`
-  records, with the dataset p10/median/p90 fallback for unknown hunts.
-  `campo.init.mapa` remains location identity only, not a KPH input.
+  records. Resolution is `hunt slug mapping → learned campo.init map → global
+  fallback`; learned map identity is used only when the vendored slug mapping is
+  absent. Shared-map hunts therefore resolve through the same map pacing record.
+  Unknown maps use the dataset p10/median/p90 fallback.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
