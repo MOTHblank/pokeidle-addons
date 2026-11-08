@@ -849,6 +849,10 @@ fn draw_overview_team_menu(
     if let Some((target_id, requested_at)) = app.workspace.pokemon_switch_pending[index] {
         if active_id == Some(target_id) {
             app.workspace.pokemon_switch_pending[index] = None;
+            if let Some(name) = view.and_then(|view|
+                view.active_pokemon.as_ref().map(|pokemon| pokemon.name.as_str())) {
+                app.set_status(format!("{}: {name}", tr("Active Pokémon")), false);
+            }
         } else if !fresh || requested_at.elapsed() > Duration::from_secs(8) {
             app.workspace.pokemon_switch_pending[index] = None;
             if fresh {
