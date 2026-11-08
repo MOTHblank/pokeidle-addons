@@ -817,7 +817,7 @@ fn draw_boss_history_card(
                     ui.horizontal_wrapped(|ui| {
                         for (id, quantity) in &totals {
                             let name = crate::native_items::display_name(
-                                app.inventory_catalog.as_ref(),
+                                app.inventory_catalog.as_deref(),
                                 *id,
                             );
                             resource_chip(ui, &format!("×{quantity} {name}"));
@@ -931,7 +931,7 @@ fn draw_boss_history_card(
                     } else {
                         result.drops.iter().map(|drop| {
                             let name = crate::native_items::display_name(
-                                app.inventory_catalog.as_ref(),
+                                app.inventory_catalog.as_deref(),
                                 drop.item_id,
                             );
                             format!("{} ×{}", name, drop.quantity)
