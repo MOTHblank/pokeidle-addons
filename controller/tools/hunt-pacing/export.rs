@@ -250,7 +250,7 @@ pub fn dataset_json(reduced: &ReducedDataset) -> Value {
             "deadtime": deadtime_validation_json(reduced),
             "model": {
                 "walking_portion": hunt_pacing_model::WALKING_PORTION,
-                "walking_floor_seconds": hunt_pacing_model::WALKING_FLOOR_S,
+                "fixed_floor_seconds": hunt_pacing_model::FIXED_FLOOR_S,
                 "combat_interaction_tau_seconds": hunt_pacing_model::COMBAT_INTERACTION_TAU_S,
             }
         }
