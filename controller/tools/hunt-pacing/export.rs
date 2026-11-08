@@ -10,6 +10,7 @@ const ENOUGH_WINDOWS: usize = 3;
 #[derive(Clone, Debug)]
 struct TargetCorpus {
     maps: BTreeSet<String>,
+    paces: BTreeMap<String, (f64, f64)>,
     hunts: BTreeMap<String, (String, String)>,
 }
 
@@ -108,6 +109,8 @@ pub fn coverage_report(reduced: &ReducedDataset) -> String {
 
     let observed_expected_hunts = corpus.hunts.keys()
         .filter(|slug| reduced.hunts.contains_key(*slug)).count();
+    let comparisons = pacing_comparisons(reduced, &corpus);
+    let shared_maps = observed_shared_maps(reduced);
 
     format!(
 r#"Hunt pacing coverage
@@ -127,6 +130,12 @@ Maps needing more AOE samples ({need_aoe_count}):
 
 Hunts with conflicting/unknown observed map identity ({unknown_count}):
 {unknown_lines}
+
+Measured maps vs current /hunt target:
+{comparison_lines}
+
+Observed map IDs shared by multiple hunt slugs:
+{shared_map_lines}
 "#,
         expected = corpus.maps.len(),
         expected_hunts = corpus.hunts.len(),
@@ -137,6 +146,12 @@ Hunts with conflicting/unknown observed map identity ({unknown_count}):
         need_aoe_lines = format_lines(&need_aoe),
         unknown_count = reduced.unknown_hunts.len(),
         unknown_lines = format_lines(&reduced.unknown_hunts),
+        comparison_lines = if comparisons.is_empty() {
+            "  (none)".into()
+        } else { comparisons.join("\n") },
+        shared_map_lines = if shared_maps.is_empty() {
+            "  (none)".into()
+        } else { shared_maps.join("\n") },
     )
 }
 
@@ -279,6 +294,7 @@ fn quantile(mut values: Vec<f64>, q: f64) -> f64 {
 
 fn target_corpus() -> TargetCorpus {
     let mut maps = BTreeSet::new();
+    let mut paces = BTreeMap::new();
     let mut hunts = BTreeMap::new();
     for line in BORROWED_TARGET.lines() {
         if line.starts_with('#') || line.trim().is_empty() { continue; }
@@ -286,6 +302,9 @@ fn target_corpus() -> TargetCorpus {
         match fields.first().copied() {
             Some("map") if fields.len() >= 4 => {
                 maps.insert(fields[1].to_owned());
+                if let (Ok(st1), Ok(aoe)) = (fields[2].parse::<f64>(), fields[3].parse::<f64>()) {
+                    paces.insert(fields[1].to_owned(), (st1, aoe));
+                }
             }
             Some("hunt") if fields.len() >= 4 => {
                 hunts.insert(fields[1].to_owned(), (fields[2].to_owned(), fields[3].to_owned()));
@@ -293,7 +312,42 @@ fn target_corpus() -> TargetCorpus {
             _ => {}
         }
     }
-    TargetCorpus { maps, hunts }
+    TargetCorpus { maps, paces, hunts }
+}
+
+fn pacing_comparisons(reduced: &ReducedDataset, corpus: &TargetCorpus) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some((borrowed_st1, borrowed_aoe)) = corpus.paces.get(map_id).copied() else {
+            continue;
+        };
+        let st1 = map.profiles.get("st1");
+        let aoe = map.profiles.get("aoe");
+        if st1.is_none() && aoe.is_none() { continue; }
+        let st1_text = st1.map(|stats| {
+            let moth = stats.median_seconds_per_kill;
+            let pct = if borrowed_st1 > 0.0 { 100.0 * (moth / borrowed_st1 - 1.0) } else { 0.0 };
+            format!("ST1 {moth:.4}s vs {borrowed_st1:.4}s ({pct:+.2}%)")
+        }).unwrap_or_else(|| "ST1 —".into());
+        let aoe_text = aoe.map(|stats| {
+            let moth = stats.median_seconds_per_kill;
+            let pct = if borrowed_aoe > 0.0 { 100.0 * (moth / borrowed_aoe - 1.0) } else { 0.0 };
+            format!("AOE {moth:.4}s vs {borrowed_aoe:.4}s ({pct:+.2}%)")
+        }).unwrap_or_else(|| "AOE —".into());
+        lines.push(format!("  {map_id}: {st1_text}; {aoe_text}"));
+    }
+    lines
+}
+
+fn observed_shared_maps(reduced: &ReducedDataset) -> Vec<String> {
+    let mut by_map = BTreeMap::<String, Vec<String>>::new();
+    for (hunt, map) in &reduced.hunts {
+        by_map.entry(map.clone()).or_default().push(hunt.clone());
+    }
+    by_map.into_iter()
+        .filter(|(_, hunts)| hunts.len() > 1)
+        .map(|(map, hunts)| format!("  {map}: {}", hunts.join(", ")))
+        .collect()
 }
 
 fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
