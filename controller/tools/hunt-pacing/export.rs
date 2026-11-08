@@ -107,6 +107,9 @@ pub fn coverage_report(reduced: &ReducedDataset) -> String {
     let need_aoe = corpus.maps.iter()
         .filter(|map_id| !profile(reduced, map_id, "aoe").is_some_and(enough))
         .cloned().collect::<Vec<_>>();
+    let extra_maps = reduced.maps.keys()
+        .filter(|map_id| !corpus.maps.contains(*map_id))
+        .cloned().collect::<Vec<_>>();
 
     let observed_expected_hunts = corpus.hunts.keys()
         .filter(|slug| reduced.hunts.contains_key(*slug)).count();
@@ -130,12 +133,16 @@ r#"Hunt pacing coverage
   expected hunts observed: {observed_expected_hunts}/{expected_hunts}
   hunt identities not yet observed: {unobserved_count}
   conflicting observed identities:  {unknown}
+  observed maps outside target corpus: {extra_map_count}
 
 Maps needing more ST1 samples ({need_st1_count}):
 {need_st1_lines}
 
 Maps needing more AOE samples ({need_aoe_count}):
 {need_aoe_lines}
+
+Observed map IDs outside the 500-map target corpus ({extra_map_count}):
+{extra_map_lines}
 
 Target hunts whose map identity has not been observed ({unobserved_count}):
 {unobserved_lines}
@@ -162,10 +169,12 @@ Dead-time validation against 0.83 / 1.41 / 2.8:
         expected_hunts = corpus.hunts.len(),
         unknown = reduced.unknown_hunts.len(),
         unobserved_count = unobserved_hunts.len(),
+        extra_map_count = extra_maps.len(),
         need_st1_count = need_st1.len(),
         need_aoe_count = need_aoe.len(),
         need_st1_lines = format_lines(&need_st1),
         need_aoe_lines = format_lines(&need_aoe),
+        extra_map_lines = format_lines(&extra_maps),
         unobserved_lines = format_lines(&unobserved_hunts),
         unknown_count = reduced.unknown_hunts.len(),
         unknown_lines = format_lines(&reduced.unknown_hunts),
@@ -265,6 +274,9 @@ pub fn dataset_json(reduced: &ReducedDataset) -> Value {
         },
         "coverage": {
             "unknown_hunts": reduced.unknown_hunts,
+            "maps_outside_target_corpus": reduced.maps.keys()
+                .filter(|map_id| !corpus.maps.contains(*map_id))
+                .cloned().collect::<Vec<_>>(),
             "rejected_windows": reduced.rejected_windows,
         },
         "validation": {
