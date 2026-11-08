@@ -307,7 +307,7 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String>
 }
 
 fn clean_field(raw: &str) -> String {
-    raw.replace(['\t', '\n', '\r'], " ")
+    raw.replace('\t', " ").replace('\n', " ").replace('\r', " ")
 }
 
 fn format_lines(values: &[String]) -> String {
