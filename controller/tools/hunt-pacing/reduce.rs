@@ -488,12 +488,13 @@ fn observe_hunt_mapping(
         None => {
             observed.insert(slug.to_owned(), Some(map.to_owned()));
         }
-        Some(Some(current)) if current != map => {
-            // A conflict is retained as unknown rather than choosing whichever
-            // observation happened to arrive first.
-            *observed.get_mut(slug).unwrap() = None;
+        Some(current) => {
+            if current.as_deref().is_some_and(|previous| previous != map) {
+                // A conflict is retained as unknown rather than choosing
+                // whichever observation happened to arrive first.
+                *current = None;
+            }
         }
-        Some(_) => {}
     }
 }
 
