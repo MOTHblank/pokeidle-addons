@@ -5,7 +5,6 @@ use crate::trace::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReduceConfig {
@@ -121,6 +120,10 @@ pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> Reduc
     let mut rejected = BTreeMap::<String, u64>::new();
     let mut observed_hunts = BTreeMap::<String, Option<String>>::new();
     let mut game_version = "unknown".to_owned();
+    let generated_at_unix_ms = sessions.iter()
+        .flat_map(|session| session.records.iter())
+        .map(|record| record.recv_unix_ms)
+        .max().unwrap_or(0);
 
     for session in sessions {
         if game_version == "unknown" {
@@ -165,7 +168,7 @@ pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> Reduc
     ReducedDataset {
         schema: 1,
         source: "moth-live-observation".into(),
-        generated_at_unix_ms: unix_ms(),
+        generated_at_unix_ms,
         game_version,
         config,
         trace_files: sessions.len(),
@@ -628,12 +631,6 @@ fn observe_hunt_mapping(
 
 fn reject(rejected: &mut BTreeMap<String, u64>, reason: &str) {
     *rejected.entry(reason.to_owned()).or_default() += 1;
-}
-
-fn unix_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
