@@ -304,14 +304,14 @@ mod tests {
     #[test]
     fn unknown_hunt_uses_vendored_global_median() {
         let pace=native_atlas_pacing::resolve("__unknown_hunt__",None);
-        assert_eq!(pace.base_seconds_per_killource,native_atlas_pacing::PacingSource::GlobalFallback);
+        assert_eq!(pace.source,native_atlas_pacing::PacingSource::GlobalFallback);
         let kills=single_target_kills(pace.base_seconds_per_kill,MIN_CYCLE_S,1.0);
         assert!((3600.0/kills-3.406).abs()<1e-12);
     }
     #[test]
     fn learned_map_upgrades_unknown_hunt_to_shared_map_pacing() {
         let pace=native_atlas_pacing::resolve("__new_hunt__",Some("gerado_normal_01"));
-        assert_eq!(pace.base_seconds_per_killource,native_atlas_pacing::PacingSource::LearnedCampoInit);
+        assert_eq!(pace.source,native_atlas_pacing::PacingSource::LearnedCampoInit);
         let aipom=native_atlas_pacing::resolve("aipom",None);
         assert_eq!(pace.map_id,aipom.map_id);
         assert_eq!(pace.base_seconds_per_kill,aipom.base_seconds_per_kill);
