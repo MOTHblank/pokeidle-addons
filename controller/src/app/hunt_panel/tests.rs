@@ -493,7 +493,7 @@ use super::*;
         cache.refresh(0,&view,Some(&guide),true,false);
         // Simulate a slow in-flight worker whose receiver cannot complete.
         let (tx,rx)=std::sync::mpsc::sync_channel(1);
-        cache.pending=Some((cache.generation,true,rx));
+        cache.pending=Some((cache.generation,rx));
         cache.refreshed=None;
         let previous=cache.generation;
         view.bonuses.vip_active=true;
@@ -511,55 +511,6 @@ use super::*;
             "an obsolete generation must not publish its result");
         assert_eq!(cache.pending.as_ref().unwrap().0,cache.generation,
             "newest request starts only after the previous worker finishes");
-    }
-    #[test]
-    fn geometry_revision_recomputes_only_its_destination() {
-        let mut view=HuntView::default();
-        view.hunts=Arc::new(vec![
-            native_hunts::HuntEntry{slug:"a".into(),..Default::default()},
-            native_hunts::HuntEntry{slug:"b".into(),..Default::default()},
-        ]);
-        let mut cache=EstimateCache::default();
-        cache.refresh(0,&view,None,true,false);
-        cache.full_required=false;
-        cache.refreshed=Some(Instant::now());
-        cache.values.insert("a".into(),Some(simulated_forecast(100.0,false)));
-        cache.values.insert("b".into(),Some(simulated_forecast(250.0,false)));
-        view.geo_revisions=Arc::new(std::collections::BTreeMap::from([
-            ("a".into(),1),("b".into(),1)]));
-        cache.refresh(0,&view,None,true,false);
-        assert!(cache.get("b").is_none(),
-            "the first geometry sample affects both destinations");
-        assert!(cache.geometry_dirty.contains("a"));
-        assert!(cache.geometry_dirty.contains("b"));
-        cache.geometry_dirty.clear();
-        cache.values.insert("a".into(),Some(simulated_forecast(100.0,false)));
-        cache.values.insert("b".into(),Some(simulated_forecast(250.0,false)));
-        cache.refreshed=Some(Instant::now());
-        let mut next=(*view.geo_revisions).clone();
-        next.insert("a".into(),2);
-        view.geo_revisions=Arc::new(next);
-        cache.refresh(0,&view,None,true,false);
-        assert_eq!(cache.geometry_dirty.len(),1);
-        assert!(cache.geometry_dirty.contains("a"));
-        assert!(cache.get("a").is_none());
-        assert_eq!(cache.get("b").unwrap().kills_h,250.0,
-            "unaffected forecasts must remain cached");
-        // A completed geometry-only worker patches one row, not the full map.
-        let (tx,rx)=std::sync::mpsc::sync_channel(1);
-        cache.pending=Some((cache.generation,false,rx));
-        tx.send(std::collections::BTreeMap::from([
-            ("a".to_owned(),Some(simulated_forecast(175.0,false)))
-        ])).unwrap();
-        cache.refresh(0,&view,None,true,false);
-        assert!(cache.geometry_dirty.is_empty());
-        assert_eq!(cache.get("a").unwrap().kills_h,175.0);
-        assert_eq!(cache.get("b").unwrap().kills_h,250.0);
-        let refreshed=cache.refreshed;
-        view.geo_revisions=Arc::new((*view.geo_revisions).clone());
-        cache.refresh(0,&view,None,true,false);
-        assert_eq!(cache.refreshed,refreshed,
-            "a new map allocation without version changes is not invalidation");
     }
     #[test]
     fn combat_cache_does_not_recompute_by_age_or_hunt_switch(){
@@ -621,7 +572,7 @@ use super::*;
         assert_eq!(results.rebuilds,3,"new forecasts must invalidate rankings");
     }
     #[test]
-    fn repeated_invalidation_refreshes_rankings_even_without_a_completed_forecast() {
+    fn repeated_input_invalidation_refreshes_rankings_even_without_a_completed_forecast() {
         let mut view=HuntView::default();
         view.hunts=Arc::new(vec![native_hunts::HuntEntry{
             slug:"a".into(),name:"A".into(),..Default::default()
@@ -639,9 +590,7 @@ use super::*;
         assert_eq!(ranked.rebuilds,1);
         assert_eq!(explorer.rebuilds,1);
         let baseline=estimates.revision;
-        view.geo_revisions=Arc::new(std::collections::BTreeMap::from([
-            ("a".into(),1)
-        ]));
+        view.bonuses.vip_active=true;
         estimates.refresh(0,&view,None,true,false);
         assert!(estimates.get("a").is_none());
         assert!(estimates.refreshed.is_none());
@@ -650,9 +599,7 @@ use super::*;
         explorer.update(&view,None,&estimates,&filters,&scenario);
         assert_eq!(ranked.rebuilds,2);
         assert_eq!(explorer.rebuilds,2);
-        let mut newer=(*view.geo_revisions).clone();
-        newer.insert("a".into(),2);
-        view.geo_revisions=Arc::new(newer);
+        view.bonuses.guild_boost_active=true;
         estimates.refresh(0,&view,None,true,false);
         assert!(estimates.refreshed.is_none());
         ranked.update(&view,None,&estimates,HuntRanking::TrainerXp,true,"","","");
