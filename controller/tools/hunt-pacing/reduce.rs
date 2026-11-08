@@ -31,6 +31,19 @@ impl Default for ReduceConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct KillBoundary {
+    pub kill_recv_monotonic_ms: u64,
+    pub previous_kill_recv_monotonic_ms: Option<u64>,
+    pub target_slot: Value,
+    pub species: Value,
+    pub attack: Value,
+    pub next_target_recv_monotonic_ms: Option<u64>,
+    pub next_target: Value,
+    pub first_movement_recv_monotonic_ms: Option<u64>,
+    pub first_movement: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WindowSample {
     pub session_id: String,
     pub map_id: String,
@@ -44,6 +57,7 @@ pub struct WindowSample {
     pub total_seconds: f64,
     pub seconds_per_kill: f64,
     pub kill_batch_sizes: Vec<u64>,
+    pub kill_boundaries: Vec<KillBoundary>,
     pub max_attack_actions_between_kills: u32,
 }
 
@@ -94,6 +108,8 @@ struct Segment {
     last_record_ms: u64,
     kill_times: Vec<u64>,
     kill_batch_sizes: Vec<u64>,
+    kill_boundaries: Vec<KillBoundary>,
+    pending_boundary_start: Option<usize>,
     attack_actions_since_kill: u32,
     max_attack_actions_between_kills: u32,
     last_active_hp: Option<u64>,
@@ -218,6 +234,8 @@ fn reduce_session(
                 last_record_ms: record.recv_monotonic_ms,
                 kill_times: Vec::new(),
                 kill_batch_sizes: Vec::new(),
+                kill_boundaries: Vec::new(),
+                pending_boundary_start: None,
                 attack_actions_since_kill: 0,
                 max_attack_actions_between_kills: 0,
                 last_active_hp: active_hp(record),
@@ -242,6 +260,10 @@ fn reduce_session(
             current.last_active_hp = Some(hp);
         }
 
+        if matches!(record.packet_type.as_deref(), Some("campo") | Some("campo.init")) {
+            attach_post_kill_field(current, record);
+        }
+
         if record.packet_type.as_deref() == Some("batalha") {
             current.attack_actions_since_kill = current.attack_actions_since_kill
                 .saturating_add(explicit_attack_actions(record));
@@ -261,18 +283,78 @@ fn reduce_session(
                 }
 
                 current.kill_batch_sizes.push(batch);
+                let boundary_start = current.kill_boundaries.len();
                 for kill in &record.kills {
                     let at = kill.get("kill_recv_monotonic_ms")
                         .and_then(Value::as_u64)
                         .unwrap_or(record.recv_monotonic_ms);
                     current.kill_times.push(at);
+                    current.kill_boundaries.push(KillBoundary {
+                        kill_recv_monotonic_ms: at,
+                        previous_kill_recv_monotonic_ms: kill
+                            .get("previous_kill_recv_monotonic_ms")
+                            .and_then(Value::as_u64),
+                        target_slot: kill.get("slot").cloned().unwrap_or(Value::Null),
+                        species: kill.get("species").cloned().unwrap_or(Value::Null),
+                        attack: kill.get("attack").cloned().unwrap_or(Value::Null),
+                        next_target_recv_monotonic_ms: None,
+                        next_target: Value::Null,
+                        first_movement_recv_monotonic_ms: None,
+                        first_movement: Value::Null,
+                    });
                 }
+                current.pending_boundary_start = Some(boundary_start);
                 current.attack_actions_since_kill = 0;
             }
         }
     }
 
     finish_segment(segment.take(), config, windows, rejected);
+}
+
+fn attach_post_kill_field(segment: &mut Segment, record: &TraceRecord) {
+    let Some(start) = segment.pending_boundary_start else { return };
+    if start >= segment.kill_boundaries.len() {
+        segment.pending_boundary_start = None;
+        return;
+    }
+
+    let explicit_target = record.packet.get("alvo")
+        .filter(|target| !target.is_null()).cloned();
+    let movement = first_field_movement(record);
+
+    for boundary in &mut segment.kill_boundaries[start..] {
+        if boundary.next_target_recv_monotonic_ms.is_none() {
+            if let Some(target) = explicit_target.as_ref() {
+                boundary.next_target_recv_monotonic_ms = Some(record.recv_monotonic_ms);
+                boundary.next_target = target.clone();
+            }
+        }
+        if boundary.first_movement_recv_monotonic_ms.is_none() {
+            if let Some(movement) = movement.as_ref() {
+                boundary.first_movement_recv_monotonic_ms = Some(record.recv_monotonic_ms);
+                boundary.first_movement = movement.clone();
+            }
+        }
+    }
+
+    if segment.kill_boundaries[start..].iter().all(|boundary|
+        boundary.next_target_recv_monotonic_ms.is_some()
+            && boundary.first_movement_recv_monotonic_ms.is_some())
+    {
+        segment.pending_boundary_start = None;
+    }
+}
+
+fn first_field_movement(record: &TraceRecord) -> Option<Value> {
+    let field = &record.field_observation;
+    if let Some(hero) = field.get("hero_movement").filter(|value| !value.is_null()) {
+        return Some(hero.clone());
+    }
+    field.get("mob_updates").and_then(Value::as_array)
+        .into_iter().flatten()
+        .filter_map(|mob| mob.get("movement"))
+        .find(|movement| !movement.is_null()).cloned()
 }
 
 fn accepted_profile(record: &TraceRecord) -> Option<String> {
@@ -406,6 +488,8 @@ fn finish_segment(
     let warmup_batches = batches_covering_kills(&segment.kill_batch_sizes, config.warmup_kills);
     let kill_batch_sizes = segment.kill_batch_sizes
         .into_iter().skip(warmup_batches).collect();
+    let kill_boundaries = segment.kill_boundaries
+        .into_iter().skip(config.warmup_kills).collect();
 
     windows.push(WindowSample {
         session_id: segment.session_id,
@@ -420,6 +504,7 @@ fn finish_segment(
         total_seconds: seconds,
         seconds_per_kill,
         kill_batch_sizes,
+        kill_boundaries,
         max_attack_actions_between_kills: segment.max_attack_actions_between_kills,
     });
 }
