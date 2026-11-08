@@ -416,13 +416,13 @@ mod tests {
 
     #[test]
     fn pacing_constants_match_initial_hunt_calibration() {
-        assert!((PACING_MODEL.walking_portion-0.83).abs()<1e-12);
-        assert!((PACING_MODEL.walking_floor_s-1.41).abs()<1e-12);
-        assert!((PACING_MODEL.combat_interaction_tau_s-2.8).abs()<1e-12);
+        assert!((hunt_pacing_model::WALKING_PORTION-0.83).abs()<1e-12);
+        assert!((hunt_pacing_model::WALKING_FLOOR_S-1.41).abs()<1e-12);
+        assert!((hunt_pacing_model::COMBAT_INTERACTION_TAU_S-2.8).abs()<1e-12);
     }
 
     #[test]
-    fn dead_time_curve_starts_at_map_baseline_and_decays_to_walking_floor() {
+    fn dead_time_curve_starts_at_map_baseline_and_decays_to_fixed_floor() {
         let s=3.422;
         let reducible=(0.83*s-1.41).max(0.0);
         assert!((dead_time_s(s,0.0,1.0)-s).abs()<1e-12);
