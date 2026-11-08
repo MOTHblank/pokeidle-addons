@@ -227,6 +227,10 @@ pub struct HuntView {
     /// Hunt→map identities learned from authoritative campo.init packets.
     /// Used only when the vendored pacing table has no slug mapping.
     pub learned_hunt_maps: Arc<BTreeMap<String,String>>,
+    /// Changes only when a learned hunt→map identity changes. Forecast caching
+    /// uses this to rebuild resolved pacing-profile keys, never as a substitute
+    /// for the resolved profile itself.
+    pub pacing_revision: u64,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     /// Stable representative sprite for the confirmed hunt. This is not
@@ -1352,9 +1356,15 @@ impl HuntIntel {
                     // catalog slug; arbitrary maps are not necessarily hunts.
                     if self.view.hunts.iter().any(|hunt| hunt.slug == slug) {
                         if let Some(map)=map {
-                            let learned=Arc::make_mut(&mut self.view.learned_hunt_maps);
-                            if learned.get(slug).is_none_or(|old|old!=map) {
-                                learned.insert(slug.to_owned(),map.to_owned());
+                            let changed={
+                                let learned=Arc::make_mut(&mut self.view.learned_hunt_maps);
+                                if learned.get(slug).is_none_or(|old|old!=map) {
+                                    learned.insert(slug.to_owned(),map.to_owned());
+                                    true
+                                }else{false}
+                            };
+                            if changed {
+                                self.view.pacing_revision=self.view.pacing_revision.wrapping_add(1);
                             }
                         }
                         self.adopt_hunt(slug, now);
