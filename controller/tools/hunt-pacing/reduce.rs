@@ -457,21 +457,37 @@ fn finish_segment(
         return;
     }
 
-    let needed = config.warmup_kills
-        .saturating_add(config.min_measured_kills)
-        .saturating_add(1);
-    if segment.kill_times.len() < needed {
-        reject(rejected, "insufficient-kills");
+    // Warm-up always ends on a complete server kill batch. This is identical
+    // to kill-count warm-up for ST1 (batch size 1) and avoids starting an AOE
+    // measurement halfway through one attack.
+    let warmup_batches = batches_covering_kills(
+        &segment.kill_batch_sizes, config.warmup_kills);
+    let aligned_warmup_kills = segment.kill_batch_sizes.iter()
+        .take(warmup_batches).map(|kills| *kills as usize).sum::<usize>();
+    let measured_batches = &segment.kill_batch_sizes[warmup_batches..];
+    if measured_batches.len() < 2 {
+        reject(rejected, "insufficient-kill-batches");
         return;
     }
 
-    let measured = &segment.kill_times[config.warmup_kills..];
-    let Some((&start, &end)) = measured.first().zip(measured.last()) else {
+    // The first measured batch is the sequence boundary. Count the kills that
+    // arrive at subsequent batch boundaries. For ST1 this is exactly the
+    // ordinary (last kill - first kill)/(kills - 1) estimator. For AOE it
+    // avoids crediting the kills that occurred at the zero-time start boundary.
+    let kills = measured_batches.iter().skip(1).copied().sum::<u64>();
+    if kills < config.min_measured_kills as u64 {
+        reject(rejected, "insufficient-kills");
+        return;
+    }
+    let Some(&start) = segment.kill_times.get(aligned_warmup_kills) else {
         reject(rejected, "missing-boundary");
         return;
     };
-    let kills = measured.len().saturating_sub(1) as u64;
-    if kills == 0 || end <= start {
+    let Some(&end) = segment.kill_times.last() else {
+        reject(rejected, "missing-boundary");
+        return;
+    };
+    if end <= start {
         reject(rejected, "non-positive-window");
         return;
     }
@@ -485,11 +501,10 @@ fn finish_segment(
         return;
     }
 
-    let warmup_batches = batches_covering_kills(&segment.kill_batch_sizes, config.warmup_kills);
     let kill_batch_sizes = segment.kill_batch_sizes
         .into_iter().skip(warmup_batches).collect();
     let kill_boundaries = segment.kill_boundaries
-        .into_iter().skip(config.warmup_kills).collect();
+        .into_iter().skip(aligned_warmup_kills).collect();
 
     windows.push(WindowSample {
         session_id: segment.session_id,
