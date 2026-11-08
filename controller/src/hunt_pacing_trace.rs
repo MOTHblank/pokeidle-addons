@@ -248,6 +248,11 @@ impl EnabledCollector {
             let was_dead = self.mob_dead.insert(slot_key.clone(), now_dead).unwrap_or(false);
             let lifecycle = if !existed {
                 if replenished { "respawn" } else { "spawn" }
+            } else if was_dead && !now_dead {
+                // Some replenishments reuse a slot without an intermediate
+                // `fora` removal. Treat the authoritative dead→alive edge as
+                // a respawn rather than an ordinary field update.
+                "respawn"
             } else if now_dead && !was_dead {
                 "death"
             } else {
