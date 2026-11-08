@@ -184,13 +184,9 @@ pub(super) fn draw_atlas_combat_profile(
                             .size(10.0).color(ACCENT));
                     }
                 }
-                if let Some(slug)=view.hunt_slug.as_deref() {
-                    let measured=view.geo_distances.get(slug)
-                        .is_some_and(|samples|!samples.is_empty());
-                    ui.label(RichText::new(if measured {
-                        tr("● Measured spawn geometry")
-                    }else{tr("≈ Default spawn geometry")})
-                        .size(10.0).color(if measured {GOOD}else{MUTED}));
+                if view.hunt_slug.is_some() {
+                    ui.label(RichText::new(tr("≈ Generic movement pacing"))
+                        .size(10.0).color(MUTED));
                 }
                 if view.hunt_slug.is_none() {
                     ui.label(RichText::new(tr("Select a hunt for combat projections"))

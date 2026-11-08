@@ -224,11 +224,6 @@ pub struct HuntView {
     pub field_map: Option<String>,
     pub field_slug: Option<String>,
     pub field_init_timestamp: Option<u64>,
-    /// Real full-wave spawn-distance quantiles, learned only from native field events.
-    pub geo_distances: Arc<BTreeMap<String,Vec<f64>>>,
-    /// Per-destination geometry versions: updating one hunt does not
-    /// invalidate simulations for every other destination.
-    pub geo_revisions: Arc<BTreeMap<String,u64>>,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     /// Stable representative sprite for the confirmed hunt. This is not
@@ -426,10 +421,6 @@ pub struct HuntIntel {
     raid_farm_until:u64,
     bicycle_factors:BTreeMap<String,f64>,
     bicycle_state:Option<Value>,
-    geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
-    geo_wave: Option<(String,Instant,Vec<f64>)>,
-    geo_alive: BTreeMap<u64,bool>,
-    geo_hero: Option<(f64,f64)>,
 }
 impl HuntIntel {
     pub fn new() -> Self {
@@ -454,8 +445,6 @@ impl HuntIntel {
             kick_reported_pct:0.0,bonus_xp:None,
             raid_farm_reported_pct:0.0,raid_farm_until:0,
             bicycle_factors:default_bicycle_factors(),bicycle_state:None,
-            geo_samples:BTreeMap::new(),
-            geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
     }
     /// Produce a cheap UI snapshot: roster data is cloned only on the
@@ -463,7 +452,6 @@ impl HuntIntel {
     pub fn snapshot(&mut self) -> HuntView {
         // Time-limited XP bonuses may end without another estado frame.
         self.refresh_timed_xp_bonuses(Instant::now());
-        self.finish_geo_wave(Instant::now());
         self.expire_outland_request(Instant::now());
         self.view.session.duration_secs=self.session_start.elapsed().as_secs();
         self.view.measurements.last_battle_age_secs=self.last_battle_at
@@ -660,114 +648,6 @@ impl HuntIntel {
         }
     }
     fn num(record: &Value, key: &str) -> Option<u64> { record.get(key).and_then(Value::as_u64) }
-    /// Record only sufficiently complete spawn layouts. Full campo.init packets
-    /// are authoritative even for high-level hunts, where per-slot respawns
-    /// must NOT be mistaken for a new full wave.
-    fn record_geo_distances(&mut self, slug:&str, mut distances:Vec<f64>) {
-        let Some(hunt)=self.view.hunts.iter().find(|h|h.slug==slug) else{return};
-        let expected=if hunt.total_spawns>0 {hunt.total_spawns as f64}
-            else {hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>().min(16.0)};
-        let threshold=(expected*0.8).ceil().max(6.0);
-        distances.retain(|d|d.is_finite()&&*d>=0.0&&*d<=300.0);
-        if (distances.len() as f64)<threshold {return}
-        distances.sort_by(f64::total_cmp);
-        let histories=self.geo_samples.entry(slug.to_owned()).or_default();
-        histories.push(distances);
-        if histories.len()>6 {histories.remove(0);}
-        let all=histories.iter().flat_map(|v|v.iter().copied()).collect();
-        let mut next=(*self.view.geo_distances).clone();
-        next.insert(slug.to_owned(),all);
-        self.view.geo_distances=Arc::new(next);
-        let mut revisions=(*self.view.geo_revisions).clone();
-        let revision=revisions.entry(slug.to_owned()).or_default();
-        *revision=revision.wrapping_add(1);
-        self.view.geo_revisions=Arc::new(revisions);
-    }
-    fn record_initial_geometry(&mut self, frame:&Value) {
-        let Some(slug)=frame.get("slug").and_then(Value::as_str) else{return};
-        let Some(hero)=frame.get("heroi") else{return};
-        let (Some(hc),Some(hr))=(hero.get("c").and_then(Value::as_f64),
-            hero.get("r").and_then(Value::as_f64)) else{return};
-        let Some(mobs)=frame.get("mobs").and_then(Value::as_array) else{return};
-        let distances=mobs.iter().filter(|mob|Self::is_field_wild(mob)
-            &&mob.get("x").and_then(Value::as_bool)!=Some(true))
-            .filter_map(|mob|{
-                let c=mob.get("c")?.as_f64()?;
-                let r=mob.get("r")?.as_f64()?;
-                let d=(c-hc).hypot(r-hr);
-                (d.is_finite()&&d<=300.0).then_some((d*10.0).round()/10.0)
-            }).collect::<Vec<_>>();
-        self.record_geo_distances(slug,distances);
-    }
-    /// Only full delta waves count as geometry. Spawn slots, not active wild
-    /// encounters, provide movement distances. No monitoring state or hunt
-    /// counters are mutated.
-    fn finish_geo_wave(&mut self, now:Instant) {
-        let finished=self.geo_wave.as_ref().is_some_and(|(_,since,_)|
-            now.saturating_duration_since(*since)>=Duration::from_secs(4));
-        if !finished {return}
-        let Some((slug,_,distances))=self.geo_wave.take() else{return};
-        let Some(hunt)=self.view.hunts.iter().find(|h|h.slug==slug) else{return};
-        if hunt.level>150 {return} // Per-slot replacement has no full wave.
-        self.record_geo_distances(&slug,distances);
-    }
-    fn field_geo_init(&mut self, frame:&Value) {
-        self.geo_wave=None;
-        self.geo_alive.clear();
-        self.geo_hero=frame.get("heroi").and_then(|h|
-            Some((h.get("c")?.as_f64()?,h.get("r")?.as_f64()?)));
-        if let Some(mobs)=frame.get("mobs").and_then(Value::as_array){
-            for mob in mobs{
-                if Self::is_field_wild(mob){
-                    if let Some(slot)=Self::num(mob,"s"){
-                        self.geo_alive.insert(slot,mob.get("x").and_then(Value::as_bool)!=Some(true));
-                    }
-                }
-            }
-        }
-    }
-    fn is_field_wild(mob:&Value)->bool {
-        !["bn","cura","tm","depot","tr"].iter()
-            .any(|k|mob.get(*k).is_some_and(|v|!v.is_null()&&v.as_bool()!=Some(false)))
-            && mob.get("ti").is_none()
-    }
-    fn field_geo_delta(&mut self, frame:&Value, now:Instant) {
-        self.finish_geo_wave(now);
-        if let Some(hero)=frame.get("heroi") {
-            if let (Some(c),Some(r))=(hero.get("c").and_then(Value::as_f64),
-                hero.get("r").and_then(Value::as_f64)) {
-                self.geo_hero=Some((c,r));
-            }
-        }
-        let slug=self.view.field_slug.as_deref()
-            .filter(|slug|self.view.hunts.iter().any(|h|h.slug==*slug));
-        for mob in frame.get("mobs").and_then(Value::as_array)
-            .into_iter().flatten(){
-            if !Self::is_field_wild(mob){continue}
-            let Some(slot)=Self::num(mob,"s") else{continue};
-            let dead=mob.get("x").and_then(Value::as_bool)==Some(true);
-            let was_alive=self.geo_alive.insert(slot,!dead);
-            if !dead && was_alive!=Some(true) {
-                if let (Some(slug),Some((hc,hr)),Some(c),Some(r))=(
-                    slug,self.geo_hero,mob.get("c").and_then(Value::as_f64),
-                    mob.get("r").and_then(Value::as_f64)) {
-                    let dist=(c-hc).hypot(r-hr);
-                    if dist.is_finite() && dist<=300.0{
-                        if self.geo_wave.as_ref().is_none_or(|(s,_,_)|s!=slug){
-                            self.geo_wave=Some((slug.to_owned(),now,Vec::new()));
-                        }
-                        if let Some((_,_,samples))=self.geo_wave.as_mut(){
-                            if samples.len()<32 {samples.push((dist*10.0).round()/10.0);}
-                        }
-                    }
-                }
-            }
-        }
-        for slot in frame.get("fora").and_then(Value::as_array)
-            .into_iter().flatten().filter_map(Value::as_u64){
-            self.geo_alive.remove(&slot);
-        }
-    }
     fn set_pokemon(&mut self, value: &Value) {
         let Some(id) = Self::num(value, "id") else { return };
         self.roster_dirty = true;
@@ -1455,7 +1335,6 @@ impl HuntIntel {
                 if let Some(state) = frame.get("estado") { self.merge_state(state, now); }
             }
             Some("campo.init") => {
-                self.field_geo_init(frame);
                 if let Some(map) = frame.get("mapa").and_then(Value::as_str) {
                     self.view.field_map = Some(map.to_owned());
                 }
@@ -1472,12 +1351,7 @@ impl HuntIntel {
                 if let Some(timestamp) = Self::num(&frame, "ts") {
                     self.view.field_init_timestamp = Some(timestamp);
                 }
-                // Upstream's grouped layout can be sampled directly from a
-                // complete initial map, including high-level hunts which only
-                // send individual slot replacements after spawning.
-                self.record_initial_geometry(frame);
             }
-            Some("campo") => self.field_geo_delta(frame,now),
             Some("batalha") => {
                 if let Some(events) = frame.get("ev").and_then(Value::as_array) {
                     for e in events {
@@ -1790,50 +1664,6 @@ mod tests {
         assert!(lead.tm_aoe);
         assert_eq!(lead.tm_elemental.as_deref(),Some("FIRE"));
         assert_eq!(lead.battle_stats.unwrap()[3],300.0);
-    }
-    #[test]
-    fn full_wave_geometry_uses_real_spawns_without_changing_hunt_kills() {
-        let mut intel=HuntIntel::new();
-        let now=Instant::now();
-        intel.ingest_value(&json!({"t":"welcome",
-            "hunts":[{"slug":"field-a","name":"Field A","nivel":50,
-                "totalSpawns":8,"especies":[{"pokeId":6,"pontos":8}]}]
-        }),now);
-        intel.ingest_value(&json!({"t":"campo.init",
-            "slug":"field-a","heroi":{"c":10,"r":10},"mobs":[]}),now);
-        let mobs=(0..8).map(|i|json!({
-            "s":i+1,"c":10+i,"r":15,"x":false
-        })).collect::<Vec<_>>();
-        intel.ingest_value(&json!({"t":"campo","mobs":mobs}),now);
-        intel.finish_geo_wave(now+Duration::from_secs(5));
-        assert_eq!(intel.view.geo_distances["field-a"].len(),8);
-        assert_eq!(intel.view.geo_revisions["field-a"],1);
-        assert_eq!(intel.view.session.kills,0);
-        assert_eq!(intel.view.measurements.kills,0);
-    }
-    #[test]
-    fn high_level_field_init_learns_grouped_spawns_without_waiting_for_respawn() {
-        let mut intel=HuntIntel::new();
-        let now=Instant::now();
-        intel.ingest_value(&json!({"t":"welcome",
-            "hunts":[{"slug":"new-region","name":"New Region","nivel":20000,
-                "totalSpawns":8,"especies":[{"pokeId":6,"pontos":8}]}]
-        }),now);
-        let mut mobs=(0..8).map(|i|json!({
-            "s":i+1,"c":10+i,"r":15,"x":false
-        })).collect::<Vec<_>>();
-        mobs.push(json!({"s":100,"c":150,"r":200,"tr":true}));
-        intel.ingest_value(&json!({"t":"campo.init",
-            "slug":"new-region","heroi":{"c":10,"r":10},"mobs":mobs}),now);
-        assert_eq!(intel.view.geo_distances["new-region"].len(),8);
-        assert_eq!(intel.view.geo_revisions["new-region"],1);
-        assert_eq!(intel.view.session.kills,0);
-        // An incomplete re-entry cannot replace the accepted full layout.
-        intel.ingest_value(&json!({"t":"campo.init",
-            "slug":"new-region","heroi":{"c":10,"r":10},
-            "mobs":[{"s":1,"c":11,"r":15,"x":false}]}),now);
-        assert_eq!(intel.view.geo_revisions["new-region"],1);
-        assert_eq!(intel.view.geo_distances["new-region"].len(),8);
     }
     #[test]
     fn sacrifice_xp_boost_tracks_partial_states_and_server_expiry() {
