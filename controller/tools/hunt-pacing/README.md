@@ -28,7 +28,11 @@ collision geometry are not inputs to the reducer.
 The runtime hook is `src/hunt_pacing_trace.rs`. It is off unless
 `MOTH_HUNT_PACING_TRACE=1` or `MOTH_HUNT_PACING_TRACE_DIR` is set.
 
-Use `hunt-pacing collect` to print the current environment switches. Game
+Use `hunt-pacing collect` to print the current environment switches. For controlled
+runs, also set `MOTH_HUNT_PACING_RUN_ID` and
+`MOTH_HUNT_PACING_EXPECT_HUNT`. The run ID is carried into reduced windows;
+when an expected hunt is set, packets from any other hunt are never admitted to
+that run's pacing aggregate. Game
 version is taken from the authenticated welcome when exposed by the server;
 `MOTH_HUNT_PACING_GAME_VERSION` can override it for controlled collection.
 The default trace directory is:
@@ -124,6 +128,8 @@ reduced.json
 moth-pacing.json
 moth-pacing.tsv
 coverage.txt
+next-plan.json
+next-plan.txt
 ```
 
 The JSON is the rich source of truth. The reducer refuses to combine traces
@@ -171,3 +177,31 @@ predicted = fightSeconds + fixed + remainingWalk
 
 The report prints observed seconds/kill, predicted seconds/kill and relative
 error. Validation traces stay outside the production `s`/`sAoe` aggregates.
+
+
+## Calibration planner
+
+`hunt-pacing plan [reduced.json] [--count N] [--json plan.json]` turns
+coverage into a concrete list of controlled collection jobs.
+
+With no reduced dataset, it produces a deliberately varied pilot queue:
+shared-map convergence, generated-map, Outland-style and ordinary unique-map
+work. With a reduced dataset it first finishes already observed live maps, then
+adds a second hunt where useful to test shared-map convergence, and finally
+fills the queue with diverse new pilot work.
+
+Each job contains:
+
+- a stable run ID;
+- the hunt slug that this run is allowed to measure;
+- ST1 or AoE profile;
+- target/completed independent windows;
+- a borrowed map ID **hint** for operator orientation only;
+- the exact `MOTH_HUNT_PACING_*` environment values to set.
+
+The borrowed map hint is never used by the reducer as ground truth. The
+authoritative map identity still comes only from live `campo.init.mapa ?? slug`.
+
+`hunt-pacing all` writes both `next-plan.json` and `next-plan.txt` after
+every reduction, so collection can resume from the current coverage state
+without maintaining a separate checklist.
