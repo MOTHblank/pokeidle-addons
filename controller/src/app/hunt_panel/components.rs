@@ -185,7 +185,7 @@ pub(super) fn draw_atlas_combat_profile(
                     }
                 }
                 if view.hunt_slug.is_some() {
-                    ui.label(RichText::new(tr("≈ Generic movement pacing"))
+                    ui.label(RichText::new(tr("≈ Map pacing · game 1.409.0"))
                         .size(10.0).color(MUTED));
                 }
                 if view.hunt_slug.is_none() {
