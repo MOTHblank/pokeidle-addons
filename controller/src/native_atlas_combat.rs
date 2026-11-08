@@ -500,14 +500,35 @@ mod tests {
     #[test]
     fn bicycle_divides_only_the_dead_time_walking_component() {
         let s=3.422;
-        let fixed=s*(1.0-PACING_MODEL.walking_portion);
-        let initial_walk=s*PACING_MODEL.walking_portion;
-        assert!((dead_time_s(s,0.0,2.0)-(fixed+initial_walk/2.0)).abs()<1e-12);
-        let foot_floor=dead_time_s(s,f64::INFINITY,1.0);
-        let bike_floor=dead_time_s(s,f64::INFINITY,2.0);
-        assert!((foot_floor-(fixed+PACING_MODEL.walking_floor_s)).abs()<1e-12);
-        assert!((bike_floor-(fixed+PACING_MODEL.walking_floor_s/2.0)).abs()<1e-12);
-        assert!(bike_floor<foot_floor);
+        let foot=dead_time(s,2.8,1.0);
+        let bike=dead_time(s,2.8,2.0);
+        let baseline=baseline_dead_time(s);
+        assert!((foot.fixed_s-baseline.fixed_s).abs()<1e-12);
+        assert!((bike.fixed_s-baseline.fixed_s).abs()<1e-12);
+        assert!((bike.walking_s-foot.walking_s/2.0).abs()<1e-12);
+        assert!((bike.total_s-(bike.fixed_s+bike.walking_s)).abs()<1e-12);
+
+        let foot_floor=dead_time(s,f64::INFINITY,1.0);
+        let bike_floor=dead_time(s,f64::INFINITY,2.0);
+        assert!((foot_floor.walking_s-PACING_MODEL.walking_floor_s).abs()<1e-12);
+        assert!((bike_floor.walking_s-PACING_MODEL.walking_floor_s/2.0).abs()<1e-12);
+        assert_eq!(foot_floor.fixed_s,bike_floor.fixed_s);
+    }
+
+    #[test]
+    fn cooldowns_advance_through_fixed_and_walking_dead_time() {
+        let dead=dead_time(4.0,0.0,2.0);
+        assert!(dead.fixed_s>0.0&&dead.walking_s>0.0);
+        // 2.2s cooldown is ready after the full fixed+walking dead time, but
+        // not after the walking part alone. This guards against accidentally
+        // pausing cooldowns during fixed map delay.
+        let moves=[Attack{damage:100.0,cooldown_s:2.2}];
+        let tackle=Attack{damage:50.0,cooldown_s:0.5};
+        let hp=[100.0;32];
+        let full=mean_ttk(&moves,tackle,0.9,&hp,dead.total_s()).unwrap();
+        let walking_only=mean_ttk(&moves,tackle,0.9,&hp,dead.walking_s).unwrap();
+        assert!(full.abs()<1e-12);
+        assert!(walking_only>full);
     }
 
     #[test]
