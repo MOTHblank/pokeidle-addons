@@ -146,12 +146,13 @@ mod tests {
         assert_eq!(data.game_version,SOURCE_GAME_VERSION);
         assert_eq!(SOURCE_EXTENSION_VERSION,"1.0.17");
         assert_eq!(data.source,"jogo");
+        assert_eq!(data.generated_at,"2026-11-07T12:26:24.998Z");
         assert_eq!(data.maps.len(),500);
         assert_eq!(data.hunts.len(),1043);
+        assert!(data.hunts.values().all(|hunt|data.maps.contains_key(&hunt.map_id)));
         assert_eq!(data.fallback,PacingRange{p10:3.27,median:3.406,p90:3.55});
         assert!((data.aoe_gain-1.096).abs()<1e-12);
         assert!(!data.origin.is_empty());
-        assert!(!data.generated_at.is_empty());
     }
 
     #[test]
