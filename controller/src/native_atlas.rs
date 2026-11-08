@@ -834,7 +834,7 @@ mod tests {
         assert_eq!(learned.pacing.map_id.as_deref(),Some("gerado_normal_01"));
         // Detection is not consent to apply the AoE simulation.
         view.active_pokemon.as_mut().unwrap().tm_aoe=true;
-        let unchecked=estimate_with_aoe(&view,&hunt,&data,false).unwrap();
+        let unchecked=estimate_with_aoe(&view,&exact_hunt,&data,false).unwrap();
         assert!(!unchecked.aoe);
         // Checked mode is explicitly modeled even if the server omits its flag.
         view.active_pokemon.as_mut().unwrap().tm_aoe=false;
