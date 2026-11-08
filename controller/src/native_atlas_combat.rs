@@ -30,6 +30,10 @@ pub(super) struct CombatPace {
     pub seconds_per_kill: f64,
     pub combat_seconds_per_kill: f64,
     pub dead_time_seconds_per_kill: f64,
+    pub pacing_source:native_atlas_pacing::PacingSource,
+    pub pacing_map_id:Option<String>,
+    pub pacing_baseline_seconds_per_kill:f64,
+    pub pacing_uncertainty:native_atlas_pacing::PacingRange,
     pub coverage: f64,
     pub deaths_h: f64,
     pub one_hit: bool,
@@ -354,6 +358,7 @@ pub(super) fn simulate(
     let solo_kills_h=kills_per_hour(solo_pace);
     let mut selected_pace=solo_pace;
     let mut selected_baseline=pacing.base_seconds_per_kill;
+    let mut selected_uncertainty=pacing.uncertainty;
     let mut kills_h=solo_kills_h;
     // Keep the controller's existing explicit AoE/TM scenario semantics.
     // Pacing may switch to sAoe, but the combat model remains controller-owned:
@@ -371,6 +376,7 @@ pub(super) fn simulate(
             kills_h=candidate;
             selected_pace=aoe_pace;
             selected_baseline=pacing.aoe_seconds_per_kill;
+            selected_uncertainty=pacing.aoe_uncertainty;
         }
         engaged=(1.0+kills_h*selected_pace.combat_s/3600.0).min(MAX_AOE_ENGAGED);
     }
@@ -401,6 +407,10 @@ pub(super) fn simulate(
         seconds_per_kill:selected_pace.total_s,
         combat_seconds_per_kill:selected_pace.combat_s,
         dead_time_seconds_per_kill:selected_pace.dead_time_s,
+        pacing_source:pacing.source,
+        pacing_map_id:pacing.map_id.clone(),
+        pacing_baseline_seconds_per_kill:selected_baseline,
+        pacing_uncertainty:selected_uncertainty,
         coverage,deaths_h,one_hit,aoe,engaged,
         worst_hit_fraction:fatal_hit/own_hp,
         incoming_damage_per_kill,
