@@ -1,4 +1,41 @@
 use super::*;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PacingCacheProfile {
+    pub(super) slug:String,
+    pub(super) source:u8,
+    pub(super) map_id:Option<String>,
+    pub(super) base_s:u64,
+    pub(super) aoe_s:u64,
+    pub(super) p10_s:u64,
+    pub(super) p90_s:u64,
+    pub(super) aoe_p10_s:u64,
+    pub(super) aoe_p90_s:u64,
+}
+fn pacing_source_key(source:crate::native_atlas_pacing::PacingSource)->u8 {
+    match source {
+        crate::native_atlas_pacing::PacingSource::HuntSlugMapping=>0,
+        crate::native_atlas_pacing::PacingSource::LearnedCampoInit=>1,
+        crate::native_atlas_pacing::PacingSource::GlobalFallback=>2,
+    }
+}
+fn resolved_pacing_profiles(view:&HuntView)->Vec<PacingCacheProfile> {
+    view.hunts.iter().map(|hunt|{
+        let learned=view.learned_hunt_maps.get(&hunt.slug).map(String::as_str);
+        let pace=crate::native_atlas_pacing::resolve(&hunt.slug,learned);
+        PacingCacheProfile {
+            slug:hunt.slug.clone(),
+            source:pacing_source_key(pace.source),
+            map_id:pace.map_id,
+            base_s:pace.base_seconds_per_kill.to_bits(),
+            aoe_s:pace.aoe_seconds_per_kill.to_bits(),
+            p10_s:pace.uncertainty.p10.to_bits(),
+            p90_s:pace.uncertainty.p90.to_bits(),
+            aoe_p10_s:pace.aoe_uncertainty.p10.to_bits(),
+            aoe_p90_s:pace.aoe_uncertainty.p90.to_bits(),
+        }
+    }).collect()
+}
 /// Account-keyed combat forecasts are calculated away from egui's paint
 /// path. Immutable snapshots and Arc guide data are cheap to hand to the
 /// worker; no blocking game/network I/O or combat loop executes in render.
@@ -10,10 +47,16 @@ pub(in crate::app) struct EstimateCache {
     pub(super) active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     pub(super) active_species_id: Option<u64>,
     pub(super) active_max_hp: Option<u64>,
-    pub(super) bonus_signature: [u64;19],
+    /// Forecast-relevant XP/gold modifiers only; movement and AoE are explicit keys.
+    pub(super) bonus_signature: [u64;16],
+    pub(super) bicycle_factor_bits:u64,
+    pub(super) aoe_enabled:bool,
     pub(super) seasonal_type:Option<String>,
     pub(super) gym_signature:Vec<(String,u8)>,
-    pub(super) learned_pacing_signature:Vec<(String,String)>,
+    /// Resolved per-hunt pacing profiles are part of the forecast key. The
+    /// lightweight revision only tells us when this vector must be rebuilt.
+    pub(super) pacing_revision:u64,
+    pub(super) pacing_profiles:Vec<PacingCacheProfile>,
     pub(super) full_required:bool,
     pub(super) live: bool,
     pub(super) refreshed: Option<Instant>,
@@ -39,7 +82,7 @@ impl EstimateCache {
         let reference_ptr=reference.map_or(0,|r|Arc::as_ptr(r) as usize);
         let active_signature=view.active_pokemon.as_ref().map(|p|
             (p.id,p.level,p.quality.map(f64::to_bits),p.potency,p.ivs,p.shiny,
-                aoe_enabled,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
+                p.tm_aoe,p.battle_stats.map(|stats|stats.map(f64::to_bits)),
                 p.tm_elemental.clone(),p.types.clone()));
         let b=&view.bonuses;
         let bonus_signature=[
@@ -52,15 +95,18 @@ impl EstimateCache {
             b.guild_known as u64,b.sacrifice_xp_active as u64,
             b.authoritative_trainer_xp_multiplier.map(f64::to_bits).unwrap_or(0),
             b.authoritative_pokemon_xp_multiplier.map(f64::to_bits).unwrap_or(0),
-            b.live_capture_multiplier.to_bits(),b.live_shiny_multiplier.to_bits(),
             b.raid_farm_pct.to_bits(),
-            view.bicycle_factor.unwrap_or(1.0).to_bits(),
         ];
+        let bicycle_factor_bits=view.bicycle_factor.unwrap_or(1.0).to_bits();
         let seasonal_type=view.seasonal_type.clone();
         let gym_signature=view.gym_podium.iter()
             .map(|(kind,place)|(kind.clone(),*place)).collect::<Vec<_>>();
-        let learned_pacing_signature=view.learned_hunt_maps.iter()
-            .map(|(slug,map)|(slug.clone(),map.clone())).collect::<Vec<_>>();
+        let rebuild_pacing=self.account!=Some(account) ||
+            self.catalog_ptr!=catalog_ptr ||
+            self.pacing_revision!=view.pacing_revision;
+        let next_pacing_profiles=rebuild_pacing.then(||resolved_pacing_profiles(view));
+        let pacing_changed=next_pacing_profiles.as_ref()
+            .is_some_and(|profiles|profiles!=&self.pacing_profiles);
         let active_species_id=view.active_pokemon.as_ref().and_then(|p|p.species_id);
         let active_max_hp=view.active_pokemon.as_ref().and_then(|p|p.max_hp);
         let full_changed=self.account!=Some(account) ||
@@ -70,9 +116,11 @@ impl EstimateCache {
             self.active_species_id!=active_species_id ||
             self.active_max_hp!=active_max_hp ||
             self.bonus_signature!=bonus_signature ||
+            self.bicycle_factor_bits!=bicycle_factor_bits ||
+            self.aoe_enabled!=aoe_enabled ||
             self.seasonal_type!=seasonal_type ||
             self.gym_signature!=gym_signature ||
-            self.learned_pacing_signature!=learned_pacing_signature;
+            pacing_changed;
         if full_changed {
             self.account=Some(account);
             self.catalog_ptr=catalog_ptr;
@@ -81,9 +129,10 @@ impl EstimateCache {
             self.active_species_id=active_species_id;
             self.active_max_hp=active_max_hp;
             self.bonus_signature=bonus_signature;
+            self.bicycle_factor_bits=bicycle_factor_bits;
+            self.aoe_enabled=aoe_enabled;
             self.seasonal_type=seasonal_type;
             self.gym_signature=gym_signature;
-            self.learned_pacing_signature=learned_pacing_signature;
             self.live=live;
             self.refreshed=None;
             self.revision=self.revision.wrapping_add(1);
@@ -93,6 +142,12 @@ impl EstimateCache {
             self.cancellation.store(self.generation,std::sync::atomic::Ordering::Release);
             self.values.clear();
             self.full_required=true;
+        }
+        if let Some(profiles)=next_pacing_profiles {
+            self.pacing_profiles=profiles;
+        }
+        if rebuild_pacing {
+            self.pacing_revision=view.pacing_revision;
         }
         // A canceled worker is never published; do not spawn its replacement
         // until the old receiver has completed or disconnected.
