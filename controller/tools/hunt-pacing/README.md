@@ -83,15 +83,22 @@ to old traces.
   Outland, gym and automation state);
 - a configurable significant packet gap.
 
-The first `--warmup-kills` kills are discarded. A measured window needs one
-boundary kill plus `--min-kills` subsequent valid kills. Therefore:
+Warm-up discards at least `--warmup-kills` and always ends on a complete server
+kill batch. For ST1 every batch is one kill. For AOE this prevents a measurement
+from starting halfway through a multi-kill attack. The first post-warm-up batch
+is the sequence boundary; kills in subsequent batches are measured:
 
 ```text
-seconds_per_kill = (last boundary time - first boundary time) / measured kills
+seconds_per_kill =
+    (last batch boundary - first batch boundary)
+    / kills in subsequent batches
 ```
 
 This includes real walking, target changes, replenishment, enemy approach and
-server pacing. It never measures spawn radii.
+server pacing. It never measures spawn radii. Each reduced window also retains
+the measured kill boundaries, the previous-kill timestamp, the first subsequent
+target selection and the first subsequent movement packet when those fields are
+observed.
 
 Default outlier handling is deliberately simple and auditable: impossible
 windows outside 0.20–120 seconds/kill are rejected; with at least five
@@ -117,7 +124,10 @@ and AOE have been measured; missing data is never fabricated.
 
 Coverage uses the exact 500 map IDs (and 1,043 hunt identifiers) in the current
 borrowed table only as the target corpus. Map measurements and hunt→map
-identities in the Moth output come from live `campo.init` observations.
+identities in the Moth output come from live `campo.init` observations. The
+coverage report prints Moth-vs-`/hunt` deltas for measured maps and lists
+observed map IDs shared by multiple hunt slugs, so the initial reproducibility
+check is visible directly in the generated report.
 "Enough" currently means at least three independent valid windows; each window
 already has the configured minimum measured kills.
 
