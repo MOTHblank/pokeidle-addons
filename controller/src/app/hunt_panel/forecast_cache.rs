@@ -3,7 +3,7 @@ use super::*;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PacingCacheProfile {
     pub(super) slug:String,
-    pub(super) source:u8,
+    pub(super) source:crate::native_atlas_pacing::PacingSource,
     pub(super) map_id:Option<String>,
     pub(super) base_s:u64,
     pub(super) aoe_s:u64,
@@ -12,20 +12,13 @@ pub(super) struct PacingCacheProfile {
     pub(super) aoe_p10_s:u64,
     pub(super) aoe_p90_s:u64,
 }
-fn pacing_source_key(source:crate::native_atlas_pacing::PacingSource)->u8 {
-    match source {
-        crate::native_atlas_pacing::PacingSource::HuntSlugMapping=>0,
-        crate::native_atlas_pacing::PacingSource::LearnedCampoInit=>1,
-        crate::native_atlas_pacing::PacingSource::GlobalFallback=>2,
-    }
-}
 fn resolved_pacing_profiles(view:&HuntView)->Vec<PacingCacheProfile> {
     view.hunts.iter().map(|hunt|{
         let learned=view.learned_hunt_maps.get(&hunt.slug).map(String::as_str);
         let pace=crate::native_atlas_pacing::resolve(&hunt.slug,learned);
         PacingCacheProfile {
             slug:hunt.slug.clone(),
-            source:pacing_source_key(pace.source),
+            source:pace.source,
             map_id:pace.map_id,
             base_s:pace.base_seconds_per_kill.to_bits(),
             aoe_s:pace.aoe_seconds_per_kill.to_bits(),
