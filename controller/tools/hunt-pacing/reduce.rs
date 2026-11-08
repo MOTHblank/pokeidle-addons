@@ -101,6 +101,8 @@ pub struct ReducedDataset {
     pub trace_files: usize,
     pub maps: BTreeMap<String, MapReduction>,
     pub hunts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub available_hunts_by_profile: BTreeMap<String, Vec<String>>,
     pub unknown_hunts: Vec<String>,
     pub rejected_windows: BTreeMap<String, u64>,
 }
@@ -137,6 +139,7 @@ pub fn reduce_sessions(
     let mut windows = Vec::new();
     let mut rejected = BTreeMap::<String, u64>::new();
     let mut observed_hunts = BTreeMap::<String, Option<String>>::new();
+    let mut available_hunts_by_profile = BTreeMap::<String, BTreeSet<String>>::new();
     let known_versions = sessions.iter()
         .flat_map(|session| session.records.iter())
         .map(|record| record.game_version.trim())
@@ -157,6 +160,12 @@ pub fn reduce_sessions(
         .max().unwrap_or(0);
 
     for session in sessions {
+        for record in &session.records {
+            if record.available_hunts.is_empty() { continue; }
+            let available = available_hunts_by_profile
+                .entry(record.profile.clone()).or_default();
+            available.extend(record.available_hunts.iter().cloned());
+        }
         reduce_session(
             session,
             &config,
@@ -197,6 +206,9 @@ pub fn reduce_sessions(
         trace_files: sessions.len(),
         maps,
         hunts,
+        available_hunts_by_profile: available_hunts_by_profile.into_iter()
+            .map(|(profile, hunts)| (profile, hunts.into_iter().collect()))
+            .collect(),
         unknown_hunts: unknown_hunts.into_iter().collect(),
         rejected_windows: rejected,
     })
@@ -735,6 +747,7 @@ mod tests {
             game_version: "1.0".into(),
             run_id: None,
             expected_hunt: None,
+            available_hunts: Vec::new(),
             recv_unix_ms: 1,
             recv_monotonic_ms: 1,
             server_ts: Some(1),
