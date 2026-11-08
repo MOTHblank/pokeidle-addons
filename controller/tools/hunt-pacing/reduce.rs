@@ -33,6 +33,8 @@ impl Default for ReduceConfig {
 pub struct KillBoundary {
     pub kill_recv_monotonic_ms: u64,
     pub previous_kill_recv_monotonic_ms: Option<u64>,
+    pub kill_server_ts: Option<u64>,
+    pub previous_kill_server_ts: Option<u64>,
     pub target_slot: Value,
     pub species: Value,
     pub attack: Value,
@@ -50,8 +52,16 @@ pub struct WindowSample {
     pub profile: String,
     pub bicycle_factor: f64,
     pub scene_generation: u64,
+    #[serde(default)]
+    pub measurement_clock: String,
+    #[serde(default)]
+    pub start_measurement_ms: u64,
+    #[serde(default)]
+    pub end_measurement_ms: u64,
     pub start_recv_monotonic_ms: u64,
     pub end_recv_monotonic_ms: u64,
+    pub declared_hits: Option<u32>,
+    pub validation_combat_seconds: Option<f64>,
     pub kills: u64,
     pub total_seconds: f64,
     pub seconds_per_kill: f64,
@@ -103,37 +113,47 @@ struct Segment {
     scene_generation: u64,
     fingerprint: String,
     connection_generation: u64,
-    first_record_ms: u64,
     last_record_ms: u64,
     kill_times: Vec<u64>,
+    kill_server_times: Vec<Option<u64>>,
     kill_batch_sizes: Vec<u64>,
     kill_boundaries: Vec<KillBoundary>,
     pending_boundary_start: Option<usize>,
     attack_actions_since_kill: u32,
     max_attack_actions_between_kills: u32,
+    declared_hits: Option<u32>,
+    validation_combat_seconds: Option<f64>,
     last_active_hp: Option<u64>,
     invalid_reason: Option<String>,
 }
 
-pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> ReducedDataset {
+pub fn reduce_sessions(
+    sessions: &[TraceSession],
+    config: ReduceConfig,
+) -> Result<ReducedDataset, String> {
     let mut windows = Vec::new();
     let mut rejected = BTreeMap::<String, u64>::new();
     let mut observed_hunts = BTreeMap::<String, Option<String>>::new();
-    let mut game_version = "unknown".to_owned();
+    let known_versions = sessions.iter()
+        .flat_map(|session| session.records.iter())
+        .map(|record| record.game_version.trim())
+        .filter(|version| !version.is_empty() && *version != "unknown")
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if known_versions.len() > 1 {
+        return Err(format!(
+            "refusing to combine hunt pacing traces from multiple game versions: {}",
+            known_versions.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let game_version = known_versions.into_iter().next()
+        .unwrap_or_else(|| "unknown".into());
     let generated_at_unix_ms = sessions.iter()
         .flat_map(|session| session.records.iter())
         .map(|record| record.recv_unix_ms)
         .max().unwrap_or(0);
 
     for session in sessions {
-        if game_version == "unknown" {
-            if let Some(version) = session.records.iter()
-                .map(|record| record.game_version.trim())
-                .find(|version| !version.is_empty() && *version != "unknown")
-            {
-                game_version = version.to_owned();
-            }
-        }
         reduce_session(
             session,
             &config,
@@ -165,7 +185,7 @@ pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> Reduc
         }
     }
 
-    ReducedDataset {
+    Ok(ReducedDataset {
         schema: 1,
         source: "moth-live-observation".into(),
         generated_at_unix_ms,
@@ -176,7 +196,7 @@ pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> Reduc
         hunts,
         unknown_hunts: unknown_hunts.into_iter().collect(),
         rejected_windows: rejected,
-    }
+    })
 }
 
 fn reduce_session(
@@ -233,14 +253,16 @@ fn reduce_session(
                 scene_generation: record.scene_generation,
                 fingerprint: current_fingerprint,
                 connection_generation: record.connection_generation,
-                first_record_ms: record.recv_monotonic_ms,
                 last_record_ms: record.recv_monotonic_ms,
                 kill_times: Vec::new(),
+                kill_server_times: Vec::new(),
                 kill_batch_sizes: Vec::new(),
                 kill_boundaries: Vec::new(),
                 pending_boundary_start: None,
                 attack_actions_since_kill: 0,
                 max_attack_actions_between_kills: 0,
+                declared_hits: validation_hits(record),
+                validation_combat_seconds: validation_combat_seconds(record),
                 last_active_hp: active_hp(record),
                 invalid_reason: None,
             });
@@ -292,10 +314,16 @@ fn reduce_session(
                         .and_then(Value::as_u64)
                         .unwrap_or(record.recv_monotonic_ms);
                     current.kill_times.push(at);
+                    let kill_server_ts = kill.get("kill_server_ts").and_then(Value::as_u64);
+                    current.kill_server_times.push(kill_server_ts);
                     current.kill_boundaries.push(KillBoundary {
                         kill_recv_monotonic_ms: at,
                         previous_kill_recv_monotonic_ms: kill
                             .get("previous_kill_recv_monotonic_ms")
+                            .and_then(Value::as_u64),
+                        kill_server_ts,
+                        previous_kill_server_ts: kill
+                            .get("previous_kill_server_ts")
                             .and_then(Value::as_u64),
                         target_slot: kill.get("slot").cloned().unwrap_or(Value::Null),
                         species: kill.get("species").cloned().unwrap_or(Value::Null),
@@ -351,13 +379,16 @@ fn attach_post_kill_field(segment: &mut Segment, record: &TraceRecord) {
 
 fn first_field_movement(record: &TraceRecord) -> Option<Value> {
     let field = &record.field_observation;
-    if let Some(hero) = field.get("hero_movement").filter(|value| !value.is_null()) {
+    if let Some(hero) = field.get("hero_movement")
+        .filter(|value| value.get("transition").and_then(Value::as_bool) == Some(true))
+    {
         return Some(hero.clone());
     }
     field.get("mob_updates").and_then(Value::as_array)
         .into_iter().flatten()
         .filter_map(|mob| mob.get("movement"))
-        .find(|movement| !movement.is_null()).cloned()
+        .find(|movement| movement.get("transition").and_then(Value::as_bool) == Some(true))
+        .cloned()
 }
 
 fn accepted_profile(record: &TraceRecord) -> Option<String> {
@@ -377,10 +408,30 @@ fn accepted_profile(record: &TraceRecord) -> Option<String> {
             Some(format!("bike-validation:{rarity}:{bike:.3}"))
         }
         "deadtime-validation" if bike <= 1.000_001 && !aoe => {
-            Some("deadtime-validation".into())
+            let hits = validation_hits(record)
+                .map(|hits| hits.to_string()).unwrap_or_else(|| "unknown".into());
+            let combat = validation_combat_seconds(record)
+                .map(|seconds| format!("{seconds:.6}"))
+                .unwrap_or_else(|| "unknown".into());
+            Some(format!("deadtime-validation:hits={hits}:combat={combat}"))
         }
         _ => None,
     }
+}
+
+fn validation_hits(record: &TraceRecord) -> Option<u32> {
+    record.calibration.get("validation")
+        .and_then(|validation| validation.get("declared_hits"))
+        .and_then(Value::as_u64)
+        .and_then(|hits| u32::try_from(hits).ok())
+        .filter(|hits| *hits > 0)
+}
+
+fn validation_combat_seconds(record: &TraceRecord) -> Option<f64> {
+    record.calibration.get("validation")
+        .and_then(|validation| validation.get("combat_seconds"))
+        .and_then(Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
 }
 
 fn hard_interruption(record: &TraceRecord) -> Option<String> {
@@ -424,26 +475,26 @@ fn hard_interruption(record: &TraceRecord) -> Option<String> {
 }
 
 fn is_special_scene(record: &TraceRecord) -> bool {
-    let text = [
-        record.hunt_slug.as_deref().unwrap_or_default(),
-        record.field_slug.as_deref().unwrap_or_default(),
-        record.map_id.as_deref().unwrap_or_default(),
-    ].join(" ").to_ascii_lowercase();
-    ["boss", "safari", "mistico", "místico", "mystic", "raid", "pvp", "arena"]
-        .iter().any(|needle| text.contains(needle))
+    // Exact scene IDs only. Substring matching is unsafe: mabosstiff_alola is
+    // an ordinary target hunt even though its slug contains "boss".
+    let field = record.field_slug.as_deref().unwrap_or_default()
+        .trim().to_ascii_lowercase();
+    matches!(
+        field.as_str(),
+        "safari" | "arena_mistica" | "centro" | "center" | "raid" | "pvp"
+    )
 }
 
 fn explicit_attack_actions(record: &TraceRecord) -> u32 {
+    // Count only events that explicitly represent an attack action. Death
+    // receipts may repeat attack metadata once per AoE victim and therefore
+    // must never be interpreted as multiple player attacks.
     record.packet.get("ev").and_then(Value::as_array)
         .into_iter().flatten()
         .filter(|event| {
             let kind = event.get("k").and_then(Value::as_str)
                 .unwrap_or_default().to_ascii_lowercase();
-            matches!(kind.as_str(), "ataque" | "attack" | "golpe" | "hit")
-                || event.get("ataque").is_some_and(|value| !value.is_null())
-                || event.get("attack").is_some_and(|value| !value.is_null())
-                || event.get("golpe").is_some_and(|value| !value.is_null())
-                || event.get("move").is_some_and(|value| !value.is_null())
+            matches!(kind.as_str(), "ataque" | "attack")
         })
         .count().min(u32::MAX as usize) as u32
 }
@@ -482,19 +533,35 @@ fn finish_segment(
         reject(rejected, "insufficient-kills");
         return;
     }
-    let Some(&start) = segment.kill_times.get(aligned_warmup_kills) else {
+    let Some(&start_recv) = segment.kill_times.get(aligned_warmup_kills) else {
         reject(rejected, "missing-boundary");
         return;
     };
-    let Some(&end) = segment.kill_times.last() else {
+    let Some(&end_recv) = segment.kill_times.last() else {
         reject(rejected, "missing-boundary");
         return;
     };
-    if end <= start {
+    if end_recv <= start_recv {
         reject(rejected, "non-positive-window");
         return;
     }
-    let seconds = (end - start) as f64 / 1000.0;
+
+    let recv_delta = end_recv - start_recv;
+    let server_start = segment.kill_server_times.get(aligned_warmup_kills)
+        .copied().flatten();
+    let server_end = segment.kill_server_times.last().copied().flatten();
+    let use_server_clock = server_start.zip(server_end).is_some_and(|(start, end)| {
+        if end <= start || recv_delta == 0 { return false; }
+        let ratio = (end - start) as f64 / recv_delta as f64;
+        (0.5..=2.0).contains(&ratio)
+    });
+    let (measurement_clock, start_measurement, end_measurement) =
+        if use_server_clock {
+            ("server", server_start.unwrap(), server_end.unwrap())
+        } else {
+            ("receipt-monotonic", start_recv, end_recv)
+        };
+    let seconds = (end_measurement - start_measurement) as f64 / 1000.0;
     let seconds_per_kill = seconds / kills as f64;
     if !seconds_per_kill.is_finite()
         || seconds_per_kill < config.min_seconds_per_kill
@@ -516,8 +583,13 @@ fn finish_segment(
         profile: segment.profile,
         bicycle_factor: segment.bicycle_factor,
         scene_generation: segment.scene_generation,
-        start_recv_monotonic_ms: start,
-        end_recv_monotonic_ms: end,
+        measurement_clock: measurement_clock.into(),
+        start_measurement_ms: start_measurement,
+        end_measurement_ms: end_measurement,
+        start_recv_monotonic_ms: start_recv,
+        end_recv_monotonic_ms: end_recv,
+        declared_hits: segment.declared_hits,
+        validation_combat_seconds: segment.validation_combat_seconds,
         kills,
         total_seconds: seconds,
         seconds_per_kill,
@@ -609,9 +681,15 @@ fn observe_hunt_mapping(
     if record.packet_type.as_deref() != Some("campo.init") {
         return;
     }
-    let Some(slug) = record.hunt_slug.as_deref().filter(|slug| !slug.is_empty()) else {
+    let Some(slug) = record.field_slug.as_deref().filter(|slug| !slug.is_empty()) else {
         return;
     };
+    // HuntIntel adopts campo.init.slug only for a confirmed unlocked hunt.
+    // Requiring agreement prevents a Center/special scene from being attached
+    // to the previous hunt merely because HuntView still remembers it.
+    if record.hunt_slug.as_deref() != Some(slug) {
+        return;
+    }
     let Some(map) = record.map_id.as_deref().filter(|map| !map.is_empty()) else {
         return;
     };
@@ -636,6 +714,68 @@ fn reject(rejected: &mut BTreeMap<String, u64>, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn trace_record(field_slug: &str, field_observation: Value) -> TraceRecord {
+        TraceRecord {
+            schema: 1,
+            event_type: "packet".into(),
+            session_id: "test".into(),
+            profile: "test".into(),
+            declared_profile: "st1".into(),
+            game_version: "1.0".into(),
+            recv_unix_ms: 1,
+            recv_monotonic_ms: 1,
+            server_ts: Some(1),
+            connection_generation: 1,
+            scene_generation: 1,
+            hunt_slug: Some(field_slug.into()),
+            field_slug: Some(field_slug.into()),
+            map_id: Some("map".into()),
+            calibration: serde_json::json!({}),
+            packet_type: Some("campo".into()),
+            packet: serde_json::json!({}),
+            field_observation,
+            kills: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn special_scene_filter_does_not_match_hunt_name_substrings() {
+        let ordinary = trace_record("mabosstiff_alola", serde_json::json!({}));
+        assert!(!is_special_scene(&ordinary));
+        let safari = trace_record("safari", serde_json::json!({}));
+        assert!(is_special_scene(&safari));
+        let mystic = trace_record("arena_mistica", serde_json::json!({}));
+        assert!(is_special_scene(&mystic));
+    }
+
+    #[test]
+    fn stationary_field_update_is_not_reported_as_post_kill_movement() {
+        let stationary = trace_record("aipom", serde_json::json!({
+            "hero_movement": {
+                "transition": false,
+                "from_col": 10, "from_row": 10,
+                "to_col": 10, "to_row": 10
+            },
+            "mob_updates": [{
+                "movement": {
+                    "transition": false,
+                    "from_col": 11, "from_row": 10,
+                    "to_col": 11, "to_row": 10
+                }
+            }]
+        }));
+        assert!(first_field_movement(&stationary).is_none());
+
+        let moving = trace_record("aipom", serde_json::json!({
+            "hero_movement": {
+                "transition": true,
+                "from_col": 10, "from_row": 10,
+                "to_col": 11, "to_row": 10
+            }
+        }));
+        assert_eq!(first_field_movement(&moving).unwrap()["to_col"], 11);
+    }
 
     #[test]
     fn quantiles_and_mad_are_deterministic() {

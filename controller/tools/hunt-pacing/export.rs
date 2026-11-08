@@ -1,4 +1,5 @@
 use crate::reduce::{MapReduction, ProfileStats, ReducedDataset};
+use crate::hunt_pacing_model;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -106,6 +107,9 @@ pub fn coverage_report(reduced: &ReducedDataset) -> String {
     let need_aoe = corpus.maps.iter()
         .filter(|map_id| !profile(reduced, map_id, "aoe").is_some_and(enough))
         .cloned().collect::<Vec<_>>();
+    let extra_maps = reduced.maps.keys()
+        .filter(|map_id| !corpus.maps.contains(*map_id))
+        .cloned().collect::<Vec<_>>();
 
     let observed_expected_hunts = corpus.hunts.keys()
         .filter(|slug| reduced.hunts.contains_key(*slug)).count();
@@ -115,6 +119,9 @@ pub fn coverage_report(reduced: &ReducedDataset) -> String {
         .cloned().collect::<Vec<_>>();
     let comparisons = pacing_comparisons(reduced, &corpus);
     let shared_maps = observed_shared_maps(reduced);
+    let shared_convergence = shared_map_convergence_lines(reduced);
+    let bike_validation = bicycle_validation_lines(reduced);
+    let deadtime_validation = deadtime_validation_lines(reduced);
 
     format!(
 r#"Hunt pacing coverage
@@ -126,12 +133,16 @@ r#"Hunt pacing coverage
   expected hunts observed: {observed_expected_hunts}/{expected_hunts}
   hunt identities not yet observed: {unobserved_count}
   conflicting observed identities:  {unknown}
+  observed maps outside target corpus: {extra_map_count}
 
 Maps needing more ST1 samples ({need_st1_count}):
 {need_st1_lines}
 
 Maps needing more AOE samples ({need_aoe_count}):
 {need_aoe_lines}
+
+Observed map IDs outside the 500-map target corpus ({extra_map_count}):
+{extra_map_lines}
 
 Target hunts whose map identity has not been observed ({unobserved_count}):
 {unobserved_lines}
@@ -144,15 +155,26 @@ Measured maps vs current /hunt target:
 
 Observed map IDs shared by multiple hunt slugs:
 {shared_map_lines}
+
+Shared-map ST1 convergence:
+{shared_convergence_lines}
+
+Bicycle validation against fixed + walking/factor:
+{bike_validation_lines}
+
+Dead-time validation against 0.83 / 1.41 / 2.8:
+{deadtime_validation_lines}
 "#,
         expected = corpus.maps.len(),
         expected_hunts = corpus.hunts.len(),
         unknown = reduced.unknown_hunts.len(),
         unobserved_count = unobserved_hunts.len(),
+        extra_map_count = extra_maps.len(),
         need_st1_count = need_st1.len(),
         need_aoe_count = need_aoe.len(),
         need_st1_lines = format_lines(&need_st1),
         need_aoe_lines = format_lines(&need_aoe),
+        extra_map_lines = format_lines(&extra_maps),
         unobserved_lines = format_lines(&unobserved_hunts),
         unknown_count = reduced.unknown_hunts.len(),
         unknown_lines = format_lines(&reduced.unknown_hunts),
@@ -162,6 +184,30 @@ Observed map IDs shared by multiple hunt slugs:
         shared_map_lines = if shared_maps.is_empty() {
             "  (none)".into()
         } else { shared_maps.join("\n") },
+        shared_convergence_lines = if shared_convergence.is_empty() {
+            "  (none)".into()
+        } else { shared_convergence.join("\n") },
+        bike_validation_lines = if bike_validation.is_empty() {
+            "  (none)".into()
+        } else { bike_validation.join("\n") },
+        deadtime_validation_lines = if deadtime_validation.is_empty() {
+            "  (none)".into()
+        } else { deadtime_validation.join("\n") },
+    )
+}
+
+pub fn validation_report(reduced: &ReducedDataset) -> String {
+    let bike = bicycle_validation_lines(reduced);
+    let deadtime = deadtime_validation_lines(reduced);
+    format!(
+r#"Bicycle validation against fixed + walking/factor:
+{bike_lines}
+
+Dead-time validation against 0.83 / 1.41 / 2.8:
+{deadtime_lines}
+"#,
+        bike_lines = if bike.is_empty() { "  (none)".into() } else { bike.join("\n") },
+        deadtime_lines = if deadtime.is_empty() { "  (none)".into() } else { deadtime.join("\n") },
     )
 }
 
@@ -228,9 +274,195 @@ pub fn dataset_json(reduced: &ReducedDataset) -> Value {
         },
         "coverage": {
             "unknown_hunts": reduced.unknown_hunts,
+            "maps_outside_target_corpus": reduced.maps.keys()
+                .filter(|map_id| !corpus.maps.contains(*map_id))
+                .cloned().collect::<Vec<_>>(),
             "rejected_windows": reduced.rejected_windows,
+        },
+        "validation": {
+            "bicycle": bicycle_validation_json(reduced),
+            "deadtime": deadtime_validation_json(reduced),
+            "shared_map_convergence": shared_map_convergence_json(reduced),
+            "model": {
+                "walking_portion": hunt_pacing_model::WALKING_PORTION,
+                "fixed_floor_seconds": hunt_pacing_model::FIXED_FLOOR_S,
+                "combat_interaction_tau_seconds": hunt_pacing_model::COMBAT_INTERACTION_TAU_S,
+            }
         }
     })
+}
+
+fn shared_map_convergence_lines(reduced: &ReducedDataset) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let groups = per_hunt_window_stats(st1);
+        if groups.len() < 2 { continue; }
+        let medians = groups.iter().map(|(_, median, _)| *median).collect::<Vec<_>>();
+        let min = medians.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = medians.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let center = quantile(medians, 0.5);
+        let spread_pct = if center > 0.0 { 100.0 * (max - min) / center } else { 0.0 };
+        let details = groups.iter().map(|(hunt, median, count)|
+            format!("{hunt}={median:.4}s(n={count})")
+        ).collect::<Vec<_>>().join(", ");
+        lines.push(format!("  {map_id}: {details}; spread {spread_pct:.2}%"));
+    }
+    lines
+}
+
+fn shared_map_convergence_json(reduced: &ReducedDataset) -> Value {
+    let mut rows = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let groups = per_hunt_window_stats(st1);
+        if groups.len() < 2 { continue; }
+        let medians = groups.iter().map(|(_, median, _)| *median).collect::<Vec<_>>();
+        let min = medians.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = medians.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let center = quantile(medians, 0.5);
+        let spread_pct = if center > 0.0 { 100.0 * (max - min) / center } else { 0.0 };
+        rows.push(json!({
+            "map_id": map_id,
+            "spread_pct": spread_pct,
+            "hunts": groups.into_iter().map(|(hunt, median, count)| json!({
+                "hunt_slug": hunt,
+                "median_seconds_per_kill": median,
+                "samples": count,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    Value::Array(rows)
+}
+
+fn per_hunt_window_stats(stats: &ProfileStats) -> Vec<(String, f64, usize)> {
+    let mut grouped = BTreeMap::<String, Vec<f64>>::new();
+    for window in &stats.windows {
+        let Some(hunt) = window.hunt_slug.as_deref().filter(|hunt| !hunt.is_empty()) else {
+            continue;
+        };
+        grouped.entry(hunt.to_owned()).or_default().push(window.seconds_per_kill);
+    }
+    grouped.into_iter().map(|(hunt, values)| {
+        let count = values.len();
+        (hunt, quantile(values, 0.5), count)
+    }).collect()
+}
+
+fn bicycle_validation_lines(reduced: &ReducedDataset) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("bike-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let factor = stats.windows[0].bicycle_factor;
+            let observed = stats.median_seconds_per_kill;
+            let predicted = hunt_pacing_model::total_cycle_s(baseline, 0.0, factor);
+            let pct = relative_error_pct(observed, predicted);
+            lines.push(format!(
+                "  {map_id} {profile}: observed {observed:.4}s, predicted {predicted:.4}s ({pct:+.2}%)"
+            ));
+        }
+    }
+    lines
+}
+
+fn deadtime_validation_lines(reduced: &ReducedDataset) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("deadtime-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let window = &stats.windows[0];
+            let Some(combat_seconds) = window.validation_combat_seconds else {
+                lines.push(format!(
+                    "  {map_id} {profile}: missing declared combat seconds; measurement retained but model comparison skipped"
+                ));
+                continue;
+            };
+            let observed = stats.median_seconds_per_kill;
+            let predicted = hunt_pacing_model::total_cycle_s(baseline, combat_seconds, 1.0);
+            let pct = relative_error_pct(observed, predicted);
+            let hits = window.declared_hits
+                .map(|hits| hits.to_string()).unwrap_or_else(|| "?".into());
+            lines.push(format!(
+                "  {map_id} hits={hits} combat={combat_seconds:.3}s: observed {observed:.4}s, predicted {predicted:.4}s ({pct:+.2}%)"
+            ));
+        }
+    }
+    lines
+}
+
+fn bicycle_validation_json(reduced: &ReducedDataset) -> Value {
+    let mut rows = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("bike-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let factor = stats.windows[0].bicycle_factor;
+            let observed = stats.median_seconds_per_kill;
+            let predicted = hunt_pacing_model::total_cycle_s(baseline, 0.0, factor);
+            rows.push(json!({
+                "map_id": map_id,
+                "profile": profile,
+                "factor": factor,
+                "baseline_st1_seconds_per_kill": baseline,
+                "observed_seconds_per_kill": observed,
+                "predicted_seconds_per_kill": predicted,
+                "relative_error_pct": relative_error_pct(observed, predicted),
+                "samples": stats.samples,
+                "kills": stats.kills,
+            }));
+        }
+    }
+    Value::Array(rows)
+}
+
+fn deadtime_validation_json(reduced: &ReducedDataset) -> Value {
+    let mut rows = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("deadtime-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let window = &stats.windows[0];
+            let predicted = window.validation_combat_seconds
+                .map(|combat| hunt_pacing_model::total_cycle_s(baseline, combat, 1.0));
+            rows.push(json!({
+                "map_id": map_id,
+                "profile": profile,
+                "declared_hits": window.declared_hits,
+                "combat_seconds": window.validation_combat_seconds,
+                "baseline_st1_seconds_per_kill": baseline,
+                "observed_seconds_per_kill": stats.median_seconds_per_kill,
+                "predicted_seconds_per_kill": predicted,
+                "relative_error_pct": predicted.map(|predicted|
+                    relative_error_pct(stats.median_seconds_per_kill, predicted)),
+                "samples": stats.samples,
+                "kills": stats.kills,
+            }));
+        }
+    }
+    Value::Array(rows)
+}
+
+fn relative_error_pct(observed: f64, predicted: f64) -> f64 {
+    if predicted > 0.0 && predicted.is_finite() {
+        100.0 * (observed / predicted - 1.0)
+    } else {
+        0.0
+    }
 }
 
 fn stats_json(stats: Option<&ProfileStats>) -> Value {
@@ -337,12 +569,14 @@ fn pacing_comparisons(reduced: &ReducedDataset, corpus: &TargetCorpus) -> Vec<St
         let st1_text = st1.map(|stats| {
             let moth = stats.median_seconds_per_kill;
             let pct = if borrowed_st1 > 0.0 { 100.0 * (moth / borrowed_st1 - 1.0) } else { 0.0 };
-            format!("ST1 {moth:.4}s vs {borrowed_st1:.4}s ({pct:+.2}%)")
+            format!("ST1 {moth:.4}s p10–p90 {:.4}–{:.4} n={} vs {borrowed_st1:.4}s ({pct:+.2}%)",
+                stats.p10, stats.p90, stats.samples)
         }).unwrap_or_else(|| "ST1 —".into());
         let aoe_text = aoe.map(|stats| {
             let moth = stats.median_seconds_per_kill;
             let pct = if borrowed_aoe > 0.0 { 100.0 * (moth / borrowed_aoe - 1.0) } else { 0.0 };
-            format!("AOE {moth:.4}s vs {borrowed_aoe:.4}s ({pct:+.2}%)")
+            format!("AOE {moth:.4}s p10–p90 {:.4}–{:.4} n={} vs {borrowed_aoe:.4}s ({pct:+.2}%)",
+                stats.p10, stats.p90, stats.samples)
         }).unwrap_or_else(|| "AOE —".into());
         lines.push(format!("  {map_id}: {st1_text}; {aoe_text}"));
     }

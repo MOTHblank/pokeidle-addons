@@ -20,6 +20,12 @@ pub struct HuntPacingCollector {
     enabled: Option<EnabledCollector>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct MobTraceIdentity {
+    species: Option<Value>,
+    name: Option<Value>,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 struct TraceMove {
     move_type: String,
@@ -43,8 +49,13 @@ struct EnabledCollector {
     mob_slots: BTreeSet<String>,
     removed_slots: BTreeSet<String>,
     mob_dead: BTreeMap<String, bool>,
+    mob_identity: BTreeMap<String, MobTraceIdentity>,
+    current_target: Option<Value>,
     packet_sequence: u64,
     last_kill_monotonic_ms: Option<u64>,
+    last_kill_server_ts: Option<u64>,
+    validation_hits: Option<u32>,
+    validation_combat_seconds: Option<f64>,
     writes_since_flush: u32,
     failed: bool,
 }
@@ -102,6 +113,12 @@ impl HuntPacingCollector {
             .ok().map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "unknown".into());
+        let validation_hits = std::env::var("MOTH_HUNT_PACING_HITS").ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|hits| *hits > 0);
+        let validation_combat_seconds = std::env::var("MOTH_HUNT_PACING_COMBAT_SECONDS").ok()
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
 
         crate::logging::info(&format!(
             "Hunt pacing trace enabled for {} ({declared_profile}) -> {}",
@@ -123,8 +140,13 @@ impl HuntPacingCollector {
                 mob_slots: BTreeSet::new(),
                 removed_slots: BTreeSet::new(),
                 mob_dead: BTreeMap::new(),
+                mob_identity: BTreeMap::new(),
+                current_target: None,
                 packet_sequence: 0,
                 last_kill_monotonic_ms: None,
+                last_kill_server_ts: None,
+                validation_hits,
+                validation_combat_seconds,
                 writes_since_flush: 0,
                 failed: false,
             }),
@@ -149,7 +171,10 @@ impl HuntPacingCollector {
         inner.mob_slots.clear();
         inner.removed_slots.clear();
         inner.mob_dead.clear();
+        inner.mob_identity.clear();
+        inner.current_target = None;
         inner.last_kill_monotonic_ms = None;
+        inner.last_kill_server_ts = None;
         let record = inner.base_record("connection.open", received_at, view, None);
         inner.write_record(record, true);
     }
@@ -160,6 +185,7 @@ impl HuntPacingCollector {
         record["reason"] = Value::String(reason.to_owned());
         inner.write_record(record, true);
         inner.last_kill_monotonic_ms = None;
+        inner.last_kill_server_ts = None;
     }
 
     pub fn observe(&mut self, frame: &Value, view: &HuntView, received_at: Instant) {
@@ -179,7 +205,10 @@ impl HuntPacingCollector {
             inner.mob_slots.clear();
             inner.removed_slots.clear();
             inner.mob_dead.clear();
+            inner.mob_identity.clear();
+            inner.current_target = None;
             inner.last_kill_monotonic_ms = None;
+            inner.last_kill_server_ts = None;
         }
 
         inner.packet_sequence = inner.packet_sequence.wrapping_add(1);
@@ -197,10 +226,11 @@ impl HuntPacingCollector {
                 "box": frame.get("box").cloned().unwrap_or(Value::Null),
                 "groundZ": frame.get("groundZ").cloned().unwrap_or(Value::Null),
                 "entered_at_server": server_ts,
+                "entered_at_unix_ms": record["recv_unix_ms"].clone(),
             });
         }
         if matches!(kind, "campo.init" | "campo") {
-            record["field_observation"] = inner.field_observation(frame);
+            record["field_observation"] = inner.field_observation(frame, view);
         }
         if kind == "batalha" {
             record["kills"] = inner.kill_observations(frame, received_at);
@@ -235,13 +265,21 @@ impl EnabledCollector {
             "hunt_slug": view.hunt_slug,
             "field_slug": self.field_slug,
             "map_id": self.map_id,
-            "calibration": calibration_snapshot(view),
+            "calibration": calibration_snapshot(
+                view,self.validation_hits,self.validation_combat_seconds),
         })
     }
 
-    fn field_observation(&mut self, frame: &Value) -> Value {
-        let hero = frame.get("heroi")
-            .and_then(|raw| movement("hero", None, raw));
+    fn field_observation(&mut self, frame: &Value, view: &HuntView) -> Value {
+        let server_ts = number_u64(frame.get("ts"));
+        let mut hero = frame.get("heroi")
+            .and_then(|raw| movement("hero", None, raw, server_ts));
+        if let Some(Value::Object(fields)) = hero.as_mut() {
+            fields.insert("bicycle_rarity".into(),
+                view.bicycle_rarity.clone().map(Value::String).unwrap_or(Value::Null));
+            fields.insert("bicycle_factor".into(),
+                json!(view.bicycle_factor.unwrap_or(1.0)));
+        }
         let mut mobs = Vec::new();
         for raw in frame.get("mobs").and_then(Value::as_array)
             .into_iter().flatten()
@@ -251,6 +289,17 @@ impl EnabledCollector {
             let existed = self.mob_slots.contains(&slot_key);
             let replenished = self.removed_slots.remove(&slot_key);
             self.mob_slots.insert(slot_key.clone());
+            let identity = self.mob_identity.entry(slot_key.clone()).or_default();
+            if let Some(species) = raw.get("speciesId").or_else(|| raw.get("pokeId"))
+                .filter(|value| !value.is_null())
+            {
+                identity.species = Some(species.clone());
+            }
+            if let Some(name) = raw.get("n").or_else(|| raw.get("nome"))
+                .filter(|value| !value.is_null())
+            {
+                identity.name = Some(name.clone());
+            }
 
             let now_dead = raw.get("x").and_then(Value::as_bool)
                 .unwrap_or_else(|| self.mob_dead.get(&slot_key).copied().unwrap_or(false));
@@ -270,7 +319,7 @@ impl EnabledCollector {
             mobs.push(json!({
                 "slot": slot_value,
                 "lifecycle": lifecycle,
-                "movement": movement("mob", Some(slot_value.clone()), raw),
+                "movement": movement("mob", Some(slot_value.clone()), raw, server_ts),
                 "dead": raw.get("x").cloned().unwrap_or(Value::Null),
                 "hp": raw.get("hp").cloned().unwrap_or(Value::Null),
                 "max_hp": raw.get("mhp").cloned().unwrap_or(Value::Null),
@@ -289,38 +338,61 @@ impl EnabledCollector {
             let key = slot_key(slot);
             self.mob_slots.remove(&key);
             self.mob_dead.remove(&key);
+            self.mob_identity.remove(&key);
+            if self.current_target.as_ref() == Some(slot) {
+                self.current_target = None;
+            }
             self.removed_slots.insert(key);
             removals.push(slot.clone());
         }
 
+        if let Some(target) = frame.get("alvo") {
+            self.current_target = (!target.is_null()).then(|| target.clone());
+        }
         json!({
             "hero_movement": hero,
             "mob_updates": mobs,
             "removals": removals,
             "target": frame.get("alvo").cloned().unwrap_or(Value::Null),
+            "resolved_target": self.current_target.clone().unwrap_or(Value::Null),
         })
     }
 
     fn kill_observations(&mut self, frame: &Value, received_at: Instant) -> Value {
         let now = received_at.saturating_duration_since(self.origin).as_millis() as u64;
         let mut kills = Vec::new();
-        for event in frame.get("ev").and_then(Value::as_array)
+        let wild_deaths = frame.get("ev").and_then(Value::as_array)
             .into_iter().flatten()
-        {
-            if event.get("k").and_then(Value::as_str) != Some("morte")
-                || event.get("quem").and_then(Value::as_str) != Some("selvagem")
-            {
-                continue;
-            }
+            .filter(|event| event.get("k").and_then(Value::as_str) == Some("morte")
+                && event.get("quem").and_then(Value::as_str) == Some("selvagem"))
+            .collect::<Vec<_>>();
+        let single_target_death = wild_deaths.len() == 1;
+        for event in wild_deaths {
             let previous = self.last_kill_monotonic_ms.replace(now);
+            let kill_server_ts = number_u64(event.get("ts"))
+                .or_else(|| number_u64(frame.get("ts")));
+            let previous_server = self.last_kill_server_ts;
+            if kill_server_ts.is_some() {
+                self.last_kill_server_ts = kill_server_ts;
+            }
+            let slot = event.get("slot").filter(|value| !value.is_null()).cloned()
+                .or_else(|| single_target_death.then(|| self.current_target.clone()).flatten());
+            let identity = slot.as_ref()
+                .and_then(|slot| self.mob_identity.get(&slot_key(slot)));
+            let species = event.get("speciesId").or_else(|| event.get("pokeId"))
+                .filter(|value| !value.is_null()).cloned()
+                .or_else(|| identity.and_then(|identity| identity.species.clone()));
+            let name = event.get("nome").or_else(|| event.get("n"))
+                .filter(|value| !value.is_null()).cloned()
+                .or_else(|| identity.and_then(|identity| identity.name.clone()));
             kills.push(json!({
                 "kill_recv_monotonic_ms": now,
                 "previous_kill_recv_monotonic_ms": previous,
-                "slot": event.get("slot").cloned().unwrap_or(Value::Null),
-                "species": event.get("speciesId").or_else(|| event.get("pokeId"))
-                    .cloned().unwrap_or(Value::Null),
-                "name": event.get("nome").or_else(|| event.get("n"))
-                    .cloned().unwrap_or(Value::Null),
+                "kill_server_ts": kill_server_ts,
+                "previous_kill_server_ts": previous_server,
+                "slot": slot.unwrap_or(Value::Null),
+                "species": species.unwrap_or(Value::Null),
+                "name": name.unwrap_or(Value::Null),
                 "attack": event.get("ataque").or_else(|| event.get("attack"))
                     .or_else(|| event.get("golpe")).or_else(|| event.get("move"))
                     .cloned().unwrap_or(Value::Null),
@@ -360,25 +432,37 @@ impl Drop for EnabledCollector {
     }
 }
 
-fn movement(entity: &str, slot: Option<Value>, raw: &Value) -> Option<Value> {
+fn movement(
+    entity: &str,
+    slot: Option<Value>,
+    raw: &Value,
+    server_ts: Option<u64>,
+) -> Option<Value> {
     let to_col = raw.get("c")?.clone();
     let to_row = raw.get("r")?.clone();
     let from_col = raw.get("dc").cloned().unwrap_or_else(|| to_col.clone());
     let from_row = raw.get("dr").cloned().unwrap_or_else(|| to_row.clone());
+    let transition = from_col != to_col || from_row != to_row;
     Some(json!({
         "entity": entity,
         "slot": slot,
+        "transition": transition,
         "from_col": from_col,
         "from_row": from_row,
         "to_col": to_col,
         "to_row": to_row,
         "step_started_at": raw.get("em").cloned().unwrap_or_else(|| json!(0)),
         "step_duration_ms": raw.get("ms").cloned().unwrap_or_else(|| json!(300)),
+        "server_timestamp": server_ts,
         "direction": raw.get("d").cloned().unwrap_or(Value::Null),
     }))
 }
 
-fn calibration_snapshot(view: &HuntView) -> Value {
+fn calibration_snapshot(
+    view: &HuntView,
+    validation_hits: Option<u32>,
+    validation_combat_seconds: Option<f64>,
+) -> Value {
     let active = view.active_pokemon.as_ref();
     let fingerprint = json!({
         "active_id": active.map(|p| p.id),
@@ -401,6 +485,8 @@ fn calibration_snapshot(view: &HuntView) -> Value {
         "outland_tier": view.outland_tier,
         "gym_podium": &*view.gym_podium,
         "automation": view.automation,
+        "validation_hits": validation_hits,
+        "validation_combat_seconds": validation_combat_seconds,
     });
     json!({
         "fingerprint": fingerprint,
@@ -430,6 +516,10 @@ fn calibration_snapshot(view: &HuntView) -> Value {
         "seasonal_type": view.seasonal_type,
         "outland_tier": view.outland_tier,
         "in_center": view.in_center,
+        "validation": {
+            "declared_hits": validation_hits,
+            "combat_seconds": validation_combat_seconds,
+        },
         "bonuses": {
             "trainer_event_pct": view.bonuses.trainer_event_pct,
             "pokemon_event_pct": view.bonuses.pokemon_event_pct,
@@ -504,18 +594,21 @@ mod tests {
     fn movement_uses_server_origin_and_duration_without_geometry() {
         let value = movement("hero", None, &json!({
             "c": 12, "r": 8, "dc": 11, "dr": 8, "em": 1234, "ms": 275
-        })).unwrap();
+        }), Some(1500)).unwrap();
         assert_eq!(value["from_col"], 11);
         assert_eq!(value["to_col"], 12);
         assert_eq!(value["step_started_at"], 1234);
         assert_eq!(value["step_duration_ms"], 275);
+        assert_eq!(value["transition"], true);
+        assert_eq!(value["server_timestamp"], 1500);
     }
 
     #[test]
     fn movement_defaults_match_campo_client_contract() {
-        let value = movement("mob", Some(json!(7)), &json!({"c": 3, "r": 4})).unwrap();
+        let value = movement("mob", Some(json!(7)), &json!({"c": 3, "r": 4}), None).unwrap();
         assert_eq!(value["from_col"], 3);
         assert_eq!(value["from_row"], 4);
         assert_eq!(value["step_duration_ms"], 300);
+        assert_eq!(value["transition"], false);
     }
 }

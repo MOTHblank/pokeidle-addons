@@ -38,7 +38,9 @@ The default trace directory is:
 ```
 
 Each JSONL packet record keeps both receipt time and the server timestamp when
-present. For `campo.init`, `mapa ?? slug` is the authoritative map identity;
+present. Kill windows use the server clock when its elapsed interval is
+consistent with the monotonic receipt interval; otherwise the reducer falls
+back to the local monotonic clock instead of mixing clock domains. For `campo.init`, `mapa ?? slug` is the authoritative map identity;
 the current hunt slug is recorded separately. Field records retain the server's
 actual movement contract (`dc/dr -> c/r`, `em`, `ms`) for the hero and every
 mob, plus spawn/death/removal/respawn and target state. Battle records retain
@@ -62,7 +64,10 @@ Set `MOTH_HUNT_PACING_PROFILE` deliberately:
 - `bike-validation`: collect a controlled map with each bicycle rarity. These
   samples are retained separately and never become baseline `s`.
 - `deadtime-validation`: deliberately collect 1/2/3/multi-hit setups for
-  fitting the fixed/walking dead-time model.
+  fitting the fixed/walking dead-time model. Set
+  `MOTH_HUNT_PACING_HITS` and `MOTH_HUNT_PACING_COMBAT_SECONDS` for the
+  controlled setup so the report can compare observed total pacing against the
+  exact forecast curve rather than guessing combat duration from packet shape.
 - `diagnostic`: raw capture only. It is never admitted to pacing aggregates.
 
 The profile label is a calibration assertion, not a substitute for validation:
@@ -98,9 +103,10 @@ seconds_per_kill =
 
 This includes real walking, target changes, replenishment, enemy approach and
 server pacing. It never measures spawn radii. Each reduced window also retains
-the measured kill boundaries, the previous-kill timestamp, the first subsequent
-target selection and the first subsequent movement packet when those fields are
-observed.
+the measured kill boundaries, server and receipt kill timestamps, the
+previous-kill timestamp, the first subsequent target selection and the first
+subsequent **real position transition** when those fields are observed. A
+stationary `campo` entity update is not counted as movement.
 
 Default outlier handling is deliberately simple and auditable: impossible
 windows outside 0.20–120 seconds/kill are rejected; with at least five
@@ -120,8 +126,10 @@ moth-pacing.tsv
 coverage.txt
 ```
 
-The JSON is the rich source of truth. The TSV uses the same logical records as
-the existing `ritmo-v1409.tsv` loader. It only emits a map row once both ST1
+The JSON is the rich source of truth. The reducer refuses to combine traces
+that report multiple known game versions; cross-version pacing must be reduced
+separately. The TSV uses the same logical records as the existing
+`ritmo-v1409.tsv` loader. It only emits a map row once both ST1
 and AOE have been measured; missing data is never fabricated.
 
 Coverage uses the exact 500 map IDs (and 1,043 hunt identifiers) in the current
@@ -137,3 +145,29 @@ The first validation milestone is 5–10 deliberately different maps: open,
 corridor-heavy, cave/multi-level, Outland, shared-map hunts and a generated map.
 Repeated independent ST1 windows should converge, and hunts that report the
 same authoritative map ID should reduce to the same per-map pacing value.
+
+
+## Validation reports
+
+The JSON export and coverage report include two model checks that use the same
+shared pacing-math module as normal Hunt Atlas forecasts. `validate <reduced.json>`
+prints only these checks when iterating on controlled calibration runs.
+
+For `bike-validation`, the measured ST1 value on that map is the on-foot
+baseline. Every collected bicycle factor is compared with:
+
+```text
+walk0 = max(0, 0.83 * sMap - 1.41)
+fixed = sMap - walk0
+predicted = fixed + walk0 / bicycle_factor
+```
+
+For `deadtime-validation`, the controlled combat duration is compared with:
+
+```text
+remainingWalk = walk0 * exp(-fightSeconds / 2.8)
+predicted = fightSeconds + fixed + remainingWalk
+```
+
+The report prints observed seconds/kill, predicted seconds/kill and relative
+error. Validation traces stay outside the production `s`/`sAoe` aggregates.

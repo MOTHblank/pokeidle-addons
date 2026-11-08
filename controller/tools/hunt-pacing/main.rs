@@ -2,6 +2,8 @@ mod collect;
 mod export;
 mod reduce;
 mod trace;
+#[path = "../../src/hunt_pacing_model.rs"]
+mod hunt_pacing_model;
 
 use reduce::ReduceConfig;
 use std::env;
@@ -32,7 +34,7 @@ fn run() -> Result<(), String> {
             }
             let config = parse_config(&args[3..])?;
             let sessions = trace::load_sessions(Path::new(&args[1]))?;
-            let reduced = reduce::reduce_sessions(&sessions, config);
+            let reduced = reduce::reduce_sessions(&sessions, config)?;
             export::write_reduced(Path::new(&args[2]), &reduced)?;
             println!(
                 "reduced {} trace file(s), {} measured map(s) -> {}",
@@ -59,6 +61,13 @@ fn run() -> Result<(), String> {
             let reduced = export::read_reduced(Path::new(&args[1]))?;
             print!("{}", export::coverage_report(&reduced));
         }
+        "validate" => {
+            if args.len() != 2 {
+                return Err("validate requires <reduced.json>".into());
+            }
+            let reduced = export::read_reduced(Path::new(&args[1]))?;
+            print!("{}", export::validation_report(&reduced));
+        }
         "all" => {
             if args.len() < 3 {
                 return Err("all requires <raw-dir-or-file> <output-dir>".into());
@@ -69,7 +78,7 @@ fn run() -> Result<(), String> {
             fs::create_dir_all(&out)
                 .map_err(|error| format!("could not create {}: {error}", out.display()))?;
             let sessions = trace::load_sessions(raw)?;
-            let reduced = reduce::reduce_sessions(&sessions, config);
+            let reduced = reduce::reduce_sessions(&sessions, config)?;
             let reduced_path = out.join("reduced.json");
             let dataset_path = out.join("moth-pacing.json");
             let tsv_path = out.join("moth-pacing.tsv");
@@ -136,6 +145,7 @@ Commands:
   hunt-pacing reduce <raw-dir-or-file> <reduced.json> [reducer options]
   hunt-pacing export <reduced.json> <dataset.json> [--tsv <dataset.tsv>]
   hunt-pacing coverage <reduced.json>
+  hunt-pacing validate <reduced.json>
   hunt-pacing all <raw-dir-or-file> <output-dir> [reducer options]
 
 Reducer options:

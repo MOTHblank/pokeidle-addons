@@ -3,23 +3,13 @@
 use super::{damage, effect, Reference, ReferenceSpecies};
 use crate::native_hunts::{HuntEntry, PokemonInfo};
 use crate::native_atlas_pacing;
+use crate::hunt_pacing_model;
 
 const PLAYER_GAP_MS: f64 = 900.0;
 const TACKLE_COOLDOWN_MS: f64 = 2000.0;
 const TACKLE_POWER: f64 = 30.0;
 const MAX_AOE_ENGAGED: f64 = 15.0;
 
-#[derive(Clone, Copy)]
-struct PacingModelConstants {
-    walking_portion: f64,
-    walking_floor_s: f64,
-    combat_interaction_tau_s: f64,
-}
-const PACING_MODEL: PacingModelConstants = PacingModelConstants {
-    walking_portion: 0.83,
-    walking_floor_s: 1.41,
-    combat_interaction_tau_s: 2.8,
-};
 const WILD_DAMAGE_MULT: f64 = 1.8;
 const WILD_ATTACK_GAP_S: f64 = 1.4;
 const RESPAWN_S: f64 = 3.0;
@@ -175,42 +165,19 @@ fn mean_ttk(moves: &[Attack], tackle: Attack, global_gap_s: f64,
     }
     Some(spent/hp.len() as f64)
 }
-fn normalized_bicycle_factor(factor:f64)->f64 {
-    if factor.is_finite()&&factor>1.0 {factor} else {1.0}
-}
-
 fn baseline_dead_time(map_baseline_s:f64)->DeadTime {
-    let baseline=map_baseline_s.max(0.0);
-    let walking=(PACING_MODEL.walking_portion*baseline).max(0.0);
-    DeadTime {
-        fixed_s:(baseline-walking).max(0.0),
-        walking_s:walking,
-    }
-}
-
-/// Reduce only the player's on-foot walking component as combat gives enemies
-/// time to approach. The calibrated 1.41 s floor is also on-foot walking time;
-/// bicycle speed is applied afterward, so neither fixed map delay nor combat is
-/// accelerated.
-fn approached_walking_s(on_foot_walking_s:f64,combat_s:f64)->f64 {
-    let reducible=(on_foot_walking_s-PACING_MODEL.walking_floor_s).max(0.0);
-    let interaction=if combat_s.is_finite() {
-        (-combat_s.max(0.0)/PACING_MODEL.combat_interaction_tau_s).exp()
-    } else {0.0};
-    on_foot_walking_s-reducible*(1.0-interaction)
+    let parts=hunt_pacing_model::baseline_dead_time(map_baseline_s);
+    DeadTime { fixed_s:parts.fixed_s, walking_s:parts.walking_s }
 }
 
 fn dead_time(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->DeadTime {
-    let baseline=baseline_dead_time(map_baseline_s);
-    DeadTime {
-        fixed_s:baseline.fixed_s,
-        walking_s:approached_walking_s(baseline.walking_s,combat_s)
-            /normalized_bicycle_factor(bicycle_factor),
-    }
+    let parts=hunt_pacing_model::dead_time_parts(
+        map_baseline_s,combat_s,bicycle_factor);
+    DeadTime { fixed_s:parts.fixed_s, walking_s:parts.walking_s }
 }
 
 fn dead_time_s(map_baseline_s:f64,combat_s:f64,bicycle_factor:f64)->f64 {
-    dead_time(map_baseline_s,combat_s,bicycle_factor).total_s()
+    hunt_pacing_model::dead_time_s(map_baseline_s,combat_s,bicycle_factor)
 }
 
 fn weighted_ttk(samples:&[CombatSample],global_gap_s:f64,downtime_s:f64)->Option<f64> {
@@ -449,13 +416,13 @@ mod tests {
 
     #[test]
     fn pacing_constants_match_initial_hunt_calibration() {
-        assert!((PACING_MODEL.walking_portion-0.83).abs()<1e-12);
-        assert!((PACING_MODEL.walking_floor_s-1.41).abs()<1e-12);
-        assert!((PACING_MODEL.combat_interaction_tau_s-2.8).abs()<1e-12);
+        assert!((hunt_pacing_model::WALKING_PORTION-0.83).abs()<1e-12);
+        assert!((hunt_pacing_model::FIXED_FLOOR_S-1.41).abs()<1e-12);
+        assert!((hunt_pacing_model::COMBAT_INTERACTION_TAU_S-2.8).abs()<1e-12);
     }
 
     #[test]
-    fn dead_time_curve_starts_at_map_baseline_and_decays_to_walking_floor() {
+    fn dead_time_curve_starts_at_map_baseline_and_decays_to_fixed_floor() {
         let s=3.422;
         let reducible=(0.83*s-1.41).max(0.0);
         assert!((dead_time_s(s,0.0,1.0)-s).abs()<1e-12);
@@ -536,9 +503,10 @@ mod tests {
 
         let foot_floor=dead_time(s,f64::INFINITY,1.0);
         let bike_floor=dead_time(s,f64::INFINITY,2.0);
-        assert!((foot_floor.walking_s-PACING_MODEL.walking_floor_s).abs()<1e-12);
-        assert!((bike_floor.walking_s-PACING_MODEL.walking_floor_s/2.0).abs()<1e-12);
+        assert!(foot_floor.walking_s.abs()<1e-12);
+        assert!(bike_floor.walking_s.abs()<1e-12);
         assert_eq!(foot_floor.fixed_s,bike_floor.fixed_s);
+        assert!(foot_floor.fixed_s>=hunt_pacing_model::FIXED_FLOOR_S);
     }
 
     #[test]
