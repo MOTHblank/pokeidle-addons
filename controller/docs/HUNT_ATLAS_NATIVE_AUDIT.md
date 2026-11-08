@@ -203,6 +203,16 @@ No visual runtime acceptance is asserted by this document.
   existing Controller multi-hit/engagement model remains in charge; no fixed
   two-target-per-attack assumption is imported. Effective `sAoe` is clamped
   to `s` when simulator sampling noise makes the raw AoE row slightly slower.
+  Forecast caching is keyed by Pokémon combat state, the resolved per-hunt
+  pacing profile (source/map/`s`/`sAoe`/confidence bounds), bicycle factor,
+  explicit AoE state, seasonal type, gym podium and forecast-relevant XP/gold
+  modifiers. Learned-map revisions only trigger profile-key recomputation; an
+  ignored learned map does not invalidate a forecast. Geometry revisions,
+  spawn-radius samples and Euclidean geometry hashes are not forecast inputs.
+  Every forecast carries diagnostic pacing provenance: exact vendored map,
+  learned map ID, or global fallback, plus the effective baseline and p10/p90
+  pacing bounds. Fallback bounds use the dataset-wide p10/p90 widened by the
+  existing ±9% pacing error allowance.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
