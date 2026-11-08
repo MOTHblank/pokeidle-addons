@@ -47,7 +47,8 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
         // map identity; the borrowed map stays a hint only.
         for (map_id, map) in &reduced.maps {
             let hunt = reduced.hunts.iter()
-                .find_map(|(hunt, live_map)| (live_map == map_id).then(|| hunt.clone()))
+                .find_map(|(hunt, live_map)| (live_map == map_id
+                    && hunt_is_available(reduced, hunt)).then(|| hunt.clone()))
                 .or_else(|| corpus.by_map.get(map_id).and_then(|hunts|
                     hunts.iter().find(|hunt| hunt_is_available(reduced, hunt)).cloned()));
             let Some(hunt) = hunt else { continue };
@@ -315,6 +316,21 @@ fn empty_reduced() -> ReducedDataset {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_catalog_filters_planned_hunts() {
+        let corpus = corpus();
+        let seed = pilot_candidates(&corpus, None);
+        let allowed = seed.iter().take(3)
+            .map(|(hunt, _, _, _)| hunt.clone()).collect::<BTreeSet<_>>();
+        let mut reduced = empty_reduced();
+        reduced.available_hunts_by_profile.insert(
+            "calibration-account".into(), allowed.iter().cloned().collect());
+        let plan = build(Some(&reduced), 32);
+        assert!(plan.jobs.iter().all(|job| allowed.contains(&job.hunt_slug)));
+        assert!(plan.jobs.iter().all(|job|
+            job.available_on_profiles == vec!["calibration-account".to_owned()]));
+    }
 
     #[test]
     fn pilot_has_shared_generated_outland_and_standard_work() {
