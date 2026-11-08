@@ -10,10 +10,7 @@ const RETARGET_S: f64 = 1.0;
 const MIN_CYCLE_S: f64 = 1.8;
 const WAVE_GAP_S: f64 = 2.8;
 const WAVE_JITTER_S: f64 = 2.6;
-const WILD_TILE_S: f64 = 1.9;
-const PLAYER_TILE_S: f64 = 0.26;
-const SEARCH_FRACTION: f64 = 0.31;
-const DEFAULT_DISTANCE: f64 = 20.6;
+const DEFAULT_WALK_TRANSITION_S: f64 = 1.66036;
 const MAX_WAVE_SPAWNS: usize = 16;
 const MAX_AOE_ENGAGED: f64 = 15.0;
 const WILD_DAMAGE_MULT: f64 = 1.8;
@@ -141,49 +138,31 @@ fn mean_ttk(moves: &[Attack], tackle: Attack, global_gap_s: f64,
     }
     Some(spent/hp.len() as f64)
 }
-fn spawn_distances(hunt: &HuntEntry, measurements: Option<&Vec<f64>>) -> Vec<f64> {
-    let weighted_points = hunt.species.iter().map(|p|p.weight.max(0.0)).sum::<f64>();
-    let n = if hunt.total_spawns>0 {hunt.total_spawns as usize}
+fn spawn_count(hunt: &HuntEntry) -> usize {
+    let weighted_points=hunt.species.iter().map(|p|p.weight.max(0.0)).sum::<f64>();
+    let n=if hunt.total_spawns>0 {hunt.total_spawns as usize}
         else if weighted_points>0.0 {weighted_points.round() as usize}
         else {15};
-    let n=n.clamp(1,MAX_WAVE_SPAWNS);
-    match measurements.filter(|d|!d.is_empty()) {
-        Some(samples)=>{
-            let mut sorted=samples.iter().copied().filter(|d|d.is_finite()&&*d>=0.0)
-                .collect::<Vec<_>>();
-            if sorted.is_empty(){return vec![DEFAULT_DISTANCE;n]}
-            sorted.sort_by(f64::total_cmp);
-            (0..n).map(|i|{
-                let index=((i as f64+0.5)/n as f64*sorted.len() as f64).floor() as usize;
-                sorted[index.min(sorted.len()-1)]
-            }).collect()
-        },
-        None=>vec![DEFAULT_DISTANCE;n],
-    }
+    n.clamp(1,MAX_WAVE_SPAWNS)
 }
-fn player_tile_s(bicycle_factor:f64)->f64 {
+fn walk_transition_s(bicycle_factor:f64)->f64 {
     let factor=if bicycle_factor.is_finite()&&bicycle_factor>1.0 {
         bicycle_factor
     } else {1.0};
-    PLAYER_TILE_S/factor
+    // Explicit global fallback until map-paced calibration replaces it.
+    // This is deliberately not derived from spawn coordinates or entry radius.
+    DEFAULT_WALK_TRANSITION_S/factor
 }
-fn single_target_kills(
-    d: &[f64], cycle_s: f64, player_tile_s:f64
-) -> f64 {
-    let n=d.len();
-    let average=d.iter().sum::<f64>()/n as f64;
-    let walk=average*player_tile_s*SEARCH_FRACTION;
-    let meeting=WILD_TILE_S*player_tile_s/(WILD_TILE_S+player_tile_s);
-    let mut t=0.0f64;
-    for x in d { t=(t+cycle_s+walk).max(x*meeting); }
-    (3600.0/cycle_s)
-        .min(n as f64*3600.0/(t+WAVE_GAP_S))
+fn single_target_kills(count:usize,cycle_s:f64,transition_s:f64)->f64 {
+    let per_kill=(cycle_s+transition_s).max(MIN_CYCLE_S);
+    let wave_s=count as f64*per_kill+WAVE_GAP_S;
+    (3600.0/per_kill).min(count as f64*3600.0/wave_s)
 }
-fn aoe_kills(d:&[f64], ttk:f64)->f64 {
-    let n=d.len();
-    let rhythm=if n>1 {d[n-2]} else {d[0]};
-    let arrival=(rhythm-5.0).max(0.0)*WILD_TILE_S;
-    (n as f64*3600.0/(arrival+WAVE_GAP_S))
+fn aoe_kills(count:usize,ttk:f64)->f64 {
+    // No radial-arrival guess: use only the generic grouped-wave cadence and
+    // the explicit simultaneous-engagement throughput ceiling.
+    let wave_s=count as f64*MIN_CYCLE_S+WAVE_GAP_S;
+    (count as f64*3600.0/wave_s)
         .min(3600.0*MAX_AOE_ENGAGED/ttk.max(MIN_CYCLE_S))
 }
 
@@ -191,13 +170,12 @@ fn aoe_kills(d:&[f64], ttk:f64)->f64 {
 /// for both current and alternative hunts. Observations remain separate in UI.
 pub(super) fn simulate(
     hunt: &HuntEntry, mon: &PokemonInfo, player: &ReferenceSpecies,
-    r: &Reference, stats: &[f64;6], distances: Option<&Vec<f64>>,
+    r: &Reference, stats: &[f64;6],
     aoe_enabled: bool, seasonal:Option<&str>, gym_multiplier:f64,
     bicycle_factor:f64,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
-    let d=spawn_distances(hunt,distances);
-    let count=d.len();
+    let count=spawn_count(hunt);
     let downtime=WAVE_JITTER_S/count as f64+RETARGET_S;
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
     let mut weight=0.0;
@@ -264,8 +242,8 @@ pub(super) fn simulate(
     let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
     // Bicycle speed divides only the player's walking step. It does not
     // accelerate attacks, wild movement, retargeting, wave gaps or respawns.
-    let player_tile_s=player_tile_s(bicycle_factor);
-    let solo_kills_h=single_target_kills(&d,cycle,player_tile_s);
+    let transition_s=walk_transition_s(bicycle_factor);
+    let solo_kills_h=single_target_kills(count,cycle,transition_s);
     let mut kills_h=solo_kills_h;
     let aoe=aoe_enabled;
     let mut engaged=1.0;
@@ -273,7 +251,7 @@ pub(super) fn simulate(
         // Only an explicit per-account Atlas checkbox activates this mode.
         // Never infer it from a live monster's partially populated TM flags.
         // The AoE scenario is never modeled as slower than single-target.
-        kills_h=kills_h.max(aoe_kills(&d,ttk));
+        kills_h=kills_h.max(aoe_kills(count,ttk));
         engaged=(1.0+kills_h*ttk/3600.0).min(MAX_AOE_ENGAGED);
     }
     let own_hp=mon.max_hp.filter(|hp|*hp>0).map(|hp|hp as f64)
@@ -283,7 +261,7 @@ pub(super) fn simulate(
     let incoming_damage_per_kill=incoming_dps*engaged*ttk;
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
-    let recovery=RESPAWN_S+d.iter().sum::<f64>()/count as f64*player_tile_s;
+    let recovery=RESPAWN_S+transition_s;
     let alive_s=kills_per_life*3600.0/kills_h.max(1e-6);
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
@@ -325,30 +303,24 @@ mod tests {
     }
     #[test]
     fn grouped_wave_throughput_has_no_synthetic_per_slot_respawn_cap() {
-        let d=vec![20.6;16];
         let obsolete_cap=16.0*3600.0/65.0;
-        assert!(single_target_kills(&d,MIN_CYCLE_S,player_tile_s(1.0))>obsolete_cap);
-        assert!(aoe_kills(&d,0.01)>obsolete_cap);
-        assert!(aoe_kills(&d,10000.0)<20.0);
+        assert!(single_target_kills(16,MIN_CYCLE_S,walk_transition_s(1.0))>obsolete_cap);
+        assert!(aoe_kills(16,0.01)>obsolete_cap);
+        assert!(aoe_kills(16,10000.0)<20.0);
     }
     #[test]
-    fn measured_group_geometry_overrides_fallback_distances() {
-        let hunt=HuntEntry{total_spawns:8,..Default::default()};
-        let learned=vec![3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0];
-        assert_eq!(spawn_distances(&hunt,Some(&learned)),learned);
-        assert_eq!(spawn_distances(&hunt,None),vec![DEFAULT_DISTANCE;8]);
+    fn spawn_count_uses_catalog_without_geometry() {
+        assert_eq!(spawn_count(&HuntEntry{total_spawns:8,..Default::default()}),8);
+        assert_eq!(spawn_count(&HuntEntry{total_spawns:99,..Default::default()}),16);
     }
     #[test]
-    fn bicycle_factor_divides_only_player_walking_time() {
-        assert!((player_tile_s(1.0)-0.26).abs()<1e-12);
-        assert!((player_tile_s(2.0)-0.13).abs()<1e-12);
-        assert!((player_tile_s(f64::NAN)-0.26).abs()<1e-12);
-        let distances=vec![40.0;16];
-        let foot=single_target_kills(&distances,2.0,player_tile_s(1.0));
-        let legendary=single_target_kills(&distances,2.0,player_tile_s(2.0));
+    fn bicycle_factor_divides_only_generic_walking_transition() {
+        assert!((walk_transition_s(1.0)-DEFAULT_WALK_TRANSITION_S).abs()<1e-12);
+        assert!((walk_transition_s(2.0)-DEFAULT_WALK_TRANSITION_S/2.0).abs()<1e-12);
+        assert!((walk_transition_s(f64::NAN)-DEFAULT_WALK_TRANSITION_S).abs()<1e-12);
+        let foot=single_target_kills(16,2.0,walk_transition_s(1.0));
+        let legendary=single_target_kills(16,2.0,walk_transition_s(2.0));
         assert!(legendary>foot);
-        // AoE arrival is wild movement only; the bicycle still affects its
-        // death-recovery walk in simulate(), but never wild movement itself.
     }
     #[test]
     fn player_speed_iv_reduces_global_gap_to_a_floor() {
