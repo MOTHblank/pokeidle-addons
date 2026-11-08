@@ -61,6 +61,13 @@ fn run() -> Result<(), String> {
             let reduced = export::read_reduced(Path::new(&args[1]))?;
             print!("{}", export::coverage_report(&reduced));
         }
+        "validate" => {
+            if args.len() != 2 {
+                return Err("validate requires <reduced.json>".into());
+            }
+            let reduced = export::read_reduced(Path::new(&args[1]))?;
+            print!("{}", export::validation_report(&reduced));
+        }
         "all" => {
             if args.len() < 3 {
                 return Err("all requires <raw-dir-or-file> <output-dir>".into());
@@ -138,6 +145,7 @@ Commands:
   hunt-pacing reduce <raw-dir-or-file> <reduced.json> [reducer options]
   hunt-pacing export <reduced.json> <dataset.json> [--tsv <dataset.tsv>]
   hunt-pacing coverage <reduced.json>
+  hunt-pacing validate <reduced.json>
   hunt-pacing all <raw-dir-or-file> <output-dir> [reducer options]
 
 Reducer options:
