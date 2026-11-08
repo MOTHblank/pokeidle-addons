@@ -220,6 +220,14 @@ mod tests {
     }
 
     #[test]
+    fn learned_unknown_map_preserves_identity_but_uses_global_fallback() {
+        let pace=resolve("__new_hunt__",Some("future-map-id"));
+        assert_eq!(pace.source,PacingSource::GlobalFallback);
+        assert_eq!(pace.map_id.as_deref(),Some("future-map-id"));
+        assert!((pace.base_seconds_per_kill-dataset().fallback.median).abs()<1e-12);
+    }
+
+    #[test]
     fn unknown_hunt_uses_dataset_fallback_not_an_unrelated_map() {
         let pace=resolve("__unknown_hunt__",None);
         assert_eq!(pace.source,PacingSource::GlobalFallback);
