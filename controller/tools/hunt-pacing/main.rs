@@ -1,5 +1,6 @@
 mod collect;
 mod export;
+mod plan;
 mod reduce;
 mod trace;
 #[path = "../../src/hunt_pacing_model.rs"]
@@ -68,6 +69,38 @@ fn run() -> Result<(), String> {
             let reduced = export::read_reduced(Path::new(&args[1]))?;
             print!("{}", export::validation_report(&reduced));
         }
+        "plan" => {
+            let mut index = 1usize;
+            let mut reduced = None;
+            if args.get(index).is_some_and(|arg| !arg.starts_with("--")) {
+                reduced = Some(export::read_reduced(Path::new(&args[index]))?);
+                index += 1;
+            }
+            let mut count = 12usize;
+            let mut json_path: Option<PathBuf> = None;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--count" => {
+                        let value = args.get(index + 1)
+                            .ok_or_else(|| "--count requires a value".to_owned())?;
+                        count = parse::<usize>(value, "--count")?.max(1);
+                        index += 2;
+                    }
+                    "--json" => {
+                        let value = args.get(index + 1)
+                            .ok_or_else(|| "--json requires a path".to_owned())?;
+                        json_path = Some(PathBuf::from(value));
+                        index += 2;
+                    }
+                    other => return Err(format!("unknown plan option: {other}")),
+                }
+            }
+            let plan = plan::build(reduced.as_ref(), count);
+            if let Some(path) = json_path.as_deref() {
+                plan::write_json(path, &plan)?;
+            }
+            print!("{}", plan::render(&plan));
+        }
         "all" => {
             if args.len() < 3 {
                 return Err("all requires <raw-dir-or-file> <output-dir>".into());
@@ -83,13 +116,20 @@ fn run() -> Result<(), String> {
             let dataset_path = out.join("moth-pacing.json");
             let tsv_path = out.join("moth-pacing.tsv");
             let coverage_path = out.join("coverage.txt");
+            let next_plan_path = out.join("next-plan.json");
+            let next_plan_text_path = out.join("next-plan.txt");
             export::write_reduced(&reduced_path, &reduced)?;
             export::write_dataset_json(&dataset_path, &reduced)?;
             export::write_dataset_tsv(&tsv_path, &reduced)?;
             let coverage = export::coverage_report(&reduced);
             fs::write(&coverage_path, &coverage)
                 .map_err(|error| format!("could not write {}: {error}", coverage_path.display()))?;
-            print!("{coverage}");
+            let next_plan = plan::build(Some(&reduced), 12);
+            plan::write_json(&next_plan_path, &next_plan)?;
+            let next_plan_text = plan::render(&next_plan);
+            fs::write(&next_plan_text_path, &next_plan_text)
+                .map_err(|error| format!("could not write {}: {error}", next_plan_text_path.display()))?;
+            print!("{coverage}\n{next_plan_text}");
         }
         "help" | "--help" | "-h" => print_usage(),
         other => return Err(format!("unknown command: {other}")),
@@ -146,6 +186,7 @@ Commands:
   hunt-pacing export <reduced.json> <dataset.json> [--tsv <dataset.tsv>]
   hunt-pacing coverage <reduced.json>
   hunt-pacing validate <reduced.json>
+  hunt-pacing plan [reduced.json] [--count N] [--json plan.json]
   hunt-pacing all <raw-dir-or-file> <output-dir> [reducer options]
 
 Reducer options:

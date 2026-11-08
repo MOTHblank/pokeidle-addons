@@ -47,6 +47,8 @@ pub struct KillBoundary {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WindowSample {
     pub session_id: String,
+    #[serde(default)]
+    pub run_id: Option<String>,
     pub map_id: String,
     pub hunt_slug: Option<String>,
     pub profile: String,
@@ -99,6 +101,8 @@ pub struct ReducedDataset {
     pub trace_files: usize,
     pub maps: BTreeMap<String, MapReduction>,
     pub hunts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub available_hunts_by_profile: BTreeMap<String, Vec<String>>,
     pub unknown_hunts: Vec<String>,
     pub rejected_windows: BTreeMap<String, u64>,
 }
@@ -106,6 +110,7 @@ pub struct ReducedDataset {
 #[derive(Clone, Debug)]
 struct Segment {
     session_id: String,
+    run_id: Option<String>,
     map_id: String,
     hunt_slug: Option<String>,
     profile: String,
@@ -134,6 +139,7 @@ pub fn reduce_sessions(
     let mut windows = Vec::new();
     let mut rejected = BTreeMap::<String, u64>::new();
     let mut observed_hunts = BTreeMap::<String, Option<String>>::new();
+    let mut available_hunts_by_profile = BTreeMap::<String, BTreeSet<String>>::new();
     let known_versions = sessions.iter()
         .flat_map(|session| session.records.iter())
         .map(|record| record.game_version.trim())
@@ -154,6 +160,12 @@ pub fn reduce_sessions(
         .max().unwrap_or(0);
 
     for session in sessions {
+        for record in &session.records {
+            if record.available_hunts.is_empty() { continue; }
+            let available = available_hunts_by_profile
+                .entry(record.profile.clone()).or_default();
+            available.extend(record.available_hunts.iter().cloned());
+        }
         reduce_session(
             session,
             &config,
@@ -194,6 +206,9 @@ pub fn reduce_sessions(
         trace_files: sessions.len(),
         maps,
         hunts,
+        available_hunts_by_profile: available_hunts_by_profile.into_iter()
+            .map(|(profile, hunts)| (profile, hunts.into_iter().collect()))
+            .collect(),
         unknown_hunts: unknown_hunts.into_iter().collect(),
         rejected_windows: rejected,
     })
@@ -246,6 +261,7 @@ fn reduce_session(
         if segment.is_none() {
             segment = Some(Segment {
                 session_id: record.session_id.clone(),
+                run_id: record.run_id.clone(),
                 map_id: map_id.to_owned(),
                 hunt_slug: record.hunt_slug.clone(),
                 profile: profile.clone(),
@@ -392,6 +408,11 @@ fn first_field_movement(record: &TraceRecord) -> Option<Value> {
 }
 
 fn accepted_profile(record: &TraceRecord) -> Option<String> {
+    if record.expected_hunt.as_deref().is_some_and(|expected|
+        record.hunt_slug.as_deref() != Some(expected))
+    {
+        return None;
+    }
     if is_special_scene(record) || in_center(record) || active_pokemon_id(record).is_none() {
         return None;
     }
@@ -578,6 +599,7 @@ fn finish_segment(
 
     windows.push(WindowSample {
         session_id: segment.session_id,
+        run_id: segment.run_id,
         map_id: segment.map_id,
         hunt_slug: segment.hunt_slug,
         profile: segment.profile,
@@ -723,6 +745,9 @@ mod tests {
             profile: "test".into(),
             declared_profile: "st1".into(),
             game_version: "1.0".into(),
+            run_id: None,
+            expected_hunt: None,
+            available_hunts: Vec::new(),
             recv_unix_ms: 1,
             recv_monotonic_ms: 1,
             server_ts: Some(1),
@@ -737,6 +762,20 @@ mod tests {
             field_observation,
             kills: Vec::new(),
         }
+    }
+
+    #[test]
+    fn expected_hunt_gate_never_admits_another_hunt() {
+        let mut record = trace_record("aipom", serde_json::json!({}));
+        record.calibration = serde_json::json!({
+            "active": {"id": 1},
+            "bicycle": {"factor": 1.0},
+            "fingerprint": {"tm_aoe": false}
+        });
+        record.expected_hunt = Some("caterpie".into());
+        assert!(accepted_profile(&record).is_none());
+        record.expected_hunt = Some("aipom".into());
+        assert_eq!(accepted_profile(&record).as_deref(), Some("st1"));
     }
 
     #[test]

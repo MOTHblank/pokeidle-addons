@@ -41,6 +41,8 @@ struct EnabledCollector {
     profile: String,
     declared_profile: String,
     game_version: String,
+    run_id: Option<String>,
+    expected_hunt: Option<String>,
     origin: Instant,
     connection_generation: u64,
     scene_generation: u64,
@@ -113,6 +115,8 @@ impl HuntPacingCollector {
             .ok().map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "unknown".into());
+        let run_id = env_text("MOTH_HUNT_PACING_RUN_ID");
+        let expected_hunt = env_text("MOTH_HUNT_PACING_EXPECT_HUNT");
         let validation_hits = std::env::var("MOTH_HUNT_PACING_HITS").ok()
             .and_then(|value| value.trim().parse::<u32>().ok())
             .filter(|hits| *hits > 0);
@@ -121,8 +125,11 @@ impl HuntPacingCollector {
             .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
 
         crate::logging::info(&format!(
-            "Hunt pacing trace enabled for {} ({declared_profile}) -> {}",
-            profile.label(), path.display()
+            "Hunt pacing trace enabled for {} ({declared_profile}, run={}, hunt={}) -> {}",
+            profile.label(),
+            run_id.as_deref().unwrap_or("unlabeled"),
+            expected_hunt.as_deref().unwrap_or("any"),
+            path.display()
         ));
         Self {
             enabled: Some(EnabledCollector {
@@ -132,6 +139,8 @@ impl HuntPacingCollector {
                 profile: profile.name().to_owned(),
                 declared_profile,
                 game_version,
+                run_id,
+                expected_hunt,
                 origin: Instant::now(),
                 connection_generation: 0,
                 scene_generation: 0,
@@ -175,7 +184,10 @@ impl HuntPacingCollector {
         inner.current_target = None;
         inner.last_kill_monotonic_ms = None;
         inner.last_kill_server_ts = None;
-        let record = inner.base_record("connection.open", received_at, view, None);
+        let mut record = inner.base_record("connection.open", received_at, view, None);
+        record["available_hunts"] = Value::Array(
+            view.hunts.iter().map(|hunt| Value::String(hunt.slug.clone())).collect()
+        );
         inner.write_record(record, true);
     }
 
@@ -250,12 +262,14 @@ impl EnabledCollector {
         server_ts: Option<u64>,
     ) -> Value {
         json!({
-            "schema": 1,
+            "schema": 2,
             "event_type": event_type,
             "session_id": self.session_id,
             "profile": self.profile,
             "declared_profile": self.declared_profile,
             "game_version": self.game_version,
+            "run_id": self.run_id,
+            "expected_hunt": self.expected_hunt,
             "recv_unix_ms": unix_ms(),
             "recv_monotonic_ms": received_at
                 .saturating_duration_since(self.origin).as_millis() as u64,
@@ -570,6 +584,12 @@ fn number_u64(value: Option<&Value>) -> Option<u64> {
         value.as_f64().filter(|n| n.is_finite() && *n >= 0.0)
             .map(|n| n as u64)
     }))
+}
+
+fn env_text(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn unix_ms() -> u64 {
