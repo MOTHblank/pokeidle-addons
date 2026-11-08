@@ -31,6 +31,7 @@ pub struct CalibrationJob {
     pub target_windows: usize,
     pub completed_windows: usize,
     pub notes: String,
+    pub available_on_profiles: Vec<String>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -47,7 +48,8 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
         for (map_id, map) in &reduced.maps {
             let hunt = reduced.hunts.iter()
                 .find_map(|(hunt, live_map)| (live_map == map_id).then(|| hunt.clone()))
-                .or_else(|| corpus.by_map.get(map_id).and_then(|hunts| hunts.first().cloned()));
+                .or_else(|| corpus.by_map.get(map_id).and_then(|hunts|
+                    hunts.iter().find(|hunt| hunt_is_available(reduced, hunt)).cloned()));
             let Some(hunt) = hunt else { continue };
             if map.profiles.get("st1").map(|stats| stats.samples).unwrap_or(0) < ENOUGH_WINDOWS {
                 add_job(
@@ -73,7 +75,9 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
             let measured_hunts = st1.windows.iter()
                 .filter_map(|window| window.hunt_slug.as_ref())
                 .cloned().collect::<BTreeSet<_>>();
-            let candidates = corpus.by_map.get(map_id).cloned().unwrap_or_default();
+            let candidates = corpus.by_map.get(map_id).cloned().unwrap_or_default()
+                .into_iter().filter(|hunt| hunt_is_available(reduced, hunt))
+                .collect::<Vec<_>>();
             if measured_hunts.len() >= 2 || candidates.len() < 2 { continue; }
             if let Some(hunt) = candidates.into_iter()
                 .find(|hunt| !measured_hunts.contains(hunt))
@@ -90,7 +94,7 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
 
     // Always keep a diverse pilot tail so an empty/new dataset can make
     // progress without a hand-written checklist.
-    for (hunt, profile, purpose, notes) in pilot_candidates(&corpus) {
+    for (hunt, profile, purpose, notes) in pilot_candidates(&corpus, reduced) {
         add_job(
             &mut jobs, &mut seen,
             baseline,
@@ -116,9 +120,12 @@ pub fn render(plan: &CalibrationPlan) -> String {
     );
     for (index, job) in plan.jobs.iter().enumerate() {
         out.push_str(&format!(
-            "{}. {} — {} / {}\n   purpose: {}\n   borrowed map hint: {} (advisory only)\n   windows: {}/{}\n   {}\n",
+            "{}. {} — {} / {}\n   purpose: {}\n   borrowed map hint: {} (advisory only)\n   account profiles: {}\n   windows: {}/{}\n   {}\n",
             index + 1, job.id, job.hunt_slug, job.profile, job.purpose,
-            job.borrowed_map_hint, job.completed_windows, job.target_windows, job.notes
+            job.borrowed_map_hint,
+            if job.available_on_profiles.is_empty() { "unknown".into() }
+            else { job.available_on_profiles.join(", ") },
+            job.completed_windows, job.target_windows, job.notes
         ));
         for (key, value) in &job.env {
             out.push_str(&format!("   {key}={value}\n"));
@@ -170,6 +177,7 @@ fn add_job(
         target_windows: ENOUGH_WINDOWS,
         completed_windows,
         notes: notes.into(),
+        available_on_profiles: available_profiles(reduced, hunt),
         env,
     });
 }
@@ -182,16 +190,21 @@ fn completed_windows(reduced: &ReducedDataset, hunt: &str, profile: &str) -> usi
         .count()
 }
 
-fn pilot_candidates(corpus: &Corpus) -> Vec<(String, String, &'static str, &'static str)> {
+fn pilot_candidates(
+    corpus: &Corpus,
+    reduced: Option<&ReducedDataset>,
+) -> Vec<(String, String, &'static str, &'static str)> {
     let mut out = Vec::new();
     let mut used_maps = BTreeSet::new();
 
-    if let Some((map, hunts)) = corpus.by_map.iter().find(|(_, hunts)| hunts.len() >= 2) {
-        for hunt in hunts.iter().take(2) {
+    if let Some((map, hunts)) = corpus.by_map.iter().find(|(_, hunts)|
+        hunts.iter().filter(|hunt| hunt_is_available_opt(reduced, hunt)).count() >= 2)
+    {
+        for hunt in hunts.iter().filter(|hunt| hunt_is_available_opt(reduced, hunt)).take(2) {
             out.push((hunt.clone(), "st1".into(), "shared-map-pilot",
                 "Shared-map identity/convergence pilot; repeat independent windows."));
         }
-        if let Some(hunt) = hunts.first() {
+        if let Some(hunt) = hunts.iter().find(|hunt| hunt_is_available_opt(reduced, hunt)) {
             out.push((hunt.clone(), "aoe".into(), "shared-map-pilot",
                 "AoE baseline for the shared-map pilot."));
         }
@@ -200,7 +213,7 @@ fn pilot_candidates(corpus: &Corpus) -> Vec<(String, String, &'static str, &'sta
 
     for (map, hunts) in &corpus.by_map {
         if !map.starts_with("gerado_") || used_maps.contains(map) { continue; }
-        let Some(hunt) = hunts.first() else { continue };
+        let Some(hunt) = hunts.iter().find(|hunt| hunt_is_available_opt(reduced, hunt)) else { continue };
         out.push((hunt.clone(), "st1".into(), "generated-map-pilot",
             "Generated-map ST1 pilot; live campo.init remains authoritative."));
         out.push((hunt.clone(), "aoe".into(), "generated-map-pilot",
@@ -210,9 +223,11 @@ fn pilot_candidates(corpus: &Corpus) -> Vec<(String, String, &'static str, &'sta
     }
 
     if let Some((map, hunts)) = corpus.by_map.iter().find(|(map, hunts)| {
-        !used_maps.contains(*map) && hunts.iter().any(|hunt| is_outland_style(hunt))
+        !used_maps.contains(*map) && hunts.iter().any(|hunt|
+            is_outland_style(hunt) && hunt_is_available_opt(reduced, hunt))
     }) {
-        if let Some(hunt) = hunts.iter().find(|hunt| is_outland_style(hunt)) {
+        if let Some(hunt) = hunts.iter().find(|hunt|
+            is_outland_style(hunt) && hunt_is_available_opt(reduced, hunt)) {
             out.push((hunt.clone(), "st1".into(), "outland-pilot",
                 "Outland-style ST1 pilot."));
             out.push((hunt.clone(), "aoe".into(), "outland-pilot",
@@ -223,7 +238,7 @@ fn pilot_candidates(corpus: &Corpus) -> Vec<(String, String, &'static str, &'sta
 
     for (map, hunts) in &corpus.by_map {
         if used_maps.contains(map) || map.starts_with("gerado_") || hunts.len() != 1 { continue; }
-        let Some(hunt) = hunts.first() else { continue };
+        let Some(hunt) = hunts.iter().find(|hunt| hunt_is_available_opt(reduced, hunt)) else { continue };
         if is_outland_style(hunt) { continue; }
         out.push((hunt.clone(), "st1".into(), "standard-map-pilot",
             "Ordinary unique-map ST1 control."));
@@ -235,6 +250,23 @@ fn pilot_candidates(corpus: &Corpus) -> Vec<(String, String, &'static str, &'sta
         }
     }
     out
+}
+
+fn hunt_is_available(reduced: &ReducedDataset, hunt: &str) -> bool {
+    if reduced.available_hunts_by_profile.is_empty() { return true; }
+    reduced.available_hunts_by_profile.values()
+        .any(|hunts| hunts.iter().any(|candidate| candidate == hunt))
+}
+
+fn hunt_is_available_opt(reduced: Option<&ReducedDataset>, hunt: &str) -> bool {
+    reduced.map(|reduced| hunt_is_available(reduced, hunt)).unwrap_or(true)
+}
+
+fn available_profiles(reduced: &ReducedDataset, hunt: &str) -> Vec<String> {
+    reduced.available_hunts_by_profile.iter()
+        .filter(|(_, hunts)| hunts.iter().any(|candidate| candidate == hunt))
+        .map(|(profile, _)| profile.clone())
+        .collect()
 }
 
 fn is_outland_style(hunt: &str) -> bool {
@@ -274,6 +306,7 @@ fn empty_reduced() -> ReducedDataset {
         trace_files: 0,
         maps: BTreeMap::new(),
         hunts: BTreeMap::new(),
+        available_hunts_by_profile: BTreeMap::new(),
         unknown_hunts: Vec::new(),
         rejected_windows: BTreeMap::new(),
     }
@@ -295,5 +328,6 @@ mod tests {
             job.env.get("MOTH_HUNT_PACING_EXPECT_HUNT") == Some(&job.hunt_slug)));
         assert!(plan.jobs.iter().all(|job|
             job.env.keys().all(|key| !key.contains("MAP"))));
+        assert!(plan.jobs.iter().all(|job| job.available_on_profiles.is_empty()));
     }
 }
