@@ -412,21 +412,67 @@ mod tests {
             0.9,&hp,1.0).unwrap();
         assert!(t>0.0&&t<5.0);
     }
+    fn sample(damage:f64,hp:f64)->CombatSample {
+        CombatSample {
+            weight:1.0,
+            attacks:vec![Attack{damage,cooldown_s:0.9}],
+            tackle:Attack{damage:0.0,cooldown_s:2.0},
+            hp:[hp;32],
+        }
+    }
+
+    #[test]
+    fn pacing_constants_match_initial_hunt_calibration() {
+        assert!((PACING_MODEL.walking_portion-0.83).abs()<1e-12);
+        assert!((PACING_MODEL.walking_floor_s-1.41).abs()<1e-12);
+        assert!((PACING_MODEL.combat_interaction_tau_s-2.8).abs()<1e-12);
+    }
+
+    #[test]
+    fn dead_time_curve_starts_at_map_baseline_and_decays_to_walking_floor() {
+        let s=3.422;
+        let reducible=(0.83*s-1.41).max(0.0);
+        assert!((dead_time_s(s,0.0,1.0)-s).abs()<1e-12);
+        let at_tau=dead_time_s(s,2.8,1.0);
+        let expected=s-reducible*(1.0-(-1.0f64).exp());
+        assert!((at_tau-expected).abs()<1e-12);
+        assert!(dead_time_s(s,4.0,1.0)<dead_time_s(s,1.0,1.0));
+        let floor=s-reducible;
+        assert!((dead_time_s(s,f64::INFINITY,1.0)-floor).abs()<1e-12);
+    }
+
     #[test]
     fn one_shot_foot_pace_matches_vendored_map_dataset() {
         let pace=native_atlas_pacing::resolve("caterpie",None);
-        let kills=single_target_kills(pace.base_seconds_per_kill,MIN_CYCLE_S,1.0);
-        assert!((3600.0/kills-3.422).abs()<1e-12);
-        let aoe=aoe_kills(pace.aoe_seconds_per_kill,MIN_CYCLE_S,0.01,1.0);
-        assert!((3600.0/aoe-3.12).abs()<1e-12);
+        let one=[sample(1000.0,100.0)];
+        let solo=paced_kill(&one,0.9,pace.base_seconds_per_kill,1.0).unwrap();
+        assert!(solo.combat_s.abs()<1e-12);
+        assert!((solo.dead_time_s-3.422).abs()<1e-12);
+        assert!((solo.total_s-3.422).abs()<1e-12);
+        let aoe=paced_kill(&one,0.9,pace.aoe_seconds_per_kill,1.0).unwrap();
+        assert!((aoe.total_s-3.12).abs()<1e-12);
     }
+
+    #[test]
+    fn longer_combat_reduces_dead_time_but_total_is_dead_time_plus_combat() {
+        let s=3.422;
+        let longer=[sample(60.0,180.0)];
+        let pace=paced_kill(&longer,0.9,s,1.0).unwrap();
+        assert!(pace.combat_s>0.0);
+        assert!(pace.dead_time_s<s);
+        assert!(pace.dead_time_s>dead_time_s(s,f64::INFINITY,1.0)-1e-9);
+        assert!((pace.total_s-(pace.dead_time_s+pace.combat_s)).abs()<1e-12);
+    }
+
     #[test]
     fn unknown_hunt_uses_vendored_global_median() {
         let pace=native_atlas_pacing::resolve("__unknown_hunt__",None);
         assert_eq!(pace.source,native_atlas_pacing::PacingSource::GlobalFallback);
-        let kills=single_target_kills(pace.base_seconds_per_kill,MIN_CYCLE_S,1.0);
-        assert!((3600.0/kills-3.406).abs()<1e-12);
+        let one=[sample(1000.0,100.0)];
+        let resolved=paced_kill(&one,0.9,pace.base_seconds_per_kill,1.0).unwrap();
+        assert!((resolved.total_s-3.406).abs()<1e-12);
     }
+
     #[test]
     fn learned_map_upgrades_unknown_hunt_to_shared_map_pacing() {
         let pace=native_atlas_pacing::resolve("__new_hunt__",Some("gerado_normal_01"));
@@ -438,15 +484,18 @@ mod tests {
     }
 
     #[test]
-    fn bicycle_factor_divides_only_map_movement_component() {
-        let pace=native_atlas_pacing::resolve("caterpie",None);
-        assert!((movement_component_s(pace.base_seconds_per_kill,1.0)-(pace.base_seconds_per_kill-MIN_CYCLE_S)).abs()<1e-12);
-        assert!((movement_component_s(pace.base_seconds_per_kill,2.0)-(pace.base_seconds_per_kill-MIN_CYCLE_S)/2.0).abs()<1e-12);
-        assert!((movement_component_s(pace.base_seconds_per_kill,f64::NAN)-(pace.base_seconds_per_kill-MIN_CYCLE_S)).abs()<1e-12);
-        let foot=single_target_kills(pace.base_seconds_per_kill,2.0,1.0);
-        let legendary=single_target_kills(pace.base_seconds_per_kill,2.0,2.0);
-        assert!(legendary>foot);
+    fn bicycle_divides_only_the_dead_time_walking_component() {
+        let s=3.422;
+        let fixed=s*(1.0-PACING_MODEL.walking_portion);
+        let initial_walk=s*PACING_MODEL.walking_portion;
+        assert!((dead_time_s(s,0.0,2.0)-(fixed+initial_walk/2.0)).abs()<1e-12);
+        let foot_floor=dead_time_s(s,f64::INFINITY,1.0);
+        let bike_floor=dead_time_s(s,f64::INFINITY,2.0);
+        assert!((foot_floor-(fixed+PACING_MODEL.walking_floor_s)).abs()<1e-12);
+        assert!((bike_floor-(fixed+PACING_MODEL.walking_floor_s/2.0)).abs()<1e-12);
+        assert!(bike_floor<foot_floor);
     }
+
     #[test]
     fn player_speed_iv_reduces_global_gap_to_a_floor() {
         let mut mon=PokemonInfo::default();
