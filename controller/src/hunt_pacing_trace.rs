@@ -13,10 +13,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct HuntPacingCollector {
     enabled: Option<EnabledCollector>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct TraceMove {
+    move_type: String,
+    special: bool,
+    power: f64,
+    cooldown_ms: f64,
 }
 
 struct EnabledCollector {
@@ -368,6 +377,8 @@ fn calibration_snapshot(view: &HuntView) -> Value {
         "battle_stats": active.and_then(|p| p.battle_stats),
         "types": active.map(|p| &p.types),
         "held_item_id": active.and_then(|p| p.held_item_id),
+        "moveset": active.and_then(|p| p.species_id)
+            .map(moveset_for).unwrap_or_default(),
         "tm_aoe": active.is_some_and(|p| p.tm_aoe),
         "tm_elemental": active.and_then(|p| p.tm_elemental.as_deref()),
         "bicycle_rarity": view.bicycle_rarity,
@@ -394,6 +405,7 @@ fn calibration_snapshot(view: &HuntView) -> Value {
             "battle_stats": p.battle_stats,
             "types": p.types,
             "held_item_id": p.held_item_id,
+            "moveset": p.species_id.map(moveset_for).unwrap_or_default(),
             "tm_aoe": p.tm_aoe,
             "tm_elemental": p.tm_elemental,
         })),
@@ -415,6 +427,33 @@ fn calibration_snapshot(view: &HuntView) -> Value {
             "sacrifice_xp_active": view.bonuses.sacrifice_xp_active,
         }
     })
+}
+
+fn moveset_for(species_id: u64) -> Vec<TraceMove> {
+    static MOVESETS: OnceLock<BTreeMap<u64, Vec<TraceMove>>> = OnceLock::new();
+    MOVESETS.get_or_init(|| {
+        let mut by_species = BTreeMap::<u64, Vec<TraceMove>>::new();
+        for line in include_str!("../assets/visual/upstream-movesets-v1408.tsv").lines() {
+            if line.starts_with('#') || line.is_empty() { continue; }
+            let fields = line.split('\t').collect::<Vec<_>>();
+            if fields.len() != 5 { continue; }
+            let (Ok(id), Ok(power), Ok(cooldown_ms)) = (
+                fields[0].parse::<u64>(),
+                fields[3].parse::<f64>(),
+                fields[4].parse::<f64>(),
+            ) else { continue };
+            if !power.is_finite() || !cooldown_ms.is_finite() || cooldown_ms <= 0.0 {
+                continue;
+            }
+            by_species.entry(id).or_default().push(TraceMove {
+                move_type: fields[1].to_owned(),
+                special: fields[2] == "S",
+                power,
+                cooldown_ms,
+            });
+        }
+        by_species
+    }).get(&species_id).cloned().unwrap_or_default()
 }
 
 fn slot_key(value: &Value) -> String {
