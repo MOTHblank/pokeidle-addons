@@ -355,7 +355,7 @@ pub(super) fn draw_overview_card(
                 ui.label(RichText::new(tr("Last confirmed data; reconnecting"))
                     .size(10.0).color(WARN));
             }
-            draw_overview_matchup(app, ui, health, fresh, native_view, boss_view);
+            draw_overview_matchup(app, ui, index, health, fresh, native_view, boss_view);
             ui.add_space(6.0);
             if app.workspace.dashboard_session_view {
                 draw_overview_session(ui, native_view);
@@ -829,10 +829,96 @@ fn overview_combat_image(
         });
 }
 
+fn overview_team_member_usable(
+    view: &HuntView,
+    pokemon: &native_hunts::PokemonInfo,
+) -> bool {
+    pokemon.starter || view.trainer_level
+        .is_some_and(|level| pokemon.level <= level.saturating_add(5))
+}
+
+fn draw_overview_team_menu(
+    app: &mut ControllerApp,
+    ui: &mut egui::Ui,
+    index: usize,
+    fresh: bool,
+    view: Option<&HuntView>,
+) {
+    ui.menu_button(
+        RichText::new(tr("Your Pokémon")).size(9.0).color(DIM),
+        |ui| {
+            ui.set_min_width(210.0);
+            let Some(view) = view else {
+                ui.label("—");
+                return;
+            };
+            if !view.roster_ready {
+                ui.spinner();
+                return;
+            }
+
+            let mut team = view.pokemon_roster.iter()
+                .filter(|pokemon| pokemon.slot.is_some())
+                .collect::<Vec<_>>();
+            team.sort_by_key(|pokemon| (pokemon.slot.unwrap_or(u64::MAX), pokemon.id));
+            if team.is_empty() {
+                ui.label("—");
+                return;
+            }
+
+            let active_id = view.active_pokemon.as_ref().map(|pokemon| pokemon.id);
+            for pokemon in team {
+                let active = active_id == Some(pokemon.id);
+                let usable = overview_team_member_usable(view, pokemon);
+                let can_switch = fresh && !active && usable;
+                let label = format!(
+                    "{}{}{} · Lv. {}",
+                    if active { "● " } else { "" },
+                    if pokemon.shiny { "★ " } else { "" },
+                    compact_text(&pokemon.name, 22),
+                    pokemon.level,
+                );
+                let mut response = ui.add_enabled(
+                    can_switch,
+                    egui::Button::new(RichText::new(label).size(10.0))
+                        .min_size(egui::vec2(210.0, 27.0)),
+                );
+                if active {
+                    response = response.on_hover_text(tr("Active"));
+                } else if !fresh {
+                    response = response.on_hover_text(tr("No live connection"));
+                } else if !usable {
+                    let minimum = pokemon.level.saturating_sub(5).max(1);
+                    response = response.on_hover_text(
+                        tr_dynamic(format!("Requires trainer Lv {minimum}"))
+                    );
+                }
+                if response.clicked() {
+                    let result = app.runtimes[index].game.native.as_ref()
+                        .ok_or_else(|| "No live connection".to_owned())
+                        .and_then(|native|
+                            native.send_command(GameCommand::TeamActive(pokemon.id)));
+                    match result {
+                        Ok(()) => {
+                            app.set_status(
+                                format!("{} {}", tr("Switching…"), pokemon.name),
+                                false,
+                            );
+                            ui.close();
+                        }
+                        Err(error) => app.set_status(error, true),
+                    }
+                }
+            }
+        },
+    );
+}
+
 /// Matchup is always visible, even when the card's lower metrics show Session.
 fn draw_overview_matchup(
     app: &mut ControllerApp,
     ui: &mut egui::Ui,
+    index: usize,
     health: &Health,
     fresh: bool,
     view: Option<&HuntView>,
@@ -863,8 +949,7 @@ fn draw_overview_matchup(
         } else { "—".into() });
     let combat = overview_combat_state(view, fresh);
     ui.columns(2, |cols| {
-        cols[0].label(RichText::new(tr("Your Pokémon"))
-            .size(9.0).color(DIM));
+        draw_overview_team_menu(app, &mut cols[0], index, fresh, view);
         cols[0].horizontal(|ui| {
             overview_combat_image(&mut app.visuals, ui,
                 pokemon.and_then(|p| if p.shiny { p.shiny_looktype } else { p.looktype }),
@@ -1275,8 +1360,25 @@ fn history_day_label(day:u64)->String {
 }
 #[cfg(test)]
 mod history_ui_tests {
-    use super::{history_day_label, overview_boss, overview_boss_key};
+    use super::{
+        history_day_label, overview_boss, overview_boss_key, overview_team_member_usable,
+    };
     use crate::native_boss::BossView;
+    use crate::native_hunts::{HuntView, PokemonInfo};
+
+    #[test]
+    fn team_switch_uses_upstream_trainer_level_allowance() {
+        let view = HuntView { trainer_level: Some(20), ..Default::default() };
+        let allowed = PokemonInfo { level: 25, ..Default::default() };
+        let blocked = PokemonInfo { level: 26, ..Default::default() };
+        let starter = PokemonInfo { level: 999, starter: true, ..Default::default() };
+        assert!(overview_team_member_usable(&view, &allowed));
+        assert!(!overview_team_member_usable(&view, &blocked));
+        assert!(overview_team_member_usable(&view, &starter));
+
+        let unknown = HuntView::default();
+        assert!(!overview_team_member_usable(&unknown, &allowed));
+    }
 
     #[test]
     fn active_boss_remains_visible_without_playable_catalog() {

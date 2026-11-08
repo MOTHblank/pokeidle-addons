@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 pub enum GameCommand {
     Throw { ball_id: u64, slot: u64 },
     Hunt(String),
+    /// Select a Pokémon already assigned to the current team.
+    TeamActive(u64),
     /// Game-server Outland drop tier (independent of hunt location).
     OutlandTier(u8),
     Center,
@@ -32,6 +34,7 @@ impl GameCommand {
         match self {
             Self::Throw { ball_id, slot } => json!({"t":"ball.throw","ballId":ball_id,"slot":slot}),
             Self::Hunt(slug) => json!({"t":"hunt.select","slug":slug}),
+            Self::TeamActive(id) => json!({"t":"team.active","pokemonId":id}),
             Self::OutlandTier(tier) => json!({"t":"outland.tier","tier":tier}),
             Self::Center => json!({"t":"centro.ir"}),
             Self::GiveUp => json!({"t":"centro.desistir"}),
@@ -56,6 +59,7 @@ impl GameCommand {
             Self::Throw{ball_id,..} => *ball_id>0,
             Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            Self::TeamActive(id) => *id > 0,
             Self::OutlandTier(tier) => (1..=8).contains(tier),
             Self::Center | Self::GiveUp | Self::BossStop | Self::BossLeave | Self::BossExit => true,
             Self::BossStart { key, .. } | Self::BossEnter(key) |
@@ -509,6 +513,13 @@ mod protocol_command_tests {
         }
         assert!(!GameCommand::OutlandTier(0).is_valid());
         assert!(!GameCommand::OutlandTier(9).is_valid());
+    }
+    #[test]
+    fn team_active_uses_upstream_wire_format() {
+        assert_eq!(GameCommand::TeamActive(42).wire(),
+            json!({"t":"team.active","pokemonId":42}));
+        assert!(GameCommand::TeamActive(42).is_valid());
+        assert!(!GameCommand::TeamActive(0).is_valid());
     }
     #[test]
     fn sell_command_uses_managers_confirmed_wire_format() {
