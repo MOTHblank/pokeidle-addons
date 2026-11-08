@@ -121,7 +121,10 @@ pub struct Forecast {
     pub combat_gold_h: f64,
     pub trainer_xp_per_kill: f64,
     pub pokemon_xp_per_kill: f64,
+    /// Total cycle time used by KPH: dead time + effective combat.
     pub seconds_per_kill: f64,
+    pub combat_seconds_per_kill: f64,
+    pub dead_time_seconds_per_kill: f64,
     pub coverage: f64,
     pub calibrated: bool,
     pub deaths_h: f64,
@@ -476,6 +479,8 @@ pub fn estimate_with_aoe(
         trainer_xp_per_kill:base_xp(hunt.level)*bonus(view,true),
         pokemon_xp_per_kill:base_xp(hunt.level)*bonus(view,false),
         seconds_per_kill:pace.seconds_per_kill,
+        combat_seconds_per_kill:pace.combat_seconds_per_kill,
+        dead_time_seconds_per_kill:pace.dead_time_seconds_per_kill,
         coverage:pace.coverage,
         calibrated:false, // model is independent of observed current-hunt pace
         deaths_h:pace.deaths_h,
