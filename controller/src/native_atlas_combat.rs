@@ -1,4 +1,4 @@
-//! Native Hunt Atlas combat and field-throughput model adapted from Hunt for PokéIdle 1.0.3.
+//! Native Hunt Atlas combat model; map pacing is vendored from /hunt for PokéIdle 1.0.17.
 //! Pure, deterministic forecasts: no writes to game state, sessions or server hunt statistics.
 use super::{damage, effect, Reference, ReferenceSpecies};
 use crate::native_hunts::{HuntEntry, PokemonInfo};
