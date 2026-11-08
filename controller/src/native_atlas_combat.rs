@@ -169,11 +169,19 @@ fn replenishment_cap(hunt: &HuntEntry, n: usize) -> f64 {
     // not an assertion about the actual arrival time at every location.
     n as f64*3600.0/65.0
 }
-fn single_target_kills(d: &[f64], cycle_s: f64, hunt: &HuntEntry) -> f64 {
+fn player_tile_s(bicycle_factor:f64)->f64 {
+    let factor=if bicycle_factor.is_finite()&&bicycle_factor>1.0 {
+        bicycle_factor
+    } else {1.0};
+    PLAYER_TILE_S/factor
+}
+fn single_target_kills(
+    d: &[f64], cycle_s: f64, hunt: &HuntEntry, player_tile_s:f64
+) -> f64 {
     let n=d.len();
     let average=d.iter().sum::<f64>()/n as f64;
-    let walk=average*PLAYER_TILE_S*SEARCH_FRACTION;
-    let meeting=WILD_TILE_S*PLAYER_TILE_S/(WILD_TILE_S+PLAYER_TILE_S);
+    let walk=average*player_tile_s*SEARCH_FRACTION;
+    let meeting=WILD_TILE_S*player_tile_s/(WILD_TILE_S+player_tile_s);
     let mut t=0.0f64;
     for x in d { t=(t+cycle_s+walk).max(x*meeting); }
     (3600.0/cycle_s)
@@ -195,6 +203,7 @@ pub(super) fn simulate(
     hunt: &HuntEntry, mon: &PokemonInfo, player: &ReferenceSpecies,
     r: &Reference, stats: &[f64;6], distances: Option<&Vec<f64>>,
     aoe_enabled: bool, seasonal:Option<&str>, gym_multiplier:f64,
+    bicycle_factor:f64,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
     let d=spawn_distances(hunt,distances);
@@ -263,7 +272,10 @@ pub(super) fn simulate(
     hit_mean/=weight;
     incoming_dps/=weight;
     let cycle=(ttk+RETARGET_S).max(MIN_CYCLE_S);
-    let solo_kills_h=single_target_kills(&d,cycle,hunt);
+    // Bicycle speed divides only the player's walking step. It does not
+    // accelerate attacks, wild movement, retargeting, wave gaps or respawns.
+    let player_tile_s=player_tile_s(bicycle_factor);
+    let solo_kills_h=single_target_kills(&d,cycle,hunt,player_tile_s);
     let mut kills_h=solo_kills_h;
     let aoe=aoe_enabled;
     let mut engaged=1.0;
@@ -281,7 +293,7 @@ pub(super) fn simulate(
     let incoming_damage_per_kill=incoming_dps*engaged*ttk;
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
-    let recovery=RESPAWN_S+d.iter().sum::<f64>()/count as f64*PLAYER_TILE_S;
+    let recovery=RESPAWN_S+d.iter().sum::<f64>()/count as f64*player_tile_s;
     let alive_s=kills_per_life*3600.0/kills_h.max(1e-6);
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
@@ -347,6 +359,20 @@ mod tests {
         let learned=vec![3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0];
         assert_eq!(spawn_distances(&hunt,Some(&learned)),learned);
         assert_eq!(spawn_distances(&hunt,None),vec![DEFAULT_DISTANCE;8]);
+    }
+    #[test]
+    fn bicycle_factor_divides_only_player_walking_time() {
+        assert!((player_tile_s(1.0)-0.26).abs()<1e-12);
+        assert!((player_tile_s(2.0)-0.13).abs()<1e-12);
+        assert!((player_tile_s(f64::NAN)-0.26).abs()<1e-12);
+        let hunt=HuntEntry{level:150,total_spawns:16,..Default::default()};
+        let distances=vec![40.0;16];
+        let foot=single_target_kills(&distances,2.0,&hunt,player_tile_s(1.0));
+        let legendary=single_target_kills(&distances,2.0,&hunt,player_tile_s(2.0));
+        assert!(legendary>foot);
+        // AoE arrival is wild movement only, so bicycle speed is intentionally
+        // absent from nativeAoeKills/aoe_kills.
+        assert_eq!(aoe_kills(&distances,2.0,&hunt),aoe_kills(&distances,2.0,&hunt));
     }
     #[test]
     fn player_speed_iv_reduces_global_gap_to_a_floor() {
