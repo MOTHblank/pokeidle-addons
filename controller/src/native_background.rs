@@ -627,6 +627,28 @@ impl NativeSession {
                 return Err("Requested hunt is not in the server-provided unlocked hunt list".into());
             }
         }
+        if let GameCommand::TeamActive(id) = &command {
+            let current = self.hunt_snapshot();
+            if !current.roster_ready {
+                return Err("Waiting for the server-provided Pokémon roster".into());
+            }
+            let pokemon = current.pokemon_roster.iter().find(|pokemon| pokemon.id == *id)
+                .ok_or_else(|| "Pokémon is not present in the authoritative roster".to_owned())?;
+            if pokemon.slot.is_none() {
+                return Err("Only Pokémon in the current team can become active".into());
+            }
+            if current.active_pokemon.as_ref().is_some_and(|active| active.id == *id) {
+                return Err("That Pokémon is already active".into());
+            }
+            if let Some(trainer_level) = current.trainer_level {
+                if !pokemon.starter && pokemon.level > trainer_level.saturating_add(5) {
+                    return Err(format!(
+                        "Trainer level {trainer_level} is too low for {} (Lv. {})",
+                        pokemon.name, pokemon.level
+                    ));
+                }
+            }
+        }
         if !command.is_valid() {
             return Err("This game action is not available".into());
         }
