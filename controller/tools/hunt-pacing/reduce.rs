@@ -677,9 +677,15 @@ fn observe_hunt_mapping(
     if record.packet_type.as_deref() != Some("campo.init") {
         return;
     }
-    let Some(slug) = record.hunt_slug.as_deref().filter(|slug| !slug.is_empty()) else {
+    let Some(slug) = record.field_slug.as_deref().filter(|slug| !slug.is_empty()) else {
         return;
     };
+    // HuntIntel adopts campo.init.slug only for a confirmed unlocked hunt.
+    // Requiring agreement prevents a Center/special scene from being attached
+    // to the previous hunt merely because HuntView still remembers it.
+    if record.hunt_slug.as_deref() != Some(slug) {
+        return;
+    }
     let Some(map) = record.map_id.as_deref().filter(|map| !map.is_empty()) else {
         return;
     };
