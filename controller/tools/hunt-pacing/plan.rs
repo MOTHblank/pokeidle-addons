@@ -1,4 +1,4 @@
-use crate::reduce::{ProfileStats, ReducedDataset};
+use crate::reduce::ReducedDataset;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -36,6 +36,8 @@ pub struct CalibrationJob {
 
 pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan {
     let corpus = corpus();
+    let empty = empty_reduced();
+    let baseline = reduced.unwrap_or(&empty);
     let mut jobs = Vec::new();
     let mut seen = BTreeSet::<(String, String)>::new();
 
@@ -84,7 +86,7 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
     for (hunt, profile, purpose, notes) in pilot_candidates(&corpus) {
         add_job(
             &mut jobs, &mut seen,
-            reduced.unwrap_or(&empty_reduced()),
+            baseline,
             &corpus, &hunt, &profile, purpose, notes,
         );
     }
