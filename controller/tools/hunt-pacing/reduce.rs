@@ -47,6 +47,8 @@ pub struct KillBoundary {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WindowSample {
     pub session_id: String,
+    #[serde(default)]
+    pub run_id: Option<String>,
     pub map_id: String,
     pub hunt_slug: Option<String>,
     pub profile: String,
@@ -106,6 +108,7 @@ pub struct ReducedDataset {
 #[derive(Clone, Debug)]
 struct Segment {
     session_id: String,
+    run_id: Option<String>,
     map_id: String,
     hunt_slug: Option<String>,
     profile: String,
@@ -246,6 +249,7 @@ fn reduce_session(
         if segment.is_none() {
             segment = Some(Segment {
                 session_id: record.session_id.clone(),
+                run_id: record.run_id.clone(),
                 map_id: map_id.to_owned(),
                 hunt_slug: record.hunt_slug.clone(),
                 profile: profile.clone(),
@@ -392,6 +396,11 @@ fn first_field_movement(record: &TraceRecord) -> Option<Value> {
 }
 
 fn accepted_profile(record: &TraceRecord) -> Option<String> {
+    if record.expected_hunt.as_deref().is_some_and(|expected|
+        record.hunt_slug.as_deref() != Some(expected))
+    {
+        return None;
+    }
     if is_special_scene(record) || in_center(record) || active_pokemon_id(record).is_none() {
         return None;
     }
@@ -578,6 +587,7 @@ fn finish_segment(
 
     windows.push(WindowSample {
         session_id: segment.session_id,
+        run_id: segment.run_id,
         map_id: segment.map_id,
         hunt_slug: segment.hunt_slug,
         profile: segment.profile,
@@ -723,6 +733,8 @@ mod tests {
             profile: "test".into(),
             declared_profile: "st1".into(),
             game_version: "1.0".into(),
+            run_id: None,
+            expected_hunt: None,
             recv_unix_ms: 1,
             recv_monotonic_ms: 1,
             server_ts: Some(1),
