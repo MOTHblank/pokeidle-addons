@@ -601,11 +601,14 @@ fn observe_hunt_mapping(
     record: &TraceRecord,
     observed: &mut BTreeMap<String, Option<String>>,
 ) {
+    // The collector persists the current map ID on later packets for grouping,
+    // but hunt→map identity is learned only from the authoritative scene init.
+    if record.packet_type.as_deref() != Some("campo.init") {
+        return;
+    }
     let Some(slug) = record.hunt_slug.as_deref().filter(|slug| !slug.is_empty()) else {
         return;
     };
-    // Only authoritative campo.init-derived identities enter this table.
-    // Records before the first scene have no map identity and are ignored.
     let Some(map) = record.map_id.as_deref().filter(|map| !map.is_empty()) else {
         return;
     };
