@@ -34,7 +34,7 @@ fn run() -> Result<(), String> {
             }
             let config = parse_config(&args[3..])?;
             let sessions = trace::load_sessions(Path::new(&args[1]))?;
-            let reduced = reduce::reduce_sessions(&sessions, config);
+            let reduced = reduce::reduce_sessions(&sessions, config)?;
             export::write_reduced(Path::new(&args[2]), &reduced)?;
             println!(
                 "reduced {} trace file(s), {} measured map(s) -> {}",
@@ -78,7 +78,7 @@ fn run() -> Result<(), String> {
             fs::create_dir_all(&out)
                 .map_err(|error| format!("could not create {}: {error}", out.display()))?;
             let sessions = trace::load_sessions(raw)?;
-            let reduced = reduce::reduce_sessions(&sessions, config);
+            let reduced = reduce::reduce_sessions(&sessions, config)?;
             let reduced_path = out.join("reduced.json");
             let dataset_path = out.join("moth-pacing.json");
             let tsv_path = out.join("moth-pacing.tsv");
