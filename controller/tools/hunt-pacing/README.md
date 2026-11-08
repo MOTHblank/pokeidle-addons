@@ -28,8 +28,10 @@ collision geometry are not inputs to the reducer.
 The runtime hook is `src/hunt_pacing_trace.rs`. It is off unless
 `MOTH_HUNT_PACING_TRACE=1` or `MOTH_HUNT_PACING_TRACE_DIR` is set.
 
-Use `hunt-pacing collect` to print the current environment switches. The
-default trace directory is:
+Use `hunt-pacing collect` to print the current environment switches. Game
+version is taken from the authenticated welcome when exposed by the server;
+`MOTH_HUNT_PACING_GAME_VERSION` can override it for controlled collection.
+The default trace directory is:
 
 ```text
 <Moth data root>/diagnostics/hunt-pacing/raw/
