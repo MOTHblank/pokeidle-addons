@@ -810,15 +810,42 @@ mod tests {
         assert!(!forecast.calibrated);
         assert!(forecast.kills_h>0.0 && forecast.kills_h.is_finite());
         assert_eq!(forecast.trainer_xp_h,forecast.pokemon_xp_h);
+        assert_eq!(forecast.pacing.source,ForecastPacingSource::GlobalFallback);
+        assert_eq!(forecast.pacing.map_id,None);
+        assert!((forecast.pacing.baseline_seconds_per_kill-3.406).abs()<1e-12);
+        assert!((forecast.pacing.p10_seconds_per_kill-3.27*0.91).abs()<1e-12);
+        assert!((forecast.pacing.p90_seconds_per_kill-3.55*1.09).abs()<1e-12);
+
+        let exact_hunt=HuntEntry{slug:"caterpie".into(),..hunt.clone()};
+        let exact=estimate(&view,&exact_hunt,&data).unwrap();
+        assert_eq!(exact.pacing.source,ForecastPacingSource::ExactVendoredMap);
+        assert_eq!(exact.pacing.map_id.as_deref(),Some("heracross"));
+        assert!((exact.pacing.baseline_seconds_per_kill-3.422).abs()<1e-12);
+        assert!((exact.pacing.p10_seconds_per_kill-3.422*0.91).abs()<1e-12);
+        assert!((exact.pacing.p90_seconds_per_kill-3.422*1.09).abs()<1e-12);
+
+        let learned_hunt=HuntEntry{slug:"future-hunt".into(),..hunt.clone()};
+        view.learned_hunt_maps=std::sync::Arc::new(
+            [("future-hunt".to_owned(),"gerado_normal_01".to_owned())]
+                .into_iter().collect()
+        );
+        let learned=estimate(&view,&learned_hunt,&data).unwrap();
+        assert_eq!(learned.pacing.source,ForecastPacingSource::LearnedMapId);
+        assert_eq!(learned.pacing.map_id.as_deref(),Some("gerado_normal_01"));
         // Detection is not consent to apply the AoE simulation.
         view.active_pokemon.as_mut().unwrap().tm_aoe=true;
         let unchecked=estimate_with_aoe(&view,&hunt,&data,false).unwrap();
         assert!(!unchecked.aoe);
         // Checked mode is explicitly modeled even if the server omits its flag.
         view.active_pokemon.as_mut().unwrap().tm_aoe=false;
-        let checked=estimate_with_aoe(&view,&hunt,&data,true).unwrap();
+        let checked=estimate_with_aoe(&view,&exact_hunt,&data,true).unwrap();
         assert!(checked.aoe);
         assert!(checked.kills_h>=unchecked.kills_h);
+        assert_eq!(checked.pacing.source,ForecastPacingSource::ExactVendoredMap);
+        assert_eq!(checked.pacing.map_id.as_deref(),Some("heracross"));
+        assert!(checked.pacing.baseline_seconds_per_kill<=exact.pacing.baseline_seconds_per_kill);
+        assert!(checked.pacing.p10_seconds_per_kill<=checked.pacing.baseline_seconds_per_kill);
+        assert!(checked.pacing.p90_seconds_per_kill>=checked.pacing.baseline_seconds_per_kill);
         view.bonuses.trainer_event_pct=100.0;
         let forecast=estimate(&view,&hunt,&data).unwrap();
         assert!(forecast.trainer_xp_h>forecast.pokemon_xp_h);
