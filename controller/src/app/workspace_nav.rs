@@ -110,7 +110,11 @@ pub(super) fn draw_seasonal_day_badge(
         .corner_radius(6.0)
         .inner_margin(Margin::symmetric(10,6))
         .show(ui,|ui|{
+            // Keep the badge card-sized even when the header has lots of spare
+            // horizontal room. It may still flex between these bounds so the
+            // compact layout remains natural at narrower window widths.
             ui.set_min_width(76.0);
+            ui.set_max_width(108.0);
             ui.set_min_height(38.0);
             ui.vertical_centered(|ui|{
                 ui.label(RichText::new(name).size(11.0).strong().color(fg));
