@@ -32,6 +32,7 @@ mod native_twitch_login;
 mod native_atlas;
 mod native_atlas_models;
 mod native_atlas_pacing;
+mod hunt_pacing_trace;
 mod native_restock;
 mod native_tls;
 mod logging;

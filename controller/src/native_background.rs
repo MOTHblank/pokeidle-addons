@@ -8,6 +8,7 @@ use crate::native_gameplay::{GameCommand, Gameplay};
 use crate::native_capture_config::CatchSettings;
 use crate::native_gameplay::GameplayStatus;
 use crate::native_hunts::{HuntIntel, HuntView};
+use crate::hunt_pacing_trace::HuntPacingCollector;
 use crate::native_hunt_navigation::HuntNavigator;
 use crate::native_boss::{BossManager, BossView};
 use crate::native_history::{HistoryRecorder, HistorySnapshot, HistoryForecast};
@@ -1081,6 +1082,9 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
     let (metadata_tx, metadata_rx) = mpsc::channel::<Result<crate::native_items::ItemCatalog, String>>();
     let mut item_metadata: Option<crate::native_items::ItemCatalog> = None;
     let mut last_metadata_attempt: Option<Instant> = None;
+    // Diagnostic-only empirical hunt pacing trace. Disabled collectors own no
+    // file and observe() is never called outside the already-decoded socket path.
+    let mut pacing_collector = HuntPacingCollector::new(profile);
     while !stop.load(Ordering::Relaxed) {
         match first_session.take().map(Ok).unwrap_or_else(|| open_session(profile,&mut credentials)) {
             Ok((mut socket, frame)) => {
@@ -1101,6 +1105,7 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                     restock.merge_item_metadata(catalog);
                 }
                 hunt_intel.ingest_value(&frame, received_at);
+                pacing_collector.connection_open(&frame, &hunt_intel.view, received_at);
                 pvp.on_frame(&frame, received_at);
                 boss_manager.ingest(&frame);
                 let mut navigator = HuntNavigator::default();
@@ -1653,6 +1658,7 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                                     }
                                 }
                                 hunt_intel.ingest_value(&frame, received_at);
+                                pacing_collector.observe(&frame, &hunt_intel.view, received_at);
                                 pvp.on_frame(&frame, received_at);
                                 if frame.get("t").and_then(Value::as_str) == Some("pvp") {
                                     if let Some(reason) = frame.get("filaRecusa")
@@ -1737,6 +1743,15 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                         _ => {}
                     }
                 }
+                let trace_close_reason = if stop.load(Ordering::Relaxed) {
+                    "stop"
+                } else if login_required.is_some() {
+                    "auth-required"
+                } else {
+                    "reconnect"
+                };
+                pacing_collector.connection_closed(
+                    trace_close_reason, &hunt_intel.view, Instant::now());
                 if !stop.load(Ordering::Relaxed) {
                     while command_rx.try_recv().is_ok() {}
                     history_recorder.maybe_flush(true);
