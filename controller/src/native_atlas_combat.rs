@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn pacing_constants_match_initial_hunt_calibration() {
         assert!((hunt_pacing_model::WALKING_PORTION-0.83).abs()<1e-12);
-        assert!((hunt_pacing_model::WALKING_FLOOR_S-1.41).abs()<1e-12);
+        assert!((hunt_pacing_model::FIXED_FLOOR_S-1.41).abs()<1e-12);
         assert!((hunt_pacing_model::COMBAT_INTERACTION_TAU_S-2.8).abs()<1e-12);
     }
 
@@ -506,7 +506,7 @@ mod tests {
         assert!(foot_floor.walking_s.abs()<1e-12);
         assert!(bike_floor.walking_s.abs()<1e-12);
         assert_eq!(foot_floor.fixed_s,bike_floor.fixed_s);
-        assert!(foot_floor.fixed_s>=hunt_pacing_model::WALKING_FLOOR_S);
+        assert!(foot_floor.fixed_s>=hunt_pacing_model::FIXED_FLOOR_S);
     }
 
     #[test]
