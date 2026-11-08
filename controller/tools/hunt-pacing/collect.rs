@@ -2,6 +2,8 @@ pub const ENABLE_ENV: &str = "MOTH_HUNT_PACING_TRACE";
 pub const DIRECTORY_ENV: &str = "MOTH_HUNT_PACING_TRACE_DIR";
 pub const PROFILE_ENV: &str = "MOTH_HUNT_PACING_PROFILE";
 pub const GAME_VERSION_ENV: &str = "MOTH_HUNT_PACING_GAME_VERSION";
+pub const HITS_ENV: &str = "MOTH_HUNT_PACING_HITS";
+pub const COMBAT_SECONDS_ENV: &str = "MOTH_HUNT_PACING_COMBAT_SECONDS";
 
 pub fn instructions() -> String {
     format!(
@@ -14,6 +16,10 @@ Set:
 Optional:
   {GAME_VERSION_ENV}=<game version override>
   {DIRECTORY_ENV}=<raw trace directory>
+
+For deadtime-validation, also set:
+  {HITS_ENV}=<controlled hits needed per kill>
+  {COMBAT_SECONDS_ENV}=<combat seconds per kill for this controlled setup>
 
 The collector reads the game version from the authenticated welcome when the
 server exposes it; {GAME_VERSION_ENV} is only an explicit override.
