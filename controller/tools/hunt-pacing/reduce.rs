@@ -752,6 +752,20 @@ mod tests {
     }
 
     #[test]
+    fn expected_hunt_gate_never_admits_another_hunt() {
+        let mut record = trace_record("aipom", serde_json::json!({}));
+        record.calibration = serde_json::json!({
+            "active": {"id": 1},
+            "bicycle": {"factor": 1.0},
+            "fingerprint": {"tm_aoe": false}
+        });
+        record.expected_hunt = Some("caterpie".into());
+        assert!(accepted_profile(&record).is_none());
+        record.expected_hunt = Some("aipom".into());
+        assert_eq!(accepted_profile(&record).as_deref(), Some("st1"));
+    }
+
+    #[test]
     fn special_scene_filter_does_not_match_hunt_name_substrings() {
         let ordinary = trace_record("mabosstiff_alola", serde_json::json!({}));
         assert!(!is_special_scene(&ordinary));
