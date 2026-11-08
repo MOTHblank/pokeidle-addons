@@ -161,14 +161,14 @@ pub(super) fn simulate(
     hunt: &HuntEntry, mon: &PokemonInfo, player: &ReferenceSpecies,
     r: &Reference, stats: &[f64;6],
     aoe_enabled: bool, seasonal:Option<&str>, gym_multiplier:f64,
-    bicycle_factor:f64,
+    bicycle_factor:f64, learned_map:Option<&str>,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
-    let pacing=native_atlas_pacing::resolve(&hunt.slug);
+    let pacing=native_atlas_pacing::resolve(&hunt.slug,learned_map);
     // The vendored map pace is the authoritative one-shot downtime baseline.
     // Passing it through the attack scheduler also lets cooldowns advance during
     // the same map-specific between-kill time used by the final throughput.
-    let downtime=pacing.s;
+    let downtime=pacing.base_seconds_per_kill;
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
     let mut weight=0.0;
     let mut ttk=0.0;
@@ -235,7 +235,7 @@ pub(super) fn simulate(
     // ritmo.js gives the one-shot, on-foot total pace per map. Combat slower
     // than the one-shot floor is added on top; bicycles divide only the
     // movement component inferred from that authoritative baseline.
-    let solo_kills_h=single_target_kills(pacing.s,cycle,bicycle_factor);
+    let solo_kills_h=single_target_kills(pacing.base_seconds_per_kill,cycle,bicycle_factor);
     let mut kills_h=solo_kills_h;
     let aoe=aoe_enabled;
     let mut engaged=1.0;
@@ -243,7 +243,7 @@ pub(super) fn simulate(
         // Only an explicit per-account Atlas checkbox activates this mode.
         // Never infer it from a live monster's partially populated TM flags.
         // The AoE scenario is never modeled as slower than single-target.
-        kills_h=kills_h.max(aoe_kills(pacing.s_aoe,cycle,ttk,bicycle_factor));
+        kills_h=kills_h.max(aoe_kills(pacing.aoe_seconds_per_kill,cycle,ttk,bicycle_factor));
         engaged=(1.0+kills_h*ttk/3600.0).min(MAX_AOE_ENGAGED);
     }
     let own_hp=mon.max_hp.filter(|hp|*hp>0).map(|hp|hp as f64)
@@ -253,7 +253,7 @@ pub(super) fn simulate(
     let incoming_damage_per_kill=incoming_dps*engaged*ttk;
     // The extension's default is automatic potions. Non-lethal damage is healed.
     let kills_per_life=if one_hit {own_hp/fatal_hit.max(1e-6)} else {999.0};
-    let recovery=RESPAWN_S+movement_component_s(pacing.s,bicycle_factor);
+    let recovery=RESPAWN_S+movement_component_s(pacing.base_seconds_per_kill,bicycle_factor);
     let alive_s=kills_per_life*3600.0/kills_h.max(1e-6);
     let uptime=alive_s/(alive_s+recovery);
     let deaths_h=if kills_per_life>=999.0 {0.0}else{3600.0/(alive_s+recovery)};
@@ -295,7 +295,7 @@ mod tests {
     }
     #[test]
     fn one_shot_foot_pace_matches_vendored_map_dataset() {
-        let pace=native_atlas_pacing::resolve("caterpie");
+        let pace=native_atlas_pacing::resolve("caterpie",None);
         let kills=single_target_kills(pace.s,MIN_CYCLE_S,1.0);
         assert!((3600.0/kills-3.422).abs()<1e-12);
         let aoe=aoe_kills(pace.s_aoe,MIN_CYCLE_S,0.01,1.0);
@@ -303,14 +303,24 @@ mod tests {
     }
     #[test]
     fn unknown_hunt_uses_vendored_global_median() {
-        let pace=native_atlas_pacing::resolve("__unknown_hunt__");
-        assert!(pace.fallback);
+        let pace=native_atlas_pacing::resolve("__unknown_hunt__",None);
+        assert_eq!(pace.source,native_atlas_pacing::PacingSource::GlobalFallback);
         let kills=single_target_kills(pace.s,MIN_CYCLE_S,1.0);
         assert!((3600.0/kills-3.406).abs()<1e-12);
     }
     #[test]
+    fn learned_map_upgrades_unknown_hunt_to_shared_map_pacing() {
+        let pace=native_atlas_pacing::resolve("__new_hunt__",Some("gerado_normal_01"));
+        assert_eq!(pace.source,native_atlas_pacing::PacingSource::LearnedCampoInit);
+        let aipom=native_atlas_pacing::resolve("aipom",None);
+        assert_eq!(pace.map_id,aipom.map_id);
+        assert_eq!(pace.base_seconds_per_kill,aipom.base_seconds_per_kill);
+        assert_eq!(pace.uncertainty,aipom.uncertainty);
+    }
+
+    #[test]
     fn bicycle_factor_divides_only_map_movement_component() {
-        let pace=native_atlas_pacing::resolve("caterpie");
+        let pace=native_atlas_pacing::resolve("caterpie",None);
         assert!((movement_component_s(pace.s,1.0)-(pace.s-MIN_CYCLE_S)).abs()<1e-12);
         assert!((movement_component_s(pace.s,2.0)-(pace.s-MIN_CYCLE_S)/2.0).abs()<1e-12);
         assert!((movement_component_s(pace.s,f64::NAN)-(pace.s-MIN_CYCLE_S)).abs()<1e-12);
