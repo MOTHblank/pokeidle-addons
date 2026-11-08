@@ -2,6 +2,8 @@ mod collect;
 mod export;
 mod reduce;
 mod trace;
+#[path = "../../src/hunt_pacing_model.rs"]
+mod hunt_pacing_model;
 
 use reduce::ReduceConfig;
 use std::env;
