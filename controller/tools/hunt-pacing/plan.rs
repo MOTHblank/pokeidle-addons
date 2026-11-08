@@ -49,14 +49,18 @@ pub fn build(reduced: Option<&ReducedDataset>, limit: usize) -> CalibrationPlan 
                 .find_map(|(hunt, live_map)| (live_map == map_id).then(|| hunt.clone()))
                 .or_else(|| corpus.by_map.get(map_id).and_then(|hunts| hunts.first().cloned()));
             let Some(hunt) = hunt else { continue };
-            add_if_needed(
-                &mut jobs, &mut seen, reduced, &corpus, &hunt, "st1",
-                "finish-observed-map", "Complete ST1 reproducibility on an already observed live map.",
-            );
-            add_if_needed(
-                &mut jobs, &mut seen, reduced, &corpus, &hunt, "aoe",
-                "finish-observed-map", "Complete AoE pacing on an already observed live map.",
-            );
+            if map.profiles.get("st1").map(|stats| stats.samples).unwrap_or(0) < ENOUGH_WINDOWS {
+                add_job(
+                    &mut jobs, &mut seen, reduced, &corpus, &hunt, "st1",
+                    "finish-observed-map", "Complete ST1 reproducibility on an already observed live map.",
+                );
+            }
+            if map.profiles.get("aoe").map(|stats| stats.samples).unwrap_or(0) < ENOUGH_WINDOWS {
+                add_job(
+                    &mut jobs, &mut seen, reduced, &corpus, &hunt, "aoe",
+                    "finish-observed-map", "Complete AoE pacing on an already observed live map.",
+                );
+            }
         }
 
         // Then explicitly test the premise that different hunts sharing one
@@ -129,21 +133,6 @@ pub fn write_json(path: &Path, plan: &CalibrationPlan) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(plan).map_err(|error| error.to_string())?;
     fs::write(path, bytes)
         .map_err(|error| format!("could not write {}: {error}", path.display()))
-}
-
-fn add_if_needed(
-    jobs: &mut Vec<CalibrationJob>,
-    seen: &mut BTreeSet<(String, String)>,
-    reduced: &ReducedDataset,
-    corpus: &Corpus,
-    hunt: &str,
-    profile: &str,
-    purpose: &str,
-    notes: &str,
-) {
-    let completed = completed_windows(reduced, hunt, profile);
-    if completed >= ENOUGH_WINDOWS { return; }
-    add_job(jobs, seen, reduced, corpus, hunt, profile, purpose, notes);
 }
 
 fn add_job(
