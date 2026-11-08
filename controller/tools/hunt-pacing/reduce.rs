@@ -52,8 +52,11 @@ pub struct WindowSample {
     pub profile: String,
     pub bicycle_factor: f64,
     pub scene_generation: u64,
+    #[serde(default)]
     pub measurement_clock: String,
+    #[serde(default)]
     pub start_measurement_ms: u64,
+    #[serde(default)]
     pub end_measurement_ms: u64,
     pub start_recv_monotonic_ms: u64,
     pub end_recv_monotonic_ms: u64,
