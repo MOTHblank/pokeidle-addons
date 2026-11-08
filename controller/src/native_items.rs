@@ -14,10 +14,29 @@ pub struct ItemMeta {
 }
 #[derive(Clone,Debug,Default)]
 pub struct ItemCatalog {pub items:BTreeMap<u64,ItemMeta>}
+/// Server-owned items used by boss rewards are intentionally absent from
+/// /assets/items.json. Keep the small public-client fallback list in sync with
+/// upstream sessao-hunt.mjs so historical boss loot remains readable too.
+fn server_item_name(id:u64)->Option<&'static str> {
+    match id {
+        70014 => Some("Mega Stone Fragment"),
+        70015 => Some("Mega Shiny Stone Fragment"),
+        70090 => Some("Mystic Ticket"),
+        70095 => Some("Safari Ticket"),
+        _ => None,
+    }
+}
 impl ItemCatalog {
     pub fn name(&self,id:u64)->String {
-        self.items.get(&id).map(|m|m.name.clone()).unwrap_or_else(||format!("Item #{id}"))
+        self.items.get(&id).map(|m|m.name.clone())
+            .or_else(||server_item_name(id).map(str::to_owned))
+            .unwrap_or_else(||format!("Item #{id}"))
     }
+}
+pub fn display_name(catalog:Option<&ItemCatalog>,id:u64)->String {
+    catalog.and_then(|catalog|catalog.items.get(&id).map(|m|m.name.clone()))
+        .or_else(||server_item_name(id).map(str::to_owned))
+        .unwrap_or_else(||format!("Item #{id}"))
 }
 pub fn parse(source:&str)->Result<ItemCatalog,String> {
     let data:Value=serde_json::from_str(source)
@@ -65,6 +84,11 @@ mod tests {
         assert_eq!(catalog.name(7),"Heart Stone");
         assert_eq!(catalog.items.get(&7).unwrap().price_gold,None);
         assert_eq!(catalog.name(8),"Item #8");
+        assert_eq!(catalog.name(70014),"Mega Stone Fragment");
+        assert_eq!(catalog.name(70015),"Mega Shiny Stone Fragment");
+        assert_eq!(display_name(None,70090),"Mystic Ticket");
+        assert_eq!(display_name(None,70095),"Safari Ticket");
+        assert_eq!(display_name(None,8),"Item #8");
         assert!(parse(r#"{"items":[]}"#).is_err());
         let priced=parse(r#"{"items":[{"id":200,"name":"Potion",
             "category":"heal","preco":40},{"id":201,"name":"Potion without price"}]}"#).unwrap();

@@ -816,9 +816,10 @@ fn draw_boss_history_card(
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for (id, quantity) in &totals {
-                            let name = app.inventory_catalog.as_ref()
-                                .map(|catalog| catalog.name(*id))
-                                .unwrap_or_else(|| format!("Item #{id}"));
+                            let name = crate::native_items::display_name(
+                                app.inventory_catalog.as_ref(),
+                                *id,
+                            );
                             resource_chip(ui, &format!("×{quantity} {name}"));
                         }
                     });
@@ -929,9 +930,10 @@ fn draw_boss_history_card(
                         tr("No items").to_owned()
                     } else {
                         result.drops.iter().map(|drop| {
-                            let name = app.inventory_catalog.as_ref()
-                                .map(|catalog| catalog.name(drop.item_id))
-                                .unwrap_or_else(|| format!("Item #{}", drop.item_id));
+                            let name = crate::native_items::display_name(
+                                app.inventory_catalog.as_ref(),
+                                drop.item_id,
+                            );
                             format!("{} ×{}", name, drop.quantity)
                         }).collect::<Vec<_>>().join(" · ")
                     };
