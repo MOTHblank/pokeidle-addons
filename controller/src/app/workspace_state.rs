@@ -64,6 +64,8 @@ pub(super) struct WorkspaceState {
     pub(super) boss_history_page: [usize;4],
     pub(super) boss_history_filter: [String;4],
     pub(super) selected_details: Option<usize>,
+    /// Overview active-Pokémon requests awaiting authoritative activeId confirmation.
+    pub(super) pokemon_switch_pending: [Option<(u64, Instant)>;4],
     pub(super) restock_open: [bool;4],
     pub(super) session_reset_confirm: [bool;4],
     pub(super) account_names_dirty: [bool; 4],
@@ -105,6 +107,7 @@ impl Default for WorkspaceState {
             boss_history_page: [0;4],
             boss_history_filter: std::array::from_fn(|_| String::new()),
             selected_details: None,
+            pokemon_switch_pending: std::array::from_fn(|_| None),
             restock_open: [false;4],
             session_reset_confirm: [false;4],
             account_names_dirty: [false; 4],
