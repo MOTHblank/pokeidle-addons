@@ -472,13 +472,14 @@ fn hard_interruption(record: &TraceRecord) -> Option<String> {
 }
 
 fn is_special_scene(record: &TraceRecord) -> bool {
-    let text = [
-        record.hunt_slug.as_deref().unwrap_or_default(),
-        record.field_slug.as_deref().unwrap_or_default(),
-        record.map_id.as_deref().unwrap_or_default(),
-    ].join(" ").to_ascii_lowercase();
-    ["boss", "safari", "mistico", "místico", "mystic", "raid", "pvp", "arena"]
-        .iter().any(|needle| text.contains(needle))
+    // Exact scene IDs only. Substring matching is unsafe: mabosstiff_alola is
+    // an ordinary target hunt even though its slug contains "boss".
+    let field = record.field_slug.as_deref().unwrap_or_default()
+        .trim().to_ascii_lowercase();
+    matches!(
+        field.as_str(),
+        "safari" | "arena_mistica" | "centro" | "center" | "raid" | "pvp"
+    )
 }
 
 fn explicit_attack_actions(record: &TraceRecord) -> u32 {
