@@ -10,7 +10,7 @@ pub(in crate::app) struct EstimateCache {
     pub(super) active_signature: Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     pub(super) active_species_id: Option<u64>,
     pub(super) active_max_hp: Option<u64>,
-    pub(super) bonus_signature: [u64;18],
+    pub(super) bonus_signature: [u64;19],
     pub(super) seasonal_type:Option<String>,
     pub(super) gym_signature:Vec<(String,u8)>,
     pub(super) geo_revisions:Option<Arc<std::collections::BTreeMap<String,u64>>>,
@@ -55,6 +55,7 @@ impl EstimateCache {
             b.authoritative_pokemon_xp_multiplier.map(f64::to_bits).unwrap_or(0),
             b.live_capture_multiplier.to_bits(),b.live_shiny_multiplier.to_bits(),
             b.raid_farm_pct.to_bits(),
+            view.bicycle_factor.unwrap_or(1.0).to_bits(),
         ];
         let seasonal_type=view.seasonal_type.clone();
         let gym_signature=view.gym_podium.iter()
