@@ -370,9 +370,8 @@ mod tests {
         let foot=single_target_kills(&distances,2.0,&hunt,player_tile_s(1.0));
         let legendary=single_target_kills(&distances,2.0,&hunt,player_tile_s(2.0));
         assert!(legendary>foot);
-        // AoE arrival is wild movement only, so bicycle speed is intentionally
-        // absent from nativeAoeKills/aoe_kills.
-        assert_eq!(aoe_kills(&distances,2.0,&hunt),aoe_kills(&distances,2.0,&hunt));
+        // AoE arrival is wild movement only; the bicycle still affects its
+        // death-recovery walk in simulate(), but never wild movement itself.
     }
     #[test]
     fn player_speed_iv_reduces_global_gap_to_a_floor() {
