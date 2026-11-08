@@ -250,6 +250,10 @@ pub struct HuntView {
     /// Catalog quotes are alternatives by currency, not additive costs.
     pub ball_quotes: Arc<BTreeMap<u64,BallQuote>>,
     pub outland_tier:Option<u8>,
+    /// Equipped hunt bicycle. Its factor divides player walking duration only.
+    /// None means on foot; combat cooldowns and wild movement are unaffected.
+    pub bicycle_rarity:Option<String>,
+    pub bicycle_factor:Option<f64>,
     /// Validated eight-tier table from the game's welcome catalog.
     /// Absent catalogs use the pinned upstream v1.314.2 thresholds.
     pub outland_catalog:Option<[(u32,f64);8]>,
@@ -303,6 +307,54 @@ fn parse_seasonal_type(raw:&Value)->Option<String>{
         "FIGHTING"|"POISON"|"GROUND"|"FLYING"|"PSYCHIC"|"BUG"|
         "ROCK"|"GHOST"|"DRAGON"|"DARK"|"STEEL"|"FAIRY"
     ).then_some(kind)
+}
+
+fn canonical_bicycle_rarity(raw:&str)->Option<String>{
+    let folded=raw.trim().to_lowercase()
+        .replace('í',"i").replace('á',"a").replace('é',"e")
+        .replace('ó',"o").replace('ú',"u");
+    matches!(folded.as_str(),"comum"|"incomum"|"rara"|"mitica"|"lendaria")
+        .then_some(folded)
+}
+fn default_bicycle_factors()->BTreeMap<String,f64>{
+    // shared/bicicletas.mjs: +15/+25/+50/+75/+100% movement speed.
+    [("comum",1.15),("incomum",1.25),("rara",1.50),
+     ("mitica",1.75),("lendaria",2.00)]
+        .into_iter().map(|(rarity,factor)|(rarity.to_owned(),factor)).collect()
+}
+fn bicycle_factors_from_welcome(raw:Option<&Value>)->BTreeMap<String,f64>{
+    let mut factors=default_bicycle_factors();
+    for row in raw.and_then(|value|value.get("raridades"))
+        .and_then(Value::as_array).into_iter().flatten() {
+        let Some(rarity)=row.get("id").and_then(Value::as_str)
+            .and_then(canonical_bicycle_rarity) else{continue};
+        let Some(speed)=row.get("velocidade").and_then(Value::as_f64)
+            .filter(|speed|speed.is_finite()&&(0.0..=3.0).contains(speed)) else{continue};
+        factors.insert(rarity,1.0+speed);
+    }
+    factors
+}
+fn same_json_id(a:&Value,b:&Value)->bool{
+    match (a.as_u64(),b.as_u64()) {
+        (Some(a),Some(b))=>a==b,
+        _=>a.as_str().zip(b.as_str()).is_some_and(|(a,b)|a==b),
+    }
+}
+fn equipped_bicycle(raw:&Value,factors:&BTreeMap<String,f64>)
+    ->(Option<String>,Option<f64>)
+{
+    let rarity=raw.get("equipadaRar").and_then(Value::as_str)
+        .and_then(canonical_bicycle_rarity)
+        .or_else(||{
+            let equipped=raw.get("equipada")?;
+            raw.get("lista").and_then(Value::as_array)?.iter()
+                .find(|row|row.get("id").is_some_and(|id|same_json_id(id,equipped)))
+                .and_then(|row|row.get("rar").or_else(||row.get("raridade")))
+                .and_then(Value::as_str).and_then(canonical_bicycle_rarity)
+        });
+    let factor=rarity.as_ref().and_then(|rarity|factors.get(rarity)).copied()
+        .filter(|factor|factor.is_finite()&&*factor>1.0);
+    (rarity.filter(|_|factor.is_some()),factor)
 }
 fn parse_outland_catalog(raw:&Value)->Option<[(u32,f64);8]>{
     let rows=raw.as_array().filter(|rows|rows.len()==8)?;
@@ -372,6 +424,7 @@ pub struct HuntIntel {
     bonus_xp:Option<Value>,
     raid_farm_reported_pct:f64,
     raid_farm_until:u64,
+    bicycle_factors:BTreeMap<String,f64>,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
     geo_wave: Option<(String,Instant,Vec<f64>)>,
     geo_alive: BTreeMap<u64,bool>,
@@ -399,6 +452,7 @@ impl HuntIntel {
             kick_xp_until:0,kick_capture_until:0,kick_shiny_until:0,
             kick_reported_pct:0.0,bonus_xp:None,
             raid_farm_reported_pct:0.0,raid_farm_until:0,
+            bicycle_factors:default_bicycle_factors(),
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
@@ -531,6 +585,8 @@ impl HuntIntel {
         // reconnect; never reuse cached settings from a previous socket.
         self.view.automation=None;
         self.view.seasonal_type=None;
+        self.view.bicycle_rarity=None;
+        self.view.bicycle_factor=None;
         // A reconnect must not classify the new game session from stale VIP
         // state. Auto PvP waits for one of the authoritative VIP signals.
         self.vip_flag=None;
@@ -969,6 +1025,14 @@ impl HuntIntel {
         }
         if seasonal_seen {self.view.seasonal_type=seasonal;}
 
+        // State packets are deltas: only an explicit bicicleta field changes
+        // the equipped bike. BookIdle follows the same merged-state contract.
+        if let Some(raw)=state.get("bicicleta") {
+            let (rarity,factor)=equipped_bicycle(raw,&self.bicycle_factors);
+            self.view.bicycle_rarity=rarity;
+            self.view.bicycle_factor=factor;
+        }
+
         if let Some(raw)=state.get("ginasiosPodio").or_else(||state.get("ginasiosPodium")) {
             let mut podium=BTreeMap::new();
             if let Some(rows)=raw.as_object() {
@@ -1302,6 +1366,9 @@ impl HuntIntel {
                 self.raid_farm_reported_pct=0.0;
                 self.raid_farm_until=0;
                 self.view.seasonal_type=None;
+                self.view.bicycle_rarity=None;
+                self.view.bicycle_factor=None;
+                self.bicycle_factors=bicycle_factors_from_welcome(frame.get("bicicletas"));
                 self.view.gym_podium=Arc::new(BTreeMap::new());
                 self.twitch_xp_until=0;
                 self.twitch_capture_until=0;
@@ -1621,6 +1688,33 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn bicycle_snapshot_uses_equipped_rarity_and_live_speed_table() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"welcome",
+            "bicicletas":{"raridades":[
+                {"id":"comum","velocidade":0.15},
+                {"id":"rara","velocidade":0.60}
+            ]},
+            "estado":{"bicicleta":{"equipadaRar":"rara"}}}),now);
+        assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("rara"));
+        assert_eq!(intel.view.bicycle_factor,Some(1.60));
+
+        // Older state shapes can identify the equipped item through lista.
+        intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":{
+            "equipada":7,"lista":[{"id":7,"rar":"mitica"}]
+        }}}),now);
+        assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("mitica"));
+        assert_eq!(intel.view.bicycle_factor,Some(1.75));
+
+        // Missing delta fields retain the confirmed bike; explicit null clears it.
+        intel.ingest_value(&json!({"t":"estado","estado":{"gold":1}}),now);
+        assert_eq!(intel.view.bicycle_factor,Some(1.75));
+        intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":null}}),now);
+        assert_eq!(intel.view.bicycle_rarity,None);
+        assert_eq!(intel.view.bicycle_factor,None);
+    }
     #[test]
     fn live_pokemon_retains_server_stats_and_tms() {
         let mut intel=HuntIntel::new();
