@@ -236,8 +236,9 @@ pub(super) fn draw_hunt_row(
                         ui.label(RichText::new(format!("{:.0} {}",f.kills_h,tr("kills/h")))
                             .size(13.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
-                            "{:.1}s fight · {:.0}% coverage",
-                            f.seconds_per_kill,f.coverage*100.0
+                            "{:.1}s/kill · {:.1}s dead + {:.1}s combat · {:.0}% coverage",
+                            f.seconds_per_kill,f.dead_time_seconds_per_kill,
+                            f.combat_seconds_per_kill,f.coverage*100.0
                         )).size(9.0).color(MUTED));
                         ui.label(RichText::new(format!(
                             "{}: {:.0}",tr("Incoming damage/kill"),f.incoming_damage_per_kill
@@ -273,9 +274,10 @@ pub(super) fn draw_hunt_row(
                         RateSource::Calibrated | RateSource::Experimental => {
                             if let Some(f)=result.forecast.as_ref(){
                                 ui.label(format!(
-                                    "Combat simulation: {:.0}% species coverage · {:.1}s fight · {:.0} kills/h · {:.0} incoming damage/kill.",
-                                    f.coverage*100.0,f.seconds_per_kill,f.kills_h,
-                                    f.incoming_damage_per_kill
+                                    "Combat simulation: {:.0}% species coverage · {:.1}s/kill ({:.1}s dead + {:.1}s combat) · {:.0} kills/h · {:.0} incoming damage/kill.",
+                                    f.coverage*100.0,f.seconds_per_kill,
+                                    f.dead_time_seconds_per_kill,f.combat_seconds_per_kill,
+                                    f.kills_h,f.incoming_damage_per_kill
                                 ));
                             }
                             ui.label(tr("Combat simulation includes attack cooldowns, spawn timing, AoE and lethal hits. Measured rewards are displayed separately."));
