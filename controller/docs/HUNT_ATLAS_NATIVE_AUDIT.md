@@ -180,11 +180,11 @@ No visual runtime acceptance is asserted by this document.
 
 ## Upstream v1.398.1 compatibility (2026-11-04)
 
-- The v1.377+ grouped spawn layout replaces the former Sinnoh-specific
-  throughput cap. High-level per-slot respawns are **not** interpreted as
-  complete waves: only sufficiently complete `campo.init` snapshots are used
-  to learn their geometry. Older low-level full waves still work. Other hunts
-  without a visited map remain experimental, using the documented fallback.
+- The synthetic per-slot replenishment cap and entry-radius geometry model
+  have been removed. Hunt forecasts no longer consume `campo.init` spawn
+  coordinates, Euclidean radii, or inferred full-wave layouts. Until measured
+  map-paced calibration replaces it, movement uses one explicit global fallback
+  transition; `campo.init.mapa` remains location identity only, not a KPH input.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
