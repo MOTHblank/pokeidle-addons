@@ -355,12 +355,16 @@ pub(super) fn simulate(
     let mut selected_pace=solo_pace;
     let mut selected_baseline=pacing.base_seconds_per_kill;
     let mut kills_h=solo_kills_h;
+    // Keep the controller's existing explicit AoE/TM scenario semantics.
+    // Pacing may switch to sAoe, but the combat model remains controller-owned:
+    // no /hunt fixed "2 targets per attack" assumption is introduced here.
     let aoe=aoe_enabled;
     let mut engaged=1.0;
     if aoe_enabled {
-        // AoE keeps its own authoritative one-shot map baseline. Combat still
-        // interacts with dead time through the same curve; the engagement cap
-        // remains a separate simultaneous-target ceiling.
+        // AoE keeps its own authoritative one-shot map baseline (clamped by
+        // the pacing resolver so sampling noise cannot make sAoe slower than s).
+        // Combat still interacts with dead time through the same curve; the
+        // existing engagement model remains the simultaneous-target ceiling.
         let aoe_pace=paced_kill(&samples,gap_s,pacing.aoe_seconds_per_kill,bicycle_factor)?;
         let candidate=aoe_kills_per_hour(aoe_pace);
         if candidate>kills_h {
@@ -464,7 +468,19 @@ mod tests {
         assert!((3600.0/kills_per_hour(solo)-3.422).abs()<1e-12);
         let aoe=paced_kill(&one,0.9,pace.aoe_seconds_per_kill,1.0).unwrap();
         assert!((aoe.total_s-3.12).abs()<1e-12);
-        assert!((3600.0/kills_per_hour(aoe)-3.12).abs()<1e-12);
+        assert!((3600.0/aoe_kills_per_hour(aoe)-3.12).abs()<1e-12);
+    }
+
+    #[test]
+    fn noisy_aoe_map_uses_clamped_single_target_baseline_without_fixed_two_target_multiplier() {
+        let pace=native_atlas_pacing::resolve("beedrill",None);
+        assert_eq!(pace.map_id.as_deref(),Some("scizor"));
+        assert_eq!(pace.aoe_seconds_per_kill,pace.base_seconds_per_kill);
+        let one=[sample(1000.0,100.0)];
+        let aoe=paced_kill(&one,0.9,pace.aoe_seconds_per_kill,1.0).unwrap();
+        // One-shot AoE pacing is the map baseline itself. Existing multi-hit
+        // combat logic may improve longer fights; pacing does not invent a 2x kill rate.
+        assert!((3600.0/aoe_kills_per_hour(aoe)-pace.base_seconds_per_kill).abs()<1e-12);
     }
 
     #[test]
