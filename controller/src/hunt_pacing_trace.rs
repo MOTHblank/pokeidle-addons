@@ -125,8 +125,11 @@ impl HuntPacingCollector {
             .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
 
         crate::logging::info(&format!(
-            "Hunt pacing trace enabled for {} ({declared_profile}) -> {}",
-            profile.label(), path.display()
+            "Hunt pacing trace enabled for {} ({declared_profile}, run={}, hunt={}) -> {}",
+            profile.label(),
+            run_id.as_deref().unwrap_or("unlabeled"),
+            expected_hunt.as_deref().unwrap_or("any"),
+            path.display()
         ));
         Self {
             enabled: Some(EnabledCollector {
