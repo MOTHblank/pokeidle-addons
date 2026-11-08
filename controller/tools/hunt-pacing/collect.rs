@@ -10,10 +10,13 @@ r#"Live collection is disabled by default and uses the controller's existing gam
 Set:
   {ENABLE_ENV}=1
   {PROFILE_ENV}=st1
-  {GAME_VERSION_ENV}=<observed game version>
 
 Optional:
+  {GAME_VERSION_ENV}=<game version override>
   {DIRECTORY_ENV}=<raw trace directory>
+
+The collector reads the game version from the authenticated welcome when the
+server exposes it; {GAME_VERSION_ENV} is only an explicit override.
 
 Profiles:
   st1                 on foot, single-target, deliberately configured one-shot calibration
