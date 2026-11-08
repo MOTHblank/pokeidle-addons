@@ -640,8 +640,10 @@ impl NativeSession {
             if current.active_pokemon.as_ref().is_some_and(|active| active.id == *id) {
                 return Err("That Pokémon is already active".into());
             }
-            if let Some(trainer_level) = current.trainer_level {
-                if !pokemon.starter && pokemon.level > trainer_level.saturating_add(5) {
+            if !pokemon.starter {
+                let trainer_level = current.trainer_level
+                    .ok_or_else(|| "Waiting for trainer level state".to_owned())?;
+                if pokemon.level > trainer_level.saturating_add(5) {
                     return Err(format!(
                         "Trainer level {trainer_level} is too low for {} (Lv. {})",
                         pokemon.name, pokemon.level
