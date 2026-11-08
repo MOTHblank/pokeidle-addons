@@ -1028,9 +1028,31 @@ impl HuntIntel {
         // State packets are deltas: only an explicit bicicleta field changes
         // the equipped bike. BookIdle follows the same merged-state contract.
         if let Some(raw)=state.get("bicicleta") {
+            let before=self.view.bicycle_factor.unwrap_or(1.0);
             let (rarity,factor)=equipped_bicycle(raw,&self.bicycle_factors);
             self.view.bicycle_rarity=rarity;
             self.view.bicycle_factor=factor;
+            let after=self.view.bicycle_factor.unwrap_or(1.0);
+            if before.to_bits()!=after.to_bits() {
+                // A measured KPH window spanning a bike change would mix two
+                // movement speeds. Start a fresh baseline immediately.
+                self.samples.clear();
+                self.battle_samples.clear();
+                self.battle_trainer=0;
+                self.battle_pokemon=0;
+                self.battle_trainer_receipts=0;
+                self.battle_pokemon_receipts=0;
+                self.battle_gold=0;
+                self.battle_gold_receipts=0;
+                self.last_battle_at=None;
+                self.last_combat_at=None;
+                self.battle_samples.push_back(BattleSample{
+                    at:now,trainer:0,pokemon:0,gold:0,kills:self.session_kills,
+                    trainer_receipts:0,pokemon_receipts:0,gold_receipts:0,
+                });
+                self.view.measurements=HuntMeasurements::default();
+                self.view.sample_quality="Warming up after bicycle change".into();
+            }
         }
 
         if let Some(raw)=state.get("ginasiosPodio").or_else(||state.get("ginasiosPodium")) {
@@ -1702,11 +1724,14 @@ mod tests {
         assert_eq!(intel.view.bicycle_factor,Some(1.60));
 
         // Older state shapes can identify the equipped item through lista.
+        intel.view.measurements.valid_trainer=true;
         intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":{
             "equipada":7,"lista":[{"id":7,"rar":"mitica"}]
         }}}),now);
         assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("mitica"));
         assert_eq!(intel.view.bicycle_factor,Some(1.75));
+        assert!(!intel.view.measurements.valid_trainer);
+        assert_eq!(intel.view.sample_quality,"Warming up after bicycle change");
 
         // Missing delta fields retain the confirmed bike; explicit null clears it.
         intel.ingest_value(&json!({"t":"estado","estado":{"gold":1}}),now);
