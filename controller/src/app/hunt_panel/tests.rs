@@ -348,7 +348,13 @@ use super::*;
             kills_h:100.0,trainer_xp_h:1000.0,pokemon_xp_h:900.0,
             gold_h:80.0,combat_gold_h:80.0,
             trainer_xp_per_kill:10.0,pokemon_xp_per_kill:9.0,
-            seconds_per_kill:36.0,combat_seconds_per_kill:8.0,dead_time_seconds_per_kill:28.0,coverage:1.0,calibrated:false,
+            seconds_per_kill:36.0,combat_seconds_per_kill:8.0,dead_time_seconds_per_kill:28.0,
+            pacing:native_atlas::ForecastPacing{
+                source:native_atlas::ForecastPacingSource::GlobalFallback,
+                map_id:None,baseline_seconds_per_kill:3.4,
+                p10_seconds_per_kill:3.0,p90_seconds_per_kill:3.8,
+            },
+            coverage:1.0,calibrated:false,
             deaths_h:0.0,one_hit:false,aoe:false,engaged:1.0,
             worst_hit_fraction:0.25,incoming_damage_per_kill:0.0,
         };
@@ -735,7 +741,13 @@ use super::*;
             kills_h:kills,trainer_xp_h:kills*10.0,pokemon_xp_h:kills*10.0,
             gold_h:kills*5.0,combat_gold_h:kills*5.0,
             trainer_xp_per_kill:10.0,pokemon_xp_per_kill:10.0,
-            seconds_per_kill:5.0,combat_seconds_per_kill:2.0,dead_time_seconds_per_kill:3.0,coverage:1.0,calibrated:false,
+            seconds_per_kill:5.0,combat_seconds_per_kill:2.0,dead_time_seconds_per_kill:3.0,
+            pacing:native_atlas::ForecastPacing{
+                source:native_atlas::ForecastPacingSource::GlobalFallback,
+                map_id:None,baseline_seconds_per_kill:3.4,
+                p10_seconds_per_kill:3.0,p90_seconds_per_kill:3.8,
+            },
+            coverage:1.0,calibrated:false,
             deaths_h:0.0,one_hit:false,aoe,engaged:if aoe {4.0}else{1.0},
             worst_hit_fraction:0.2,incoming_damage_per_kill:10.0,
         }
