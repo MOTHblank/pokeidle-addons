@@ -130,3 +130,26 @@ pub fn in_center(record: &TraceRecord) -> bool {
     record.calibration.get("in_center")
         .and_then(Value::as_bool).unwrap_or(false)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_one_trace_without_planner_fields_still_deserializes() {
+        let record: TraceRecord = serde_json::from_str(r#"{
+            "schema":1,
+            "event_type":"packet",
+            "session_id":"old",
+            "profile":"Game1",
+            "declared_profile":"st1",
+            "game_version":"1.0",
+            "recv_unix_ms":1,
+            "recv_monotonic_ms":1
+        }"#).unwrap();
+        assert!(record.run_id.is_none());
+        assert!(record.expected_hunt.is_none());
+        assert!(record.available_hunts.is_empty());
+    }
+}
