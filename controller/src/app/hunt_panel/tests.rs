@@ -531,6 +531,22 @@ use super::*;
         assert_eq!(cache.refreshed,Some(old));
     }
     #[test]
+    fn combat_cache_invalidates_when_a_learned_pacing_map_arrives(){
+        let mut view=HuntView::default();
+        let mut cache=EstimateCache::default();
+        cache.refresh(0,&view,None,true,false);
+        cache.refreshed=Some(Instant::now());
+        let baseline=cache.revision;
+        view.learned_hunt_maps=Arc::new(std::collections::BTreeMap::from([
+            ("future-hunt".to_owned(),"gerado_normal_01".to_owned())
+        ]));
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(baseline,cache.revision);
+        assert_eq!(cache.learned_pacing_signature,
+            vec![("future-hunt".to_owned(),"gerado_normal_01".to_owned())]);
+    }
+    #[test]
     fn combat_cache_invalidates_when_max_hp_or_species_changes(){
         let mut view=HuntView::default();
         view.active_pokemon=Some(native_hunts::PokemonInfo{
