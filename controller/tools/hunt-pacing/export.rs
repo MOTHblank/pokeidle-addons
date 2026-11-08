@@ -1,4 +1,5 @@
 use crate::reduce::{MapReduction, ProfileStats, ReducedDataset};
+use crate::hunt_pacing_model;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -115,6 +116,8 @@ pub fn coverage_report(reduced: &ReducedDataset) -> String {
         .cloned().collect::<Vec<_>>();
     let comparisons = pacing_comparisons(reduced, &corpus);
     let shared_maps = observed_shared_maps(reduced);
+    let bike_validation = bicycle_validation_lines(reduced);
+    let deadtime_validation = deadtime_validation_lines(reduced);
 
     format!(
 r#"Hunt pacing coverage
@@ -144,6 +147,12 @@ Measured maps vs current /hunt target:
 
 Observed map IDs shared by multiple hunt slugs:
 {shared_map_lines}
+
+Bicycle validation against fixed + walking/factor:
+{bike_validation_lines}
+
+Dead-time validation against 0.83 / 1.41 / 2.8:
+{deadtime_validation_lines}
 "#,
         expected = corpus.maps.len(),
         expected_hunts = corpus.hunts.len(),
@@ -162,6 +171,12 @@ Observed map IDs shared by multiple hunt slugs:
         shared_map_lines = if shared_maps.is_empty() {
             "  (none)".into()
         } else { shared_maps.join("\n") },
+        bike_validation_lines = if bike_validation.is_empty() {
+            "  (none)".into()
+        } else { bike_validation.join("\n") },
+        deadtime_validation_lines = if deadtime_validation.is_empty() {
+            "  (none)".into()
+        } else { deadtime_validation.join("\n") },
     )
 }
 
@@ -229,8 +244,133 @@ pub fn dataset_json(reduced: &ReducedDataset) -> Value {
         "coverage": {
             "unknown_hunts": reduced.unknown_hunts,
             "rejected_windows": reduced.rejected_windows,
+        },
+        "validation": {
+            "bicycle": bicycle_validation_json(reduced),
+            "deadtime": deadtime_validation_json(reduced),
+            "model": {
+                "walking_portion": hunt_pacing_model::WALKING_PORTION,
+                "walking_floor_seconds": hunt_pacing_model::WALKING_FLOOR_S,
+                "combat_interaction_tau_seconds": hunt_pacing_model::COMBAT_INTERACTION_TAU_S,
+            }
         }
     })
+}
+
+fn bicycle_validation_lines(reduced: &ReducedDataset) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("bike-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let factor = stats.windows[0].bicycle_factor;
+            let observed = stats.median_seconds_per_kill;
+            let predicted = hunt_pacing_model::total_cycle_s(baseline, 0.0, factor);
+            let pct = relative_error_pct(observed, predicted);
+            lines.push(format!(
+                "  {map_id} {profile}: observed {observed:.4}s, predicted {predicted:.4}s ({pct:+.2}%)"
+            ));
+        }
+    }
+    lines
+}
+
+fn deadtime_validation_lines(reduced: &ReducedDataset) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("deadtime-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let window = &stats.windows[0];
+            let Some(combat_seconds) = window.validation_combat_seconds else {
+                lines.push(format!(
+                    "  {map_id} {profile}: missing declared combat seconds; measurement retained but model comparison skipped"
+                ));
+                continue;
+            };
+            let observed = stats.median_seconds_per_kill;
+            let predicted = hunt_pacing_model::total_cycle_s(baseline, combat_seconds, 1.0);
+            let pct = relative_error_pct(observed, predicted);
+            let hits = window.declared_hits
+                .map(|hits| hits.to_string()).unwrap_or_else(|| "?".into());
+            lines.push(format!(
+                "  {map_id} hits={hits} combat={combat_seconds:.3}s: observed {observed:.4}s, predicted {predicted:.4}s ({pct:+.2}%)"
+            ));
+        }
+    }
+    lines
+}
+
+fn bicycle_validation_json(reduced: &ReducedDataset) -> Value {
+    let mut rows = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("bike-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let factor = stats.windows[0].bicycle_factor;
+            let observed = stats.median_seconds_per_kill;
+            let predicted = hunt_pacing_model::total_cycle_s(baseline, 0.0, factor);
+            rows.push(json!({
+                "map_id": map_id,
+                "profile": profile,
+                "factor": factor,
+                "baseline_st1_seconds_per_kill": baseline,
+                "observed_seconds_per_kill": observed,
+                "predicted_seconds_per_kill": predicted,
+                "relative_error_pct": relative_error_pct(observed, predicted),
+                "samples": stats.samples,
+                "kills": stats.kills,
+            }));
+        }
+    }
+    Value::Array(rows)
+}
+
+fn deadtime_validation_json(reduced: &ReducedDataset) -> Value {
+    let mut rows = Vec::new();
+    for (map_id, map) in &reduced.maps {
+        let Some(st1) = map.profiles.get("st1") else { continue };
+        let baseline = st1.median_seconds_per_kill;
+        for (profile, stats) in &map.profiles {
+            if !profile.starts_with("deadtime-validation:") || stats.windows.is_empty() {
+                continue;
+            }
+            let window = &stats.windows[0];
+            let predicted = window.validation_combat_seconds
+                .map(|combat| hunt_pacing_model::total_cycle_s(baseline, combat, 1.0));
+            rows.push(json!({
+                "map_id": map_id,
+                "profile": profile,
+                "declared_hits": window.declared_hits,
+                "combat_seconds": window.validation_combat_seconds,
+                "baseline_st1_seconds_per_kill": baseline,
+                "observed_seconds_per_kill": stats.median_seconds_per_kill,
+                "predicted_seconds_per_kill": predicted,
+                "relative_error_pct": predicted.map(|predicted|
+                    relative_error_pct(stats.median_seconds_per_kill, predicted)),
+                "samples": stats.samples,
+                "kills": stats.kills,
+            }));
+        }
+    }
+    Value::Array(rows)
+}
+
+fn relative_error_pct(observed: f64, predicted: f64) -> f64 {
+    if predicted > 0.0 && predicted.is_finite() {
+        100.0 * (observed / predicted - 1.0)
+    } else {
+        0.0
+    }
 }
 
 fn stats_json(stats: Option<&ProfileStats>) -> Value {
