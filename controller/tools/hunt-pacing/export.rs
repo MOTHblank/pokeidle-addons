@@ -109,6 +109,10 @@ pub fn coverage_report(reduced: &ReducedDataset) -> String {
 
     let observed_expected_hunts = corpus.hunts.keys()
         .filter(|slug| reduced.hunts.contains_key(*slug)).count();
+    let unobserved_hunts = corpus.hunts.keys()
+        .filter(|slug| !reduced.hunts.contains_key(*slug)
+            && !reduced.unknown_hunts.contains(*slug))
+        .cloned().collect::<Vec<_>>();
     let comparisons = pacing_comparisons(reduced, &corpus);
     let shared_maps = observed_shared_maps(reduced);
 
@@ -120,7 +124,8 @@ r#"Hunt pacing coverage
   maps with AOE data:      {measured_aoe}
   maps with enough AOE:    {enough_aoe}
   expected hunts observed: {observed_expected_hunts}/{expected_hunts}
-  ambiguous/unknown hunts: {unknown}
+  hunt identities not yet observed: {unobserved_count}
+  conflicting observed identities:  {unknown}
 
 Maps needing more ST1 samples ({need_st1_count}):
 {need_st1_lines}
@@ -128,7 +133,10 @@ Maps needing more ST1 samples ({need_st1_count}):
 Maps needing more AOE samples ({need_aoe_count}):
 {need_aoe_lines}
 
-Hunts with conflicting/unknown observed map identity ({unknown_count}):
+Target hunts whose map identity has not been observed ({unobserved_count}):
+{unobserved_lines}
+
+Hunts with conflicting observed map identity ({unknown_count}):
 {unknown_lines}
 
 Measured maps vs current /hunt target:
@@ -140,10 +148,12 @@ Observed map IDs shared by multiple hunt slugs:
         expected = corpus.maps.len(),
         expected_hunts = corpus.hunts.len(),
         unknown = reduced.unknown_hunts.len(),
+        unobserved_count = unobserved_hunts.len(),
         need_st1_count = need_st1.len(),
         need_aoe_count = need_aoe.len(),
         need_st1_lines = format_lines(&need_st1),
         need_aoe_lines = format_lines(&need_aoe),
+        unobserved_lines = format_lines(&unobserved_hunts),
         unknown_count = reduced.unknown_hunts.len(),
         unknown_lines = format_lines(&reduced.unknown_hunts),
         comparison_lines = if comparisons.is_empty() {
