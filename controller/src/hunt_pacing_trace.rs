@@ -131,8 +131,17 @@ impl HuntPacingCollector {
         }
     }
 
-    pub fn connection_open(&mut self, view: &HuntView, received_at: Instant) {
+    pub fn connection_open(&mut self, welcome: &Value, view: &HuntView, received_at: Instant) {
         let Some(inner) = self.enabled.as_mut() else { return };
+        if inner.game_version == "unknown" {
+            inner.game_version = ["gameVersion", "game_version", "versaoJogo", "versao", "version"]
+                .into_iter()
+                .find_map(|key| welcome.get(key))
+                .and_then(|value| value.as_str().map(str::to_owned)
+                    .or_else(|| value.as_u64().map(|number| number.to_string())))
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "unknown".into());
+        }
         inner.connection_generation = inner.connection_generation.wrapping_add(1);
         inner.scene_generation = 0;
         inner.field_slug = None;
