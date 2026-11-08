@@ -311,6 +311,8 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Bicycle" => "Bicicleta",
         "HP" => "HP",
         "Your Pokémon" => "Seu Pokémon",
+        "Pokémon switch was not confirmed by the game" =>
+            "A troca de Pokémon não foi confirmada pelo jogo",
         "Opponent" => "Adversário",
         "Fighting" => "Lutando",
         "Between encounters" => "Entre batalhas",
