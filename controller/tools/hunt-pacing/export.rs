@@ -180,6 +180,21 @@ Dead-time validation against 0.83 / 1.41 / 2.8:
     )
 }
 
+pub fn validation_report(reduced: &ReducedDataset) -> String {
+    let bike = bicycle_validation_lines(reduced);
+    let deadtime = deadtime_validation_lines(reduced);
+    format!(
+r#"Bicycle validation against fixed + walking/factor:
+{bike_lines}
+
+Dead-time validation against 0.83 / 1.41 / 2.8:
+{deadtime_lines}
+"#,
+        bike_lines = if bike.is_empty() { "  (none)".into() } else { bike.join("\n") },
+        deadtime_lines = if deadtime.is_empty() { "  (none)".into() } else { deadtime.join("\n") },
+    )
+}
+
 pub fn dataset_json(reduced: &ReducedDataset) -> Value {
     let corpus = target_corpus();
     let fallback = fallback_values(reduced);
