@@ -148,7 +148,8 @@ same authoritative map ID should reduce to the same per-map pacing value.
 ## Validation reports
 
 The JSON export and coverage report include two model checks that use the same
-shared pacing-math module as normal Hunt Atlas forecasts.
+shared pacing-math module as normal Hunt Atlas forecasts. `validate <reduced.json>`
+prints only these checks when iterating on controlled calibration runs.
 
 For `bike-validation`, the measured ST1 value on that map is the on-foot
 baseline. Every collected bicycle factor is compared with:
