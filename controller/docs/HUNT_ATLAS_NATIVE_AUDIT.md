@@ -196,7 +196,13 @@ No visual runtime acceptance is asserted by this document.
   explicitly into fixed delay and player walking; enemy-approach reduction is
   applied only to walking, then the bicycle factor divides only that walking
   time. Fixed delay is never accelerated. Attack cooldowns continue through the
-  complete resulting dead time (fixed + walking).
+  complete resulting dead time (fixed + walking). Only pacing/movement is
+  adapted from /hunt: movesets, cooldown scheduling, damage, seasonal and gym
+  effects, Outland state/modifiers, XP bonuses, bicycle state and TM handling
+  remain Controller-owned. AoE pacing uses the resolved map `sAoe` while the
+  existing Controller multi-hit/engagement model remains in charge; no fixed
+  two-target-per-attack assumption is imported. Effective `sAoe` is clamped
+  to `s` when simulator sampling noise makes the raw AoE row slightly slower.
 - Shiny Egg Fragment probabilities and all **32** level thresholds follow
   `shared/ovo-shiny.mjs` (1/80,000 at level 5,000, plus 0.0000005 per
   subsequent level band, through Paldea level 160,300). Outland is excluded.
