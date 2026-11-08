@@ -296,22 +296,22 @@ mod tests {
     #[test]
     fn one_shot_foot_pace_matches_vendored_map_dataset() {
         let pace=native_atlas_pacing::resolve("caterpie",None);
-        let kills=single_target_kills(pace.s,MIN_CYCLE_S,1.0);
+        let kills=single_target_kills(pace.base_seconds_per_kill,MIN_CYCLE_S,1.0);
         assert!((3600.0/kills-3.422).abs()<1e-12);
-        let aoe=aoe_kills(pace.s_aoe,MIN_CYCLE_S,0.01,1.0);
+        let aoe=aoe_kills(pace.aoe_seconds_per_kill,MIN_CYCLE_S,0.01,1.0);
         assert!((3600.0/aoe-3.12).abs()<1e-12);
     }
     #[test]
     fn unknown_hunt_uses_vendored_global_median() {
         let pace=native_atlas_pacing::resolve("__unknown_hunt__",None);
-        assert_eq!(pace.source,native_atlas_pacing::PacingSource::GlobalFallback);
-        let kills=single_target_kills(pace.s,MIN_CYCLE_S,1.0);
+        assert_eq!(pace.base_seconds_per_killource,native_atlas_pacing::PacingSource::GlobalFallback);
+        let kills=single_target_kills(pace.base_seconds_per_kill,MIN_CYCLE_S,1.0);
         assert!((3600.0/kills-3.406).abs()<1e-12);
     }
     #[test]
     fn learned_map_upgrades_unknown_hunt_to_shared_map_pacing() {
         let pace=native_atlas_pacing::resolve("__new_hunt__",Some("gerado_normal_01"));
-        assert_eq!(pace.source,native_atlas_pacing::PacingSource::LearnedCampoInit);
+        assert_eq!(pace.base_seconds_per_killource,native_atlas_pacing::PacingSource::LearnedCampoInit);
         let aipom=native_atlas_pacing::resolve("aipom",None);
         assert_eq!(pace.map_id,aipom.map_id);
         assert_eq!(pace.base_seconds_per_kill,aipom.base_seconds_per_kill);
@@ -321,11 +321,11 @@ mod tests {
     #[test]
     fn bicycle_factor_divides_only_map_movement_component() {
         let pace=native_atlas_pacing::resolve("caterpie",None);
-        assert!((movement_component_s(pace.s,1.0)-(pace.s-MIN_CYCLE_S)).abs()<1e-12);
-        assert!((movement_component_s(pace.s,2.0)-(pace.s-MIN_CYCLE_S)/2.0).abs()<1e-12);
-        assert!((movement_component_s(pace.s,f64::NAN)-(pace.s-MIN_CYCLE_S)).abs()<1e-12);
-        let foot=single_target_kills(pace.s,2.0,1.0);
-        let legendary=single_target_kills(pace.s,2.0,2.0);
+        assert!((movement_component_s(pace.base_seconds_per_kill,1.0)-(pace.base_seconds_per_kill-MIN_CYCLE_S)).abs()<1e-12);
+        assert!((movement_component_s(pace.base_seconds_per_kill,2.0)-(pace.base_seconds_per_kill-MIN_CYCLE_S)/2.0).abs()<1e-12);
+        assert!((movement_component_s(pace.base_seconds_per_kill,f64::NAN)-(pace.base_seconds_per_kill-MIN_CYCLE_S)).abs()<1e-12);
+        let foot=single_target_kills(pace.base_seconds_per_kill,2.0,1.0);
+        let legendary=single_target_kills(pace.base_seconds_per_kill,2.0,2.0);
         assert!(legendary>foot);
     }
     #[test]
