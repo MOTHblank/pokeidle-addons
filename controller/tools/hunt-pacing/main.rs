@@ -1,5 +1,6 @@
 mod collect;
 mod export;
+mod plan;
 mod reduce;
 mod trace;
 #[path = "../../src/hunt_pacing_model.rs"]
@@ -67,6 +68,38 @@ fn run() -> Result<(), String> {
             }
             let reduced = export::read_reduced(Path::new(&args[1]))?;
             print!("{}", export::validation_report(&reduced));
+        }
+        "plan" => {
+            let mut index = 1usize;
+            let mut reduced = None;
+            if args.get(index).is_some_and(|arg| !arg.starts_with("--")) {
+                reduced = Some(export::read_reduced(Path::new(&args[index]))?);
+                index += 1;
+            }
+            let mut count = 12usize;
+            let mut json_path: Option<PathBuf> = None;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--count" => {
+                        let value = args.get(index + 1)
+                            .ok_or_else(|| "--count requires a value".to_owned())?;
+                        count = parse::<usize>(value, "--count")?.max(1);
+                        index += 2;
+                    }
+                    "--json" => {
+                        let value = args.get(index + 1)
+                            .ok_or_else(|| "--json requires a path".to_owned())?;
+                        json_path = Some(PathBuf::from(value));
+                        index += 2;
+                    }
+                    other => return Err(format!("unknown plan option: {other}")),
+                }
+            }
+            let plan = plan::build(reduced.as_ref(), count);
+            if let Some(path) = json_path.as_deref() {
+                plan::write_json(path, &plan)?;
+            }
+            print!("{}", plan::render(&plan));
         }
         "all" => {
             if args.len() < 3 {
@@ -146,6 +179,7 @@ Commands:
   hunt-pacing export <reduced.json> <dataset.json> [--tsv <dataset.tsv>]
   hunt-pacing coverage <reduced.json>
   hunt-pacing validate <reduced.json>
+  hunt-pacing plan [reduced.json] [--count N] [--json plan.json]
   hunt-pacing all <raw-dir-or-file> <output-dir> [reducer options]
 
 Reducer options:
