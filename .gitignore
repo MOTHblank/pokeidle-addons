@@ -28,3 +28,4 @@ controller/Cargo.lock
 telemetry/wrangler.toml
 telemetry/package.json
 telemetry/package-lock.json
+telemetry/curlstats.txt
