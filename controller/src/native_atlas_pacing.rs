@@ -41,12 +41,23 @@ pub struct PacingDataset {
     pub hunts: BTreeMap<String, HuntPacing>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ResolvedPacing<'a> {
-    pub map_id: Option<&'a str>,
-    pub s: f64,
-    pub s_aoe: f64,
-    pub fallback: bool,
+pub const MAP_RELATIVE_UNCERTAINTY: f64 = 0.09;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PacingSource {
+    HuntSlugMapping,
+    LearnedCampoInit,
+    GlobalFallback,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedPacing {
+    pub source: PacingSource,
+    pub map_id: Option<String>,
+    pub base_seconds_per_kill: f64,
+    pub aoe_seconds_per_kill: f64,
+    pub uncertainty: PacingRange,
+    pub aoe_uncertainty: PacingRange,
 }
 
 const RAW: &str = include_str!("../assets/hunt-atlas/ritmo-v1409.tsv");
@@ -110,25 +121,51 @@ pub fn dataset() -> &'static PacingDataset {
     DATA.get_or_init(parse)
 }
 
-pub fn resolve(slug:&str) -> ResolvedPacing<'static> {
+fn known_map(source:PacingSource,map_id:&str,map:MapPacing)->ResolvedPacing {
+    let r=MAP_RELATIVE_UNCERTAINTY;
+    ResolvedPacing {
+        source,
+        map_id:Some(map_id.to_owned()),
+        base_seconds_per_kill:map.s,
+        aoe_seconds_per_kill:map.s_aoe,
+        uncertainty:PacingRange {
+            p10:map.s*(1.0-r), median:map.s, p90:map.s*(1.0+r),
+        },
+        aoe_uncertainty:PacingRange {
+            p10:map.s_aoe*(1.0-r), median:map.s_aoe, p90:map.s_aoe*(1.0+r),
+        },
+    }
+}
+
+pub fn resolve(slug:&str, learned_map:Option<&str>) -> ResolvedPacing {
     let data=dataset();
-    let hunt=data.hunts.get(slug);
-    if let Some(hunt)=hunt {
-        if let Some(map)=data.maps.get(&hunt.map_id) {
-            return ResolvedPacing {
-                map_id:Some(hunt.map_id.as_str()),
-                s:map.s,
-                s_aoe:map.s_aoe,
-                fallback:false,
-            };
+    let static_map=data.hunts.get(slug).map(|hunt|hunt.map_id.as_str());
+    if let Some(map_id)=static_map {
+        if let Some(map)=data.maps.get(map_id) {
+            return known_map(PacingSource::HuntSlugMapping,map_id,*map);
         }
     }
-    let s=data.fallback.median;
+    if let Some(map_id)=learned_map.filter(|map|!map.is_empty()) {
+        if let Some(map)=data.maps.get(map_id) {
+            return known_map(PacingSource::LearnedCampoInit,map_id,*map);
+        }
+    }
+    let base=data.fallback.median;
+    let aoe=base/data.aoe_gain;
+    let r=MAP_RELATIVE_UNCERTAINTY;
     ResolvedPacing {
-        map_id:hunt.map(|hunt|hunt.map_id.as_str()),
-        s,
-        s_aoe:s/data.aoe_gain,
-        fallback:true,
+        source:PacingSource::GlobalFallback,
+        map_id:learned_map.filter(|map|!map.is_empty()).or(static_map).map(str::to_owned),
+        base_seconds_per_kill:base,
+        aoe_seconds_per_kill:aoe,
+        uncertainty:PacingRange {
+            p10:data.fallback.p10*(1.0-r), median:base,
+            p90:data.fallback.p90*(1.0+r),
+        },
+        aoe_uncertainty:PacingRange {
+            p10:data.fallback.p10/data.aoe_gain*(1.0-r), median:aoe,
+            p90:data.fallback.p90/data.aoe_gain*(1.0+r),
+        },
     }
 }
 
@@ -157,20 +194,39 @@ mod tests {
 
     #[test]
     fn resolves_hunt_slug_to_map_and_exact_map_pacing() {
-        let pace=resolve("caterpie");
-        assert_eq!(pace.map_id,Some("heracross"));
-        assert!((pace.s-3.422).abs()<1e-12);
-        assert!((pace.s_aoe-3.12).abs()<1e-12);
-        assert!(!pace.fallback);
+        let pace=resolve("caterpie",None);
+        assert_eq!(pace.source,PacingSource::HuntSlugMapping);
+        assert_eq!(pace.map_id.as_deref(),Some("heracross"));
+        assert!((pace.base_seconds_per_kill-3.422).abs()<1e-12);
+        assert!((pace.aoe_seconds_per_kill-3.12).abs()<1e-12);
+        assert_eq!(pace.uncertainty.median,pace.base_seconds_per_kill);
         assert_eq!(capture_ceiling("caterpie"),Some(20));
     }
 
     #[test]
+    fn learned_campo_map_is_second_priority_and_shared_maps_share_pacing() {
+        let learned=resolve("__new_hunt__",Some("gerado_normal_01"));
+        assert_eq!(learned.source,PacingSource::LearnedCampoInit);
+        assert_eq!(learned.map_id.as_deref(),Some("gerado_normal_01"));
+        let aipom=resolve("aipom",None);
+        let glameow=resolve("glameow_sinnoh",None);
+        assert_eq!(aipom.map_id,glameow.map_id);
+        assert_eq!(aipom.base_seconds_per_kill,glameow.base_seconds_per_kill);
+        assert_eq!(aipom.aoe_seconds_per_kill,glameow.aoe_seconds_per_kill);
+
+        let static_wins=resolve("caterpie",Some("gerado_normal_01"));
+        assert_eq!(static_wins.source,PacingSource::HuntSlugMapping);
+        assert_eq!(static_wins.map_id.as_deref(),Some("heracross"));
+    }
+
+    #[test]
     fn unknown_hunt_uses_dataset_fallback_not_an_unrelated_map() {
-        let pace=resolve("__unknown_hunt__");
+        let pace=resolve("__unknown_hunt__",None);
+        assert_eq!(pace.source,PacingSource::GlobalFallback);
         assert_eq!(pace.map_id,None);
-        assert!(pace.fallback);
-        assert!((pace.s-3.406).abs()<1e-12);
-        assert!((pace.s_aoe-(3.406/1.096)).abs()<1e-12);
+        assert!((pace.base_seconds_per_kill-3.406).abs()<1e-12);
+        assert!((pace.aoe_seconds_per_kill-(3.406/1.096)).abs()<1e-12);
+        assert!((pace.uncertainty.p10-3.27*0.91).abs()<1e-12);
+        assert!((pace.uncertainty.p90-3.55*1.09).abs()<1e-12);
     }
 }
