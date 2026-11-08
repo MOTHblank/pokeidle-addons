@@ -124,25 +124,33 @@ struct Segment {
     invalid_reason: Option<String>,
 }
 
-pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> ReducedDataset {
+pub fn reduce_sessions(
+    sessions: &[TraceSession],
+    config: ReduceConfig,
+) -> Result<ReducedDataset, String> {
     let mut windows = Vec::new();
     let mut rejected = BTreeMap::<String, u64>::new();
     let mut observed_hunts = BTreeMap::<String, Option<String>>::new();
-    let mut game_version = "unknown".to_owned();
+    let known_versions = sessions.iter()
+        .flat_map(|session| session.records.iter())
+        .map(|record| record.game_version.trim())
+        .filter(|version| !version.is_empty() && *version != "unknown")
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if known_versions.len() > 1 {
+        return Err(format!(
+            "refusing to combine hunt pacing traces from multiple game versions: {}",
+            known_versions.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let game_version = known_versions.into_iter().next()
+        .unwrap_or_else(|| "unknown".into());
     let generated_at_unix_ms = sessions.iter()
         .flat_map(|session| session.records.iter())
         .map(|record| record.recv_unix_ms)
         .max().unwrap_or(0);
 
     for session in sessions {
-        if game_version == "unknown" {
-            if let Some(version) = session.records.iter()
-                .map(|record| record.game_version.trim())
-                .find(|version| !version.is_empty() && *version != "unknown")
-            {
-                game_version = version.to_owned();
-            }
-        }
         reduce_session(
             session,
             &config,
@@ -174,7 +182,7 @@ pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> Reduc
         }
     }
 
-    ReducedDataset {
+    Ok(ReducedDataset {
         schema: 1,
         source: "moth-live-observation".into(),
         generated_at_unix_ms,
@@ -185,7 +193,7 @@ pub fn reduce_sessions(sessions: &[TraceSession], config: ReduceConfig) -> Reduc
         hunts,
         unknown_hunts: unknown_hunts.into_iter().collect(),
         rejected_windows: rejected,
-    }
+    })
 }
 
 fn reduce_session(
