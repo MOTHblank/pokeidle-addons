@@ -20,6 +20,12 @@ pub struct HuntPacingCollector {
     enabled: Option<EnabledCollector>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct MobTraceIdentity {
+    species: Option<Value>,
+    name: Option<Value>,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 struct TraceMove {
     move_type: String,
@@ -43,6 +49,8 @@ struct EnabledCollector {
     mob_slots: BTreeSet<String>,
     removed_slots: BTreeSet<String>,
     mob_dead: BTreeMap<String, bool>,
+    mob_identity: BTreeMap<String, MobTraceIdentity>,
+    current_target: Option<Value>,
     packet_sequence: u64,
     last_kill_monotonic_ms: Option<u64>,
     last_kill_server_ts: Option<u64>,
@@ -132,6 +140,8 @@ impl HuntPacingCollector {
                 mob_slots: BTreeSet::new(),
                 removed_slots: BTreeSet::new(),
                 mob_dead: BTreeMap::new(),
+                mob_identity: BTreeMap::new(),
+                current_target: None,
                 packet_sequence: 0,
                 last_kill_monotonic_ms: None,
                 last_kill_server_ts: None,
@@ -161,6 +171,8 @@ impl HuntPacingCollector {
         inner.mob_slots.clear();
         inner.removed_slots.clear();
         inner.mob_dead.clear();
+        inner.mob_identity.clear();
+        inner.current_target = None;
         inner.last_kill_monotonic_ms = None;
         inner.last_kill_server_ts = None;
         let record = inner.base_record("connection.open", received_at, view, None);
@@ -193,6 +205,8 @@ impl HuntPacingCollector {
             inner.mob_slots.clear();
             inner.removed_slots.clear();
             inner.mob_dead.clear();
+            inner.mob_identity.clear();
+            inner.current_target = None;
             inner.last_kill_monotonic_ms = None;
             inner.last_kill_server_ts = None;
         }
@@ -275,6 +289,17 @@ impl EnabledCollector {
             let existed = self.mob_slots.contains(&slot_key);
             let replenished = self.removed_slots.remove(&slot_key);
             self.mob_slots.insert(slot_key.clone());
+            let identity = self.mob_identity.entry(slot_key.clone()).or_default();
+            if let Some(species) = raw.get("speciesId").or_else(|| raw.get("pokeId"))
+                .filter(|value| !value.is_null())
+            {
+                identity.species = Some(species.clone());
+            }
+            if let Some(name) = raw.get("n").or_else(|| raw.get("nome"))
+                .filter(|value| !value.is_null())
+            {
+                identity.name = Some(name.clone());
+            }
 
             let now_dead = raw.get("x").and_then(Value::as_bool)
                 .unwrap_or_else(|| self.mob_dead.get(&slot_key).copied().unwrap_or(false));
@@ -313,29 +338,36 @@ impl EnabledCollector {
             let key = slot_key(slot);
             self.mob_slots.remove(&key);
             self.mob_dead.remove(&key);
+            self.mob_identity.remove(&key);
+            if self.current_target.as_ref() == Some(slot) {
+                self.current_target = None;
+            }
             self.removed_slots.insert(key);
             removals.push(slot.clone());
         }
 
+        if let Some(target) = frame.get("alvo") {
+            self.current_target = (!target.is_null()).then(|| target.clone());
+        }
         json!({
             "hero_movement": hero,
             "mob_updates": mobs,
             "removals": removals,
             "target": frame.get("alvo").cloned().unwrap_or(Value::Null),
+            "resolved_target": self.current_target.clone().unwrap_or(Value::Null),
         })
     }
 
     fn kill_observations(&mut self, frame: &Value, received_at: Instant) -> Value {
         let now = received_at.saturating_duration_since(self.origin).as_millis() as u64;
         let mut kills = Vec::new();
-        for event in frame.get("ev").and_then(Value::as_array)
+        let wild_deaths = frame.get("ev").and_then(Value::as_array)
             .into_iter().flatten()
-        {
-            if event.get("k").and_then(Value::as_str) != Some("morte")
-                || event.get("quem").and_then(Value::as_str) != Some("selvagem")
-            {
-                continue;
-            }
+            .filter(|event| event.get("k").and_then(Value::as_str) == Some("morte")
+                && event.get("quem").and_then(Value::as_str) == Some("selvagem"))
+            .collect::<Vec<_>>();
+        let single_target_death = wild_deaths.len() == 1;
+        for event in wild_deaths {
             let previous = self.last_kill_monotonic_ms.replace(now);
             let kill_server_ts = number_u64(event.get("ts"))
                 .or_else(|| number_u64(frame.get("ts")));
@@ -343,16 +375,24 @@ impl EnabledCollector {
             if kill_server_ts.is_some() {
                 self.last_kill_server_ts = kill_server_ts;
             }
+            let slot = event.get("slot").filter(|value| !value.is_null()).cloned()
+                .or_else(|| single_target_death.then(|| self.current_target.clone()).flatten());
+            let identity = slot.as_ref()
+                .and_then(|slot| self.mob_identity.get(&slot_key(slot)));
+            let species = event.get("speciesId").or_else(|| event.get("pokeId"))
+                .filter(|value| !value.is_null()).cloned()
+                .or_else(|| identity.and_then(|identity| identity.species.clone()));
+            let name = event.get("nome").or_else(|| event.get("n"))
+                .filter(|value| !value.is_null()).cloned()
+                .or_else(|| identity.and_then(|identity| identity.name.clone()));
             kills.push(json!({
                 "kill_recv_monotonic_ms": now,
                 "previous_kill_recv_monotonic_ms": previous,
                 "kill_server_ts": kill_server_ts,
                 "previous_kill_server_ts": previous_server,
-                "slot": event.get("slot").cloned().unwrap_or(Value::Null),
-                "species": event.get("speciesId").or_else(|| event.get("pokeId"))
-                    .cloned().unwrap_or(Value::Null),
-                "name": event.get("nome").or_else(|| event.get("n"))
-                    .cloned().unwrap_or(Value::Null),
+                "slot": slot.unwrap_or(Value::Null),
+                "species": species.unwrap_or(Value::Null),
+                "name": name.unwrap_or(Value::Null),
                 "attack": event.get("ataque").or_else(|| event.get("attack"))
                     .or_else(|| event.get("golpe")).or_else(|| event.get("move"))
                     .cloned().unwrap_or(Value::Null),
