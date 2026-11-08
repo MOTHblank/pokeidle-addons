@@ -459,8 +459,7 @@ pub fn estimate_with_aoe(
     let mon=view.active_pokemon.as_ref()?;
     let player=reference.species.get(&mon.species_id?)?;
     let stats=pokemon_stats(mon,player)?;
-    let geometry=view.geo_distances.get(&hunt.slug);
-    let pace=combat::simulate(hunt,mon,player,reference,&stats,geometry,aoe_enabled,
+    let pace=combat::simulate(hunt,mon,player,reference,&stats,aoe_enabled,
         view.seasonal_type.as_deref(),gym_damage_multiplier(view,mon,player),
         view.bicycle_factor.unwrap_or(1.0))?;
     let kills_h=pace.kills_h;
