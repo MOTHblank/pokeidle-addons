@@ -18,6 +18,10 @@ pub struct TraceRecord {
     #[serde(default)]
     pub game_version: String,
     #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub expected_hunt: Option<String>,
+    #[serde(default)]
     pub recv_unix_ms: u64,
     #[serde(default)]
     pub recv_monotonic_ms: u64,
