@@ -411,7 +411,7 @@ fn accepted_profile(record: &TraceRecord) -> Option<String> {
             let hits = validation_hits(record)
                 .map(|hits| hits.to_string()).unwrap_or_else(|| "unknown".into());
             let combat = validation_combat_seconds(record)
-                .map(|seconds| format!("{seconds:.3}"))
+                .map(|seconds| format!("{seconds:.6}"))
                 .unwrap_or_else(|| "unknown".into());
             Some(format!("deadtime-validation:hits={hits}:combat={combat}"))
         }
