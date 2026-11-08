@@ -224,6 +224,9 @@ pub struct HuntView {
     pub field_map: Option<String>,
     pub field_slug: Option<String>,
     pub field_init_timestamp: Option<u64>,
+    /// Hunt→map identities learned from authoritative campo.init packets.
+    /// Used only when the vendored pacing table has no slug mapping.
+    pub learned_hunt_maps: Arc<BTreeMap<String,String>>,
     pub hunts: Arc<Vec<HuntEntry>>,
     pub hunt_slug: Option<String>,
     /// Stable representative sprite for the confirmed hunt. This is not
@@ -1335,15 +1338,25 @@ impl HuntIntel {
                 if let Some(state) = frame.get("estado") { self.merge_state(state, now); }
             }
             Some("campo.init") => {
-                if let Some(map) = frame.get("mapa").and_then(Value::as_str) {
+                let map=frame.get("mapa").and_then(Value::as_str)
+                    .map(str::trim).filter(|map|!map.is_empty());
+                let slug=frame.get("slug").and_then(Value::as_str)
+                    .map(str::trim).filter(|slug|!slug.is_empty());
+                if let Some(map) = map {
                     self.view.field_map = Some(map.to_owned());
                 }
-                if let Some(slug) = frame.get("slug").and_then(Value::as_str) {
+                if let Some(slug) = slug {
                     self.view.field_slug = Some(slug.to_owned());
                     // campo.init is a second server-confirmed location signal.
                     // Accept it as the hunt only when it matches an unlocked
                     // catalog slug; arbitrary maps are not necessarily hunts.
                     if self.view.hunts.iter().any(|hunt| hunt.slug == slug) {
+                        if let Some(map)=map {
+                            let learned=Arc::make_mut(&mut self.view.learned_hunt_maps);
+                            if learned.get(slug).is_none_or(|old|old!=map) {
+                                learned.insert(slug.to_owned(),map.to_owned());
+                            }
+                        }
                         self.adopt_hunt(slug, now);
                         self.view.in_center = false;
                     }
@@ -1809,6 +1822,8 @@ mod tests {
         ],"estado":{"noCentro":true}}"#, now);
         intel.ingest(r#"{"t":"campo.init","slug":"forest","mapa":"forest-map"}"#, now);
         assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
+        assert_eq!(intel.snapshot().learned_hunt_maps.get("forest").map(String::as_str),
+            Some("forest-map"));
         assert!(!intel.snapshot().in_center);
         intel.ingest(r#"{"t":"estado","estado":{"selvagem":null}}"#, now);
         assert_eq!(intel.snapshot().hunt_slug.as_deref(), Some("forest"));
@@ -1952,6 +1967,8 @@ mod tests {
         assert_eq!(m.view.account_nick.as_deref(),Some("Example"));
         assert_eq!(m.view.field_map.as_deref(),Some("Grasslands"));
         assert_eq!(m.view.field_slug.as_deref(),Some("route-map"));
+        assert!(m.view.learned_hunt_maps.is_empty(),
+            "non-catalog campo.init locations must not become hunt pacing mappings");
         assert_eq!(m.view.field_init_timestamp,Some(12345));
         assert!(m.view.hunt_slug.is_none());
     }
