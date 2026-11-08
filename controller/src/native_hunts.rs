@@ -425,6 +425,7 @@ pub struct HuntIntel {
     raid_farm_reported_pct:f64,
     raid_farm_until:u64,
     bicycle_factors:BTreeMap<String,f64>,
+    bicycle_state:Option<Value>,
     geo_samples: BTreeMap<String,Vec<Vec<f64>>>,
     geo_wave: Option<(String,Instant,Vec<f64>)>,
     geo_alive: BTreeMap<u64,bool>,
@@ -452,7 +453,7 @@ impl HuntIntel {
             kick_xp_until:0,kick_capture_until:0,kick_shiny_until:0,
             kick_reported_pct:0.0,bonus_xp:None,
             raid_farm_reported_pct:0.0,raid_farm_until:0,
-            bicycle_factors:default_bicycle_factors(),
+            bicycle_factors:default_bicycle_factors(),bicycle_state:None,
             geo_samples:BTreeMap::new(),
             geo_wave:None,geo_alive:BTreeMap::new(),geo_hero:None,
         }
@@ -587,6 +588,7 @@ impl HuntIntel {
         self.view.seasonal_type=None;
         self.view.bicycle_rarity=None;
         self.view.bicycle_factor=None;
+        self.bicycle_state=None;
         // A reconnect must not classify the new game session from stale VIP
         // state. Auto PvP waits for one of the authoritative VIP signals.
         self.vip_flag=None;
@@ -1029,7 +1031,21 @@ impl HuntIntel {
         // the equipped bike. BookIdle follows the same merged-state contract.
         if let Some(raw)=state.get("bicicleta") {
             let before=self.view.bicycle_factor.unwrap_or(1.0);
-            let (rarity,factor)=equipped_bicycle(raw,&self.bicycle_factors);
+            if let Some(delta)=raw.as_object() {
+                let mut merged=self.bicycle_state.take()
+                    .filter(Value::is_object).unwrap_or_else(||serde_json::json!({}));
+                if let Some(target)=merged.as_object_mut() {
+                    for (key,value) in delta {
+                        target.insert(key.clone(),value.clone());
+                    }
+                }
+                self.bicycle_state=Some(merged);
+            } else {
+                self.bicycle_state=None;
+            }
+            let (rarity,factor)=self.bicycle_state.as_ref()
+                .map(|bike|equipped_bicycle(bike,&self.bicycle_factors))
+                .unwrap_or((None,None));
             self.view.bicycle_rarity=rarity;
             self.view.bicycle_factor=factor;
             let after=self.view.bicycle_factor.unwrap_or(1.0);
@@ -1390,6 +1406,7 @@ impl HuntIntel {
                 self.view.seasonal_type=None;
                 self.view.bicycle_rarity=None;
                 self.view.bicycle_factor=None;
+                self.bicycle_state=None;
                 self.bicycle_factors=bicycle_factors_from_welcome(frame.get("bicicletas"));
                 self.view.gym_podium=Arc::new(BTreeMap::new());
                 self.twitch_xp_until=0;
@@ -1739,6 +1756,22 @@ mod tests {
         intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":null}}),now);
         assert_eq!(intel.view.bicycle_rarity,None);
         assert_eq!(intel.view.bicycle_factor,None);
+    }
+    #[test]
+    fn bicycle_partial_delta_keeps_inventory_for_equipped_id_lookup() {
+        let mut intel=HuntIntel::new();
+        let now=Instant::now();
+        intel.ingest_value(&json!({"t":"welcome","estado":{"bicicleta":{
+            "equipada":7,"lista":[
+                {"id":7,"rar":"comum"},{"id":8,"rar":"lendaria"}
+            ]
+        }}}),now);
+        assert_eq!(intel.view.bicycle_factor,Some(1.15));
+        intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":{
+            "equipada":8
+        }}}),now);
+        assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("lendaria"));
+        assert_eq!(intel.view.bicycle_factor,Some(2.0));
     }
     #[test]
     fn live_pokemon_retains_server_stats_and_tms() {
