@@ -162,7 +162,7 @@ pub(in crate::app) struct ExplorerCache {
     pub(super) forecast_revision:u64,
     pub(super) model_signature:Option<(u64,u32,Option<u64>,Option<u64>,[Option<u64>;6],bool,bool,Option<[u64;6]>,Option<String>,Vec<String>)>,
     pub(super) trainer_level:Option<u32>,
-    pub(super) outland_catalog:Option<[(u32,f64);8]>,
+    pub(super) outland_catalog:Option<Vec<crate::native_atlas_models::OutlandTier>>,
     pub(super) roster:Option<Arc<Vec<native_hunts::PokemonInfo>>>,
     pub(super) owned_species:std::collections::BTreeSet<u64>,
     pub(super) roster_ready:bool,
