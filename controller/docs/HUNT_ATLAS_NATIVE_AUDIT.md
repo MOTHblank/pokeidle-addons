@@ -111,13 +111,17 @@ Predicted captures and shiny catches use weighted spawn composition and the
 experimental lead kill rate. Default all-corpses-targeted assumptions are
 **upper bounds**; user-configured attempt fractions are optional.
 
-Outland 1–8 uses the userscript's actual level thresholds and tier
-multipliers. Bronze token, key/stone/bicycle fragment probabilities,
-expected hours, 24h chances and crafting times are shown separately from
-ordinary shiny egg thresholds. Tier choice is a *preview*, not a command
-confirmation. The Bicycle Fragment source is not verified against a live
-server hook. Capture, shiny, Kick, event, loot and guild boost factors are
-opt-in what-if controls, **never guessed as active**.
+Outland follows `shared/outland-tiers.mjs` from
+`pokeidle-upstream` v1.426.2: 40 server tier IDs (101–140), displayed as
+Outland 1–40, with trainer unlock levels from 150 through 65,000 and rare-drop
+multipliers from 1× through 20×. Legacy eight-tier server catalogs and saved
+tier IDs remain supported; old IDs map to the modern tier at the same unlock
+level when using the current catalog. Bronze token, key/stone/bicycle
+fragment probabilities, expected hours, 24h chances and crafting times are
+shown separately from ordinary shiny egg thresholds. Tier choice is a
+*preview*, not a command confirmation. The Bicycle Fragment source is not
+verified against a live server hook. Capture, shiny, Kick, event, loot and
+guild boost factors are opt-in what-if controls, **never guessed as active**.
 
 Economics shows independently: modeled combat gold, guide reference NPC
 drops, optional expected named-item units/hour, manual player-market
@@ -141,7 +145,8 @@ with a clear warning that the observation and forecast hours may differ.
 Old history files remain readable without fabricating archived models.
 
 Added unit tests for public creature rarity, ball currency alternatives,
-all eight tier locking and rare probabilities, independent XP channels,
+all 40 current tier gates, legacy eight-tier compatibility and rare
+probabilities, independent XP channels,
 capture edge cases, market input validation, time-attributed history
 serialization and archived model history. **Rust fmt/check/test/Clippy
 and actual desktop runtime checks were not executable in this connector
