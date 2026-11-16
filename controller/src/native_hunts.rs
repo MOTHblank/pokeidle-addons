@@ -2478,6 +2478,24 @@ mod tests {
         assert_eq!(intel.view.outland_requirement(2),Some((1000,1.25)));
     }
     #[test]
+    fn current_upstream_outland_catalog_accepts_all_forty_tiers(){
+        let catalog=serde_json::Value::Array(
+            crate::native_atlas_models::default_outland_tiers().into_iter()
+                .map(|tier|serde_json::json!({
+                    "tier":tier.id,"numero":tier.number,
+                    "nivel":tier.required_level,"mult":tier.multiplier
+                })).collect()
+        );
+        let parsed=parse_outland_catalog(&catalog).unwrap();
+        assert_eq!(parsed.len(),40);
+        assert_eq!((parsed[0].id,parsed[0].number,
+            parsed[0].required_level,parsed[0].multiplier),(101,1,150,1.0));
+        assert_eq!((parsed[39].id,parsed[39].number,
+            parsed[39].required_level,parsed[39].multiplier),(140,40,65000,20.0));
+        assert_eq!(crate::native_atlas_models::canonical_outland_tier(2),Some(104));
+        assert_eq!(crate::native_atlas_models::canonical_outland_tier(8),Some(130));
+    }
+    #[test]
     fn malformed_outland_catalog_cannot_unlock_a_higher_tier(){
         let mut catalog=serde_json::json!([
             {"tier":1,"nivel":150,"mult":1},{"tier":2,"nivel":1000,"mult":1.25},
@@ -2502,12 +2520,13 @@ mod tests {
         assert!(intel.request_outland_tier(2,now).is_ok());
         let pending=intel.snapshot();
         assert_eq!(pending.outland_tier,Some(1));
-        assert_eq!(pending.pending_outland_tier,Some(2));
+        // Legacy tier 2 resolves to current upstream tier 104 (Lv 1,000).
+        assert_eq!(pending.pending_outland_tier,Some(104));
         assert!(intel.request_outland_tier(1,now).is_err());
         // A state patch carrying an unrelated old tier is not an ack.
         intel.ingest(r#"{"t":"estado","estado":{"tierOutland":1}}"#,now);
-        assert_eq!(intel.snapshot().pending_outland_tier,Some(2));
-        // The only confirmation is a server-reported matching tier.
+        assert_eq!(intel.snapshot().pending_outland_tier,Some(104));
+        // The old tier value is normalized before matching the acknowledgement.
         intel.ingest(r#"{"t":"estado","estado":{"tierOutland":2}}"#,now);
         assert_eq!(intel.snapshot().outland_tier,Some(2));
         assert_eq!(intel.snapshot().pending_outland_tier,None);
