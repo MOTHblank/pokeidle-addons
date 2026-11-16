@@ -1710,9 +1710,11 @@ mod tests {
         assert!(!intel.view.measurements.valid_trainer);
         assert_eq!(intel.view.sample_quality,"Warming up after bicycle change");
 
-        // Missing delta fields retain the confirmed bike; explicit null clears it.
+        // A partial game-state delta without bicicleta must retain the
+        // confirmed mythical bike; only an explicit null clears it.
         intel.ingest_value(&json!({"t":"estado","estado":{"gold":1}}),now);
-        assert_eq!(intel.view.bicycle_factor,Some(1.75));
+        assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("mitica"));
+        assert_eq!(intel.view.bicycle_factor,Some(3.0));
         intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":null}}),now);
         assert_eq!(intel.view.bicycle_rarity,None);
         assert_eq!(intel.view.bicycle_factor,None);
