@@ -1235,7 +1235,6 @@ pub(super) fn dynamic(mut english: String) -> String {
         (" · Auto-sale: ", " · Venda automática: "),
         ("Altar points/h", "Pontos do altar/h"),
         ("Sacrifice Bone %/kill", "Sacrifice Bone %/abate"),
-        ("Live Outland drop bonus · +", "Bônus de drop ativo em Outland · +"),
         ("Ball #", "Bola nº "),
         (" sent · ", " enviadas · "),
         (" caught", " capturados"),
