@@ -60,7 +60,7 @@ impl GameCommand {
             Self::Hunt(slug) => !slug.is_empty() && slug.len()<=128 &&
                 slug.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
             Self::TeamActive(id) => *id > 0,
-            Self::OutlandTier(tier) => (1..=8).contains(tier),
+            Self::OutlandTier(tier) => (1..=8).contains(tier) || (101..=140).contains(tier),
             Self::Center | Self::GiveUp | Self::BossStop | Self::BossLeave | Self::BossExit => true,
             Self::BossStart { key, .. } | Self::BossEnter(key) |
             Self::BossAuto { key, .. } => !key.is_empty() && key.len() <= 128 &&
@@ -506,13 +506,14 @@ mod protocol_command_tests {
     use super::*;
     #[test]
     fn outland_tier_uses_server_protocol_and_rejects_invalid_tiers() {
-        for tier in 1..=8 {
+        for tier in (1..=8).chain(101..=140) {
             let cmd=GameCommand::OutlandTier(tier);
             assert!(cmd.is_valid());
             assert_eq!(cmd.wire(),json!({"t":"outland.tier","tier":tier}));
         }
-        assert!(!GameCommand::OutlandTier(0).is_valid());
-        assert!(!GameCommand::OutlandTier(9).is_valid());
+        for tier in [0,9,100,141] {
+            assert!(!GameCommand::OutlandTier(tier).is_valid());
+        }
     }
     #[test]
     fn team_active_uses_upstream_wire_format() {
