@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn dead_time_curve_starts_at_map_baseline_and_decays_to_fixed_floor() {
         let s=3.422;
-        let reducible=(0.83*s-1.41).max(0.0);
+        let reducible=(0.83_f64*s-1.41_f64).max(0.0_f64);
         assert!((dead_time_s(s,0.0,1.0)-s).abs()<1e-12);
         let at_tau=dead_time_s(s,2.8,1.0);
         let expected=s-reducible*(1.0-(-1.0f64).exp());
@@ -499,7 +499,7 @@ mod tests {
         assert!((foot.fixed_s-baseline.fixed_s).abs()<1e-12);
         assert!((bike.fixed_s-baseline.fixed_s).abs()<1e-12);
         assert!((bike.walking_s-foot.walking_s/2.0).abs()<1e-12);
-        assert!((bike.total_s-(bike.fixed_s+bike.walking_s)).abs()<1e-12);
+        assert!((bike.total_s()-(bike.fixed_s+bike.walking_s)).abs()<1e-12);
 
         let foot_floor=dead_time(s,f64::INFINITY,1.0);
         let bike_floor=dead_time(s,f64::INFINITY,2.0);
