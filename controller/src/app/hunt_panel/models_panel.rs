@@ -450,7 +450,7 @@ pub(super) fn draw_atlas_models(
     });
     if let Some(speed)=kills {
         let rare=models::rare_scenarios_with_gate(outland,hunt.level,
-            view.outland_requirement(scenario.tier),view.trainer_level,speed,&scenario.modifiers);
+            view.outland_requirement(scenario.tier),view.trainer_level,speed,&effective_modifiers);
         if rare.is_empty(){
             ui.label(RichText::new(if outland{
                 tr("Preview tier is locked at this trainer level, or the level is unavailable.")
