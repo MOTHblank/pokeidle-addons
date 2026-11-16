@@ -950,6 +950,18 @@ impl HuntIntel {
             if let Some(delta)=raw.as_object() {
                 let mut merged=self.bicycle_state.take()
                     .filter(Value::is_object).unwrap_or_else(||serde_json::json!({}));
+                // A changed equipped ID invalidates any previously merged
+                // equipped rarity unless this same delta supplies its new value.
+                // Otherwise an old equipadaRar can mask the rarity in lista.
+                let equipped_id_changed=delta.get("equipada").is_some_and(|next| {
+                    merged.get("equipada")
+                        .is_none_or(|previous|!same_json_id(previous,next))
+                });
+                if equipped_id_changed && !delta.contains_key("equipadaRar") {
+                    if let Some(target)=merged.as_object_mut() {
+                        target.remove("equipadaRar");
+                    }
+                }
                 if let Some(target)=merged.as_object_mut() {
                     for (key,value) in delta {
                         target.insert(key.clone(),value.clone());
