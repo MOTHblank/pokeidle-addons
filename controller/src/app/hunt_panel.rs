@@ -44,7 +44,7 @@ pub(super) struct AtlasScenario {
 }
 impl Default for AtlasScenario {
     fn default()->Self{
-        Self{hunt_slug:String::new(),ball:BallKind::Ultra,tier:1,
+        Self{hunt_slug:String::new(),ball:BallKind::Ultra,tier:101,
             modifiers:Modifiers::default(),rare_target:70000,
             accepted_fraction_override:None,
             modifiers_open:false}
