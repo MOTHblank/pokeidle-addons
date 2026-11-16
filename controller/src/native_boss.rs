@@ -20,9 +20,9 @@ const MAX_LOOT: usize = 500;
 /// controller request does not hammer the entry command while the server is
 /// deliberately cooling down.
 const BOSS_NEXT_FIGHT_DELAY: Duration = Duration::from_secs(10);
-// Match shared/dia-sazonal.mjs: the rotation day changes at midnight in Brasília.
+// Match shared/dia-sazonal.mjs: its seasonal date advances six hours before Brasília midnight.
 const SECONDS_PER_DAY: i64 = 86_400;
-const BRASILIA_UTC_OFFSET_SECONDS: i64 = -3 * 60 * 60;
+const SEASONAL_DAY_UTC_SHIFT_SECONDS: i64 = 3 * 60 * 60;
 // 2026-11-17, the ROTACAO_BOSS_DIA_ZERO in shared/bosses-lendarios.mjs.
 const BOSS_REWARD_ROTATION_START_DAY: i64 = 20_774;
 
@@ -89,7 +89,8 @@ impl BossEntry {
 
     /// Resolve the current trio reward exactly like shared/bosses-lendarios.mjs.
     /// Each region keeps its three boss positions, but their rewards rotate
-    /// daily at midnight Brasília time (UTC-3), starting on 2026-11-17.
+    /// on the upstream seasonal-day boundary (18:00 Brasília, UTC-3),
+    /// starting with the 2026-11-17 seasonal date.
     pub fn reward_at(&self, unix_seconds: u64) -> Option<&str> {
         let Some(position) = self.trio_position else {
             return self.reward.as_deref();
@@ -97,10 +98,10 @@ impl BossEntry {
         let Ok(unix_seconds) = i64::try_from(unix_seconds) else {
             return self.reward.as_deref();
         };
-        let local_day = (unix_seconds + BRASILIA_UTC_OFFSET_SECONDS)
+        let seasonal_day = (unix_seconds + SEASONAL_DAY_UTC_SHIFT_SECONDS)
             .div_euclid(SECONDS_PER_DAY);
         let rotation_day =
-            (local_day - BOSS_REWARD_ROTATION_START_DAY).rem_euclid(3);
+            (seasonal_day - BOSS_REWARD_ROTATION_START_DAY).rem_euclid(3);
         let reward_index = (i64::from(position) - rotation_day).rem_euclid(3);
         Some(match reward_index {
             0 => "tm",
@@ -1136,10 +1137,11 @@ mod tests {
         let articuno = parse("articuno");
         let moltres = parse("moltres");
         let zapdos = parse("zapdos");
-        // 2026-11-17 00:00:00 in Brasília (03:00 UTC).
-        const START: u64 = 1_794_884_400;
+        // The upstream seasonal date changes to 2026-11-17 at
+        // 2026-11-16 18:00 Brasília (21:00 UTC).
+        const START: u64 = 1_794_862_800;
 
-        // The previous reward day remains active through 23:59:59 Brasília.
+        // The previous reward day remains active through 17:59:59 Brasília.
         assert_eq!(articuno.reward_at(START - 1), Some("mega"));
         assert_eq!(articuno.reward_at(START), Some("tm"));
         assert_eq!(moltres.reward_at(START), Some("mega"));
