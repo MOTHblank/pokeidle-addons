@@ -284,18 +284,6 @@ pub(super) fn draw_atlas_models(
     // a source that is already active in the live state.
     if view.bonuses.kick_capture_active {effective_modifiers.kick_capture=false;}
     if view.bonuses.kick_shiny_active {effective_modifiers.kick_shiny=false;}
-    // Upstream bonusLootPct is additive: active store/farm-event bonus plus guild bonus.
-    // Raid farm is deliberately excluded because it belongs to Raid rewards, not Outland hunts.
-    let live_drop_pct=if live&&outland {
-        view.bonuses.extra_loot_pct.max(0.0)
-            + if view.bonuses.guild_known {view.bonuses.guild_pct.max(0.0)}else{0.0}
-    }else{0.0};
-    effective_modifiers.drop_event*=1.0+live_drop_pct/100.0;
-    if live_drop_pct>0.0{
-        ui.label(RichText::new(tr_dynamic(format!(
-            "Live Outland drop bonus · +{live_drop_pct:.1}%"
-        ))).size(10.0).color(GOOD));
-    }
     ui.add_space(9.0);
     let f=if live{cache.get(&hunt.slug)}else{None};
     let kills=f.as_ref().map(|f|f.kills_h);
@@ -449,8 +437,9 @@ pub(super) fn draw_atlas_models(
             });
     });
     if let Some(speed)=kills {
-        let rare=models::rare_scenarios_with_gate(outland,hunt.level,
-            view.outland_requirement(scenario.tier),view.trainer_level,speed,&effective_modifiers);
+        let rare=models::rare_scenarios_with_gate_and_token_chance(outland,hunt.level,
+            view.outland_requirement(scenario.tier),view.trainer_level,speed,
+            view.boss_token_chance,&effective_modifiers);
         if rare.is_empty(){
             ui.label(RichText::new(if outland{
                 tr("Preview tier is locked at this trainer level, or the level is unavailable.")
@@ -526,7 +515,8 @@ pub(super) fn draw_atlas_models(
                         ui.label(tier.number.to_string());
                         ui.label(tier.required_level.to_string());
                         ui.label(format!("{mult:.2}×"));
-                        ui.label(format!("{:.5}%",0.0005*mult*100.0));
+                        ui.label(format!("{:.5}%",view.boss_token_chance
+                            .unwrap_or(models::BOSS_TOKEN_CHANCE_DEFAULT)*mult*100.0));
                         ui.label(format!("{:.6}%",0.000005*mult*100.0));
                         ui.label(format!("{:.6}%",models::SACRIFICE_BONE_CHANCE*mult*100.0));
                         ui.label(if view.unlocked_outland_tier(tier.id).is_some(){
