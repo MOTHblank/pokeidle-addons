@@ -440,7 +440,7 @@ fn draw_boss_details(
             ui.horizontal_wrapped(|ui| {
                 resource_chip(ui, &format!("Lv {}", entry.fight_level()));
                 resource_chip(ui, &format!("{} {}", attempts, tr("entries")));
-                if let Some(reward) = boss_reward_label(entry) {
+                if let Some(reward) = boss_reward_label(entry, now) {
                     resource_chip(ui, &reward);
                 }
                 resource_chip(ui, &format!(
