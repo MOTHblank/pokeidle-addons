@@ -136,9 +136,58 @@ pub fn capture_scenario_with_stage(
         shiny_caught_h,shiny_caught_24h,balls_per_capture:1.0/chance,
         accepted_is_ceiling:accepted_fraction.is_none()})
 }
-// Upstream shared/outland-tiers.mjs (v1.314.2).
-pub const TIER_LEVELS:[u32;8]=[150,1000,2000,4000,8000,16000,24000,36000];
-pub const TIER_MULTIPLIERS:[f64;8]=[1.0,1.25,1.5,2.0,3.0,4.0,6.0,8.0];
+// Upstream shared/outland-tiers.mjs (pokeidle-upstream v1.426.2).
+// The game now exposes 40 selectable tiers, with IDs 101..140.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OutlandTier {
+    pub id:u8,
+    pub number:u8,
+    pub required_level:u32,
+    pub multiplier:f64,
+}
+pub const TIER_LEVELS:[u32;40]=[
+    150,500,750,1_000,1_250,1_500,1_800,2_000,2_250,2_500,
+    3_000,3_250,3_500,4_000,5_000,6_000,7_000,8_000,10_000,11_000,
+    12_000,14_000,15_000,17_000,19_000,21_000,24_000,28_000,32_000,36_000,
+    38_000,40_000,41_000,43_000,45_000,48_000,52_000,58_000,60_000,65_000,
+];
+pub const TIER_MULTIPLIERS:[f64;40]=[
+    1.0,1.1,1.15,1.25,1.3,1.5,1.65,1.85,2.0,2.15,
+    2.3,2.45,2.6,2.75,3.0,3.25,3.5,3.75,4.0,4.25,
+    4.5,5.0,5.25,6.0,6.5,7.0,7.5,8.0,8.5,9.0,
+    9.5,10.0,10.5,11.0,12.0,13.0,14.0,16.0,17.0,20.0,
+];
+// Legacy server builds exposed only eight settings. Preserve their identifiers
+// and values when that exact catalog is supplied by the welcome frame.
+pub const LEGACY_TIER_LEVELS:[u32;8]=[150,1_000,2_000,4_000,8_000,16_000,24_000,36_000];
+pub const LEGACY_TIER_MULTIPLIERS:[f64;8]=[1.0,1.25,1.5,2.0,3.0,4.0,6.0,8.0];
+
+pub fn default_outland_tiers()->Vec<OutlandTier>{
+    TIER_LEVELS.iter().zip(TIER_MULTIPLIERS.iter()).enumerate()
+        .map(|(index,(&required_level,&multiplier))|OutlandTier{
+            id:101+index as u8,number:index as u8+1,required_level,multiplier
+        }).collect()
+}
+pub fn valid_outland_tier_id(tier:u64)->bool{
+    (1..=8).contains(&tier)||(101..=140).contains(&tier)
+}
+/// Map a persisted pre-v1.426 tier to the newest tier at or below its old
+/// unlock level, matching upstream outlandTier()/fichaDoDegrauAntigo().
+pub fn canonical_outland_tier(tier:u8)->Option<u8>{
+    match tier {
+        101..=140=>Some(tier),
+        1..=8=>{
+            let level=LEGACY_TIER_LEVELS[usize::from(tier-1)];
+            let index=TIER_LEVELS.partition_point(|candidate|*candidate<=level)
+                .saturating_sub(1);
+            Some(101+index as u8)
+        }
+        _=>None,
+    }
+}
+pub fn outland_tier_number(tier:u8)->Option<u8>{
+    match tier {1..=8=>Some(tier),101..=140=>Some(tier-100),_=>None}
+}
 // Upstream v1.398.1, shared/ovo-shiny.mjs: 32 level bands through Paldea.
 // A fragment is only possible at level 5,000+, outside Outland.
 pub const SHINY_EGG_LEVELS:[u32;32]=[
