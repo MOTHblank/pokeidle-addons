@@ -337,9 +337,10 @@ fn canonical_bicycle_rarity(raw:&str)->Option<String>{
         .then_some(folded)
 }
 fn default_bicycle_factors()->BTreeMap<String,f64>{
-    // shared/bicicletas.mjs: +15/+25/+50/+75/+100% movement speed.
-    [("comum",1.15),("incomum",1.25),("rara",1.50),
-     ("mitica",1.75),("lendaria",2.00)]
+    // shared/bicicletas.mjs: fatorPassoNaHunt = 1 + velocidadeDaRaridade.
+    // These are hunt movement multipliers, not the smaller town-square bonuses.
+    [("comum",2.0),("incomum",2.2),("rara",2.6),
+     ("mitica",3.0),("lendaria",3.5)]
         .into_iter().map(|(rarity,factor)|(rarity.to_owned(),factor)).collect()
 }
 fn bicycle_factors_from_welcome(raw:Option<&Value>)->BTreeMap<String,f64>{
@@ -1655,17 +1656,30 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn bicycle_fallbacks_match_upstream_hunt_speed_not_town_square_speed() {
+        let factors=default_bicycle_factors();
+        for (rarity,expected) in [
+            ("comum",2.0),("incomum",2.2),("rara",2.6),
+            ("mitica",3.0),("lendaria",3.5)
+        ] {
+            assert_eq!(factors.get(rarity).copied(),Some(expected),"{rarity}");
+        }
+    }
+    #[test]
     fn bicycle_snapshot_uses_equipped_rarity_and_live_speed_table() {
         let mut intel=HuntIntel::new();
         let now=Instant::now();
         intel.ingest_value(&json!({"t":"welcome",
             "bicicletas":{"raridades":[
-                {"id":"comum","velocidade":0.15},
-                {"id":"rara","velocidade":0.60}
+                {"id":"comum","velocidade":1.0},
+                {"id":"incomum","velocidade":1.2},
+                {"id":"rara","velocidade":1.6},
+                {"id":"mitica","velocidade":2.0},
+                {"id":"lendaria","velocidade":2.5}
             ]},
             "estado":{"bicicleta":{"equipadaRar":"rara"}}}),now);
         assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("rara"));
-        assert_eq!(intel.view.bicycle_factor,Some(1.60));
+        assert_eq!(intel.view.bicycle_factor,Some(2.6));
 
         // Older state shapes can identify the equipped item through lista.
         intel.view.measurements.valid_trainer=true;
@@ -1673,7 +1687,7 @@ mod tests {
             "equipada":7,"lista":[{"id":7,"rar":"mitica"}]
         }}}),now);
         assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("mitica"));
-        assert_eq!(intel.view.bicycle_factor,Some(1.75));
+        assert_eq!(intel.view.bicycle_factor,Some(3.0));
         assert!(!intel.view.measurements.valid_trainer);
         assert_eq!(intel.view.sample_quality,"Warming up after bicycle change");
 
@@ -1693,12 +1707,14 @@ mod tests {
                 {"id":7,"rar":"comum"},{"id":8,"rar":"lendaria"}
             ]
         }}}),now);
-        assert_eq!(intel.view.bicycle_factor,Some(1.15));
+        // No welcome bicycle table: use upstream's hunt-speed fallback,
+        // not the smaller town-square speed bonuses.
+        assert_eq!(intel.view.bicycle_factor,Some(2.0));
         intel.ingest_value(&json!({"t":"estado","estado":{"bicicleta":{
             "equipada":8
         }}}),now);
         assert_eq!(intel.view.bicycle_rarity.as_deref(),Some("lendaria"));
-        assert_eq!(intel.view.bicycle_factor,Some(2.0));
+        assert_eq!(intel.view.bicycle_factor,Some(3.5));
     }
     #[test]
     fn live_pokemon_retains_server_stats_and_tms() {
