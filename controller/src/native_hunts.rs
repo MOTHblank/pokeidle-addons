@@ -1486,11 +1486,20 @@ impl HuntIntel {
                                 }
                                 if let Some(drops)=e.get("drops").and_then(Value::as_array) {
                                     for drop in drops {
-                                        let Some(name)=drop.get("nome").and_then(Value::as_str)
-                                            .map(str::trim).filter(|n|!n.is_empty()) else {continue};
+                                        let item_id=Self::num(drop,"itemId")
+                                            .or_else(||Self::num(drop,"id"));
+                                        let name=if item_id==Some(crate::native_atlas_models::SACRIFICE_BONE_ID){
+                                            Some("Sacrifice Bone")
+                                        }else{
+                                            drop.get("nome").or_else(||drop.get("name"))
+                                                .and_then(Value::as_str)
+                                                .map(str::trim).filter(|n|!n.is_empty())
+                                        };
+                                        let Some(name)=name else {continue};
+                                        // Upstream session accounting defaults an omitted drop quantity to one.
                                         let quantity=Self::num(drop,"ganho").filter(|n|*n>0)
-                                            .or_else(||Self::num(drop,"qtd")).unwrap_or(0);
-                                        if quantity==0 {continue}
+                                            .or_else(||Self::num(drop,"qtd").filter(|n|*n>0))
+                                            .unwrap_or(1);
                                         let total=session.acquired.entry(name.to_owned()).or_default();
                                         *total=total.saturating_add(quantity);
                                         self.recent_drops.push_front((name.to_owned(),quantity));
@@ -2223,11 +2232,12 @@ mod tests {
             "estado":{"huntSlug":"a","items":{"55":900}}}"#,now);
         intel.ingest(r#"{"t":"batalha","ev":[{"k":"morte","quem":"selvagem",
             "xpTreinador":100,"xpPokemon":50,"ouro":33,"ouroVendaAuto":5,
-            "drops":[{"nome":"Moon Stone","qtd":3,"ganho":2}]}]}"#,now);
+            "drops":[{"nome":"Moon Stone","qtd":3,"ganho":2},{"itemId":70018,"qtd":2}]}]}"#,now);
         intel.ingest(r#"{"t":"batalha","ev":[{"k":"compra","nome":"Moon Stone",
             "qtd":5,"gasto":400}]}"#,now);
         intel.ingest(r#"{"t":"estado","estado":{"items":{"55":910}}}"#,now);
         assert_eq!(intel.view.session.acquired["Moon Stone"],2);
+        assert_eq!(intel.view.session.acquired["Sacrifice Bone"],2);
         assert_eq!(intel.view.session.trainer_xp,100);
         assert_eq!(intel.view.session.pokemon_xp,50);
         assert_eq!(intel.view.session.combat_gold,33);
