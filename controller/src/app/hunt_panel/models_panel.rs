@@ -172,16 +172,39 @@ pub(super) fn draw_atlas_models(
     let Some((hunt,_))=selected_hunt(view,reference,scenario) else{
         ui.label(tr("No available hunts."));return
     };
-    let observed_tier=view.outland_tier;
     let outland=hunt.area.eq_ignore_ascii_case("outland");
+    let outland_tiers=if outland{view.outland_tiers()}else{Vec::new()};
+    let observed_tier=view.active_outland_tier();
     if outland {
+        if !outland_tiers.iter().any(|tier|tier.id==scenario.tier){
+            scenario.tier=observed_tier
+                .filter(|active|outland_tiers.iter().any(|tier|tier.id==*active))
+                .or_else(||outland_tiers.first().map(|tier|tier.id))
+                .unwrap_or(101);
+        }
         ui.horizontal_wrapped(|ui|{
             ui.label(tr("Model preview tier"));
-            ui.add(egui::Slider::new(&mut scenario.tier,1..=8).show_value(true));
+            let selected=outland_tiers.iter().find(|tier|tier.id==scenario.tier);
+            egui::ComboBox::from_id_salt(("atlas-model-outland-tier",&hunt.slug))
+                .selected_text(selected.map(|tier|format!(
+                    "Outland {} · Lv {}",tier.number,tier.required_level
+                )).unwrap_or_else(||tr("Choose tier").into()))
+                .width(190.0)
+                .show_ui(ui,|ui|{
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui,|ui|{
+                        for tier in &outland_tiers{
+                            ui.selectable_value(&mut scenario.tier,tier.id,format!(
+                                "Outland {} · Lv {} · ×{:.2}",
+                                tier.number,tier.required_level,tier.multiplier
+                            ));
+                        }
+                    });
+                });
             ui.label(tr_dynamic(format!("Requires trainer Lv {}",
                 view.outland_requirement(scenario.tier).map_or(0,|v|v.0))));
             if let Some(actual)=observed_tier{
-                ui.label(RichText::new(tr_dynamic(format!("Game tier: Outland {actual}")))
+                let number=view.outland_tier_number(actual).unwrap_or(actual);
+                ui.label(RichText::new(tr_dynamic(format!("Game tier: Outland {number}")))
                     .size(10.0).color(GOOD));
                 if scenario.tier!=actual && ui.small_button(tr("Preview active tier")).clicked(){
                     scenario.tier=actual;
@@ -458,7 +481,9 @@ pub(super) fn draw_atlas_models(
         ui.label(tr("Rare drops need a modeled or measured kill rate."));
     }
     if outland {
-        ui.collapsing(tr("All eight Outland tiers · base drop probabilities"),|ui|{
+        ui.collapsing(tr_dynamic(format!(
+            "All {} Outland tiers · base drop probabilities",outland_tiers.len()
+        )),|ui|{
             egui::ScrollArea::horizontal()
                 .id_salt(("atlas-outland-table-scroll",&hunt.slug))
                 .show(ui,|ui|{
@@ -467,15 +492,14 @@ pub(super) fn draw_atlas_models(
                     ui.strong(tr("Tier"));ui.strong(tr("Required Lv"));ui.strong(tr("Multiplier"));
                     ui.strong(tr("Token %/kill"));ui.strong(tr("Key/Stone/Bicycle %/kill"));
                     ui.strong(tr("Access"));ui.end_row();
-                    for idx in 0..8{
-                        let tier=(idx+1) as u8;
-                        let mult=models::TIER_MULTIPLIERS[idx];
-                        ui.label(tier.to_string());
-                        ui.label(models::TIER_LEVELS[idx].to_string());
+                    for tier in &outland_tiers{
+                        let mult=tier.multiplier;
+                        ui.label(tier.number.to_string());
+                        ui.label(tier.required_level.to_string());
                         ui.label(format!("{mult:.2}×"));
                         ui.label(format!("{:.5}%",0.0005*mult*100.0));
                         ui.label(format!("{:.6}%",0.000005*mult*100.0));
-                        ui.label(if view.unlocked_outland_tier(tier).is_some(){
+                        ui.label(if view.unlocked_outland_tier(tier.id).is_some(){
                             tr("Level eligible")
                         }else{tr("Locked / unknown")});
                         ui.end_row();
