@@ -116,8 +116,8 @@ fn boss_trio_label(entry: &BossEntry) -> Option<String> {
     })
 }
 
-fn boss_reward_label(entry: &BossEntry) -> Option<String> {
-    let reward = entry.reward.as_deref()?;
+fn boss_reward_label(entry: &BossEntry, now: u64) -> Option<String> {
+    let reward = entry.reward_at(now)?;
     Some(match reward {
         "tm" => tr("Z-Move + AoE TM").to_owned(),
         "mega" => tr("Mega + Shiny Mega").to_owned(),
@@ -262,6 +262,7 @@ fn draw_boss_selector(
     hunt: &HuntView,
     live: bool,
     optimistic_request: Option<&str>,
+    now: u64,
 ) -> bool {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
@@ -306,7 +307,7 @@ fn draw_boss_selector(
                         .size(9.0)
                         .color(MUTED),
                     );
-                    if let Some(reward) = boss_reward_label(entry) {
+                    if let Some(reward) = boss_reward_label(entry, now) {
                         ui.label(RichText::new(reward).size(9.0).color(ACCENT));
                     }
                 });
@@ -346,6 +347,7 @@ fn draw_boss_catalog(
     live: bool,
     optimistic_request: Option<&str>,
     selected: &mut String,
+    now: u64,
 ) {
     let mut last_region = None::<String>;
     for entry in &view.catalog {
@@ -361,7 +363,7 @@ fn draw_boss_catalog(
         }
         if draw_boss_selector(
             ui, entry, selected.as_str() == entry.key,
-            view, hunt, live, optimistic_request,
+            view, hunt, live, optimistic_request, now,
         ) {
             *selected = entry.key.clone();
         }
@@ -406,6 +408,7 @@ fn draw_boss_details(
     restock_enabled: bool,
     pending_start: Option<(&str, bool)>,
     action: &mut Option<GameCommand>,
+    now: u64,
 ) {
     let tokens = hunt.items.get(&entry.token_id).copied().unwrap_or(0);
     let attempts = tokens / entry.tokens_per_entry.max(1);
@@ -1152,7 +1155,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             draw_boss_catalog(
                                 ui, &view, &hunt, live,
                                 pending_start.as_ref().map(|(key, _)| key.as_str()),
-                                selected,
+                                selected, now,
                             );
                         });
                         ui.vertical(|ui| {
@@ -1164,6 +1167,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                     reference.as_deref(), restock_enabled,
                                     pending_start.as_ref().map(|(key, repeat)| (key.as_str(), *repeat)),
                                     &mut action,
+                                    now,
                                 );
                             }
                         });
@@ -1172,7 +1176,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     draw_boss_catalog(
                         ui, &view, &hunt, live,
                         pending_start.as_ref().map(|(key, _)| key.as_str()),
-                        selected,
+                        selected, now,
                     );
                     ui.add_space(8.0);
                     if let Some(entry) = view.catalog.iter()
@@ -1182,6 +1186,7 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                             reference.as_deref(), restock_enabled,
                                     pending_start.as_ref().map(|(key, repeat)| (key.as_str(), *repeat)),
                                     &mut action,
+                            now,
                         );
                     }
                 }
