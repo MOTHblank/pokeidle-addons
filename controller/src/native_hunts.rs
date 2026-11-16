@@ -1592,7 +1592,14 @@ impl HuntIntel {
         let Some(first) = self.samples.front() else { return };
         let Some(last) = self.samples.back() else { return };
         let sec = last.at.saturating_duration_since(first.at).as_secs_f64();
-        if sec < MIN_MEASUREMENT { self.view.sample_quality = "Warming up · minimum 20 seconds".into(); return; }
+        if sec < MIN_MEASUREMENT {
+            // Preserve a more specific reset reason while the new measurement
+            // window is warming up; the generic message must not erase it.
+            if self.view.sample_quality != "Warming up after bicycle change" {
+                self.view.sample_quality = "Warming up · minimum 20 seconds".into();
+            }
+            return;
+        }
         let scale = 3600.0 / sec;
         let rate = |a: Option<u64>, b: Option<u64>| -> Option<f64> {
             let (Some(a), Some(b)) = (a, b) else { return None };
