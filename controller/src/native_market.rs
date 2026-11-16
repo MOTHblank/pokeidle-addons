@@ -505,6 +505,10 @@ impl MarketBuyer {
             snatch_verifying:HashMap::new(),snatch_last_verify:HashMap::new(),
             snatch_last_send:HashMap::new() }
     }
+    pub fn has_pending_scan(&self) -> bool { self.pending_scan.is_some() }
+    pub fn is_rate_limited(&self, now: Instant) -> bool {
+        self.backoff_until.is_some_and(|until| now < until)
+    }
     pub fn on_disconnect(&mut self) {
         let had_pending=!self.pending.is_empty();
         let old=std::mem::take(&mut self.pending);
@@ -740,6 +744,7 @@ impl MarketBuyer {
             }
         }
         if t!="market" {return}
+        if frame.get("aba").and_then(Value::as_str)==Some("medias") {return}
         let Some((scan,requested_at))=self.pending_scan.take() else{return};
         let matched=match (&scan,frame.get("aba").and_then(Value::as_str)) {
             (Scan::Summary,Some("itens"))=>{

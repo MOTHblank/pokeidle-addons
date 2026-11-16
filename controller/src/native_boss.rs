@@ -8,6 +8,7 @@ use crate::native_hunt_navigation::HuntNavigator;
 use crate::native_hunts::HuntView;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
@@ -25,8 +26,128 @@ const SECONDS_PER_DAY: i64 = 86_400;
 const SEASONAL_DAY_UTC_SHIFT_SECONDS: i64 = 3 * 60 * 60;
 // 2026-11-17, the ROTACAO_BOSS_DIA_ZERO in shared/bosses-lendarios.mjs.
 const BOSS_REWARD_ROTATION_START_DAY: i64 = 20_774;
+const RMT_PRICE_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+const RMT_PRICE_RETRY_INTERVAL: Duration = Duration::from_secs(15);
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BossCatalogDrop {
+    pub item_id: u64,
+    pub name: Option<String>,
+    pub chance: Option<f64>,
+    pub quantity_range: Option<(u64, u64)>,
+}
+
+impl BossCatalogDrop {
+    pub fn average_quantity(&self) -> f64 {
+        self.quantity_range
+            .map(|(min, max)| (min as f64 + max as f64) / 2.0)
+            .unwrap_or(1.0)
+    }
+
+    pub fn expected_quantity(&self) -> Option<f64> {
+        match (self.chance, self.quantity_range) {
+            (Some(chance), _) if chance.is_finite() && chance >= 0.0 => {
+                Some(chance.clamp(0.0, 1.0) * self.average_quantity())
+            }
+            (None, Some((min, max))) => Some((min as f64 + max as f64) / 2.0),
+            _ => None,
+        }
+    }
+
+    fn parse(raw: &Value) -> Option<Self> {
+        let item_id = raw.get("itemId")
+            .or_else(|| raw.get("item_id"))
+            .or_else(|| raw.get("id"))
+            .and_then(Value::as_u64)
+            .filter(|id| *id > 0)?;
+        let name = raw.get("nome")
+            .or_else(|| raw.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let chance = raw.get("chance")
+            .and_then(Value::as_f64)
+            .filter(|c| c.is_finite() && *c >= 0.0);
+        let quantity_range = match raw.get("qtd").or_else(|| raw.get("quantidade")) {
+            Some(Value::Array(arr)) if !arr.is_empty() => {
+                let min = arr.first().and_then(Value::as_u64);
+                let max = arr.get(1).and_then(Value::as_u64).or(min);
+                match (min, max) {
+                    (Some(a), Some(b)) => Some((a.min(b), a.max(b))),
+                    _ => None,
+                }
+            }
+            Some(Value::Number(n)) => n.as_u64().map(|q| (q, q)),
+            _ => None,
+        };
+        Some(Self {
+            item_id,
+            name,
+            chance,
+            quantity_range,
+        })
+    }
+
+    fn parse_list(raw: Option<&Value>) -> Vec<Self> {
+        raw.and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Self::parse).collect())
+            .unwrap_or_default()
+    }
+
+    fn parse_by_reward(raw: Option<&Value>) -> BTreeMap<String, Vec<Self>> {
+        let mut map = BTreeMap::new();
+        if let Some(obj) = raw.and_then(Value::as_object) {
+            for (reward, list) in obj {
+                let parsed = Self::parse_list(Some(list));
+                if !parsed.is_empty() {
+                    map.insert(reward.clone(), parsed);
+                }
+            }
+        }
+        map
+    }
+
+    fn merge_missing(target: &mut Vec<Self>, extra: &[Self]) {
+        if extra.is_empty() {
+            return;
+        }
+        if target.is_empty() {
+            *target = extra.to_vec();
+            return;
+        }
+        for src in extra {
+            if let Some(dst) = target.iter_mut().find(|d| d.item_id == src.item_id) {
+                if dst.chance.is_none() {
+                    dst.chance = src.chance;
+                }
+                if dst.quantity_range.is_none() {
+                    dst.quantity_range = src.quantity_range;
+                }
+                if dst.name.is_none() {
+                    dst.name = src.name.clone();
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RmtItemPrice {
+    pub avg_gems: Option<f64>,
+    pub gem_units: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BossAttemptValue {
+    pub expected_gems: f64,
+    pub priced_drops: usize,
+    pub total_drops: usize,
+    pub unknown_chance_drops: usize,
+    pub unpriced_drops: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BossEntry {
     pub key: String,
     pub name: String,
@@ -51,6 +172,10 @@ pub struct BossEntry {
     /// Authoritative battle types from bossesJogaveis, with bossesCatalogo
     /// as a welcome-time fallback for older payload shapes.
     pub types: Vec<String>,
+    /// Static/fallback drop list from the server boss catalog.
+    pub drops: Vec<BossCatalogDrop>,
+    /// Daily rotating drop lists keyed by reward tier ("tm", "mega", "tickets").
+    pub drops_by_reward: BTreeMap<String, Vec<BossCatalogDrop>>,
 }
 impl BossEntry {
     fn species_id(raw: &Value) -> Option<u64> {
@@ -108,6 +233,49 @@ impl BossEntry {
             1 => "mega",
             _ => "tickets",
         })
+    }
+
+    pub fn drops_at(&self, unix_seconds: u64) -> &[BossCatalogDrop] {
+        if let Some(reward) = self.reward_at(unix_seconds) {
+            if let Some(drops) = self.drops_by_reward.get(reward) {
+                if !drops.is_empty() {
+                    return drops.as_slice();
+                }
+            }
+        }
+        self.drops.as_slice()
+    }
+
+    pub fn expected_value_at(
+        &self,
+        unix_seconds: u64,
+        rmt_prices: &BTreeMap<u64, RmtItemPrice>,
+    ) -> Option<BossAttemptValue> {
+        let drops = self.drops_at(unix_seconds);
+        if drops.is_empty() {
+            return None;
+        }
+        let mut out = BossAttemptValue {
+            total_drops: drops.len(),
+            ..Default::default()
+        };
+        for drop in drops {
+            let Some(expected_qty) = drop.expected_quantity() else {
+                out.unknown_chance_drops += 1;
+                continue;
+            };
+            let Some(avg_gems) = rmt_prices
+                .get(&drop.item_id)
+                .and_then(|price| price.avg_gems)
+                .filter(|gems| gems.is_finite() && *gems > 0.0)
+            else {
+                out.unpriced_drops += 1;
+                continue;
+            };
+            out.expected_gems += expected_qty * avg_gems;
+            out.priced_drops += 1;
+        }
+        Some(out)
     }
 
     fn upstream_region_level(region_order: u8) -> u32 {
@@ -186,29 +354,44 @@ impl BossEntry {
                 .filter(|value| *value > 0 && *value <= u32::MAX as u64)
                 .map(|value| value as u32)
                 .unwrap_or(5),
-            region: fallback.map(|meta| meta.0.to_owned()).or_else(||
-                ["regiao", "region"].into_iter().find_map(|field|
-                    raw.get(field).and_then(Value::as_str)
-                        .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))),
-            trio: fallback.map(|meta| meta.1.to_owned()).or_else(||
-                raw.get("trio").and_then(Value::as_str)
-                    .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)),
-            reward: fallback.map(|meta| meta.2.to_owned()).or_else(||
-                ["premio", "reward"].into_iter().find_map(|field|
-                    raw.get(field).and_then(Value::as_str)
-                        .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))),
-            region_order: fallback.map(|meta| meta.3).or_else(||
-                raw.get("degrau").or_else(|| raw.get("regionIndex"))
-                    .and_then(Value::as_u64).map(|value| value.min(u8::MAX as u64) as u8)),
-            trio_position: fallback.map(|meta| meta.4).or_else(||
-                raw.get("posicao").or_else(|| raw.get("position"))
-                    .and_then(Value::as_u64).map(|value| value.min(u8::MAX as u64) as u8)),
+            region: ["regiao", "region"].into_iter().find_map(|field|
+                raw.get(field).and_then(Value::as_str)
+                    .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))
+                .or_else(|| fallback.map(|meta| meta.0.to_owned())),
+            trio: raw.get("trio").and_then(Value::as_str)
+                .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)
+                .or_else(|| fallback.map(|meta| meta.1.to_owned())),
+            reward: ["premio", "reward"].into_iter().find_map(|field|
+                raw.get(field).and_then(Value::as_str)
+                    .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned))
+                .or_else(|| fallback.map(|meta| meta.2.to_owned())),
+            region_order: raw.get("degrau").or_else(|| raw.get("regionIndex"))
+                .and_then(Value::as_u64).map(|value| value.min(u8::MAX as u64) as u8)
+                .or_else(|| fallback.map(|meta| meta.3)),
+            trio_position: raw.get("posicao").or_else(|| raw.get("position"))
+                .and_then(Value::as_u64).map(|value| value.min(u8::MAX as u64) as u8)
+                .or_else(|| fallback.map(|meta| meta.4)),
             species_id: Self::species_id(raw),
             types: ["type1", "type2"].into_iter().filter_map(|field|
                 raw.get(field).and_then(Value::as_str)
                     .map(str::trim).filter(|kind| !kind.is_empty())
                     .map(str::to_ascii_uppercase)
             ).collect(),
+            drops: {
+                let mut drops = BossCatalogDrop::parse_list(raw.get("drops"));
+                let detail = BossCatalogDrop::parse_list(raw.get("dropsDetalhe"));
+                BossCatalogDrop::merge_missing(&mut drops, &detail);
+                drops
+            },
+            drops_by_reward: {
+                let mut map = BossCatalogDrop::parse_by_reward(raw.get("dropsPorPremio"));
+                let detail_map = BossCatalogDrop::parse_by_reward(raw.get("dropsDetalhePorPremio"));
+                for (reward, extra) in detail_map {
+                    let entry = map.entry(reward).or_default();
+                    BossCatalogDrop::merge_missing(entry, &extra);
+                }
+                map
+            },
         })
     }
 }
@@ -246,6 +429,9 @@ pub struct BossView {
     /// Shared with the disk writer; available without waiting for the game socket.
     pub write_status: Arc<Mutex<LootWriteStatus>>,
     pub log: Arc<Vec<BossLoot>>,
+    /// 7-day RMT market average gem prices keyed by itemId.
+    pub rmt_prices_ready: bool,
+    pub rmt_gem_prices: BTreeMap<u64, RmtItemPrice>,
 }
 
 #[derive(Default, Debug)]
@@ -472,6 +658,8 @@ pub struct BossManager {
     pub view: BossView,
     trip: Option<Trip>,
     writer: Option<LootWriter>,
+    rmt_prices_fetched_at: Option<Instant>,
+    rmt_prices_requested_at: Option<Instant>,
 }
 impl BossManager {
     pub fn new(profile: GameProfile, nick: &str) -> Self {
@@ -488,9 +676,33 @@ impl BossManager {
         };
         let write_status = writer.as_ref()
             .map(|writer| Arc::clone(&writer.status)).unwrap_or_default();
-        Self { view: BossView {
-            log: Arc::new(log), storage_warning, write_status, ..Default::default()
-        }, trip: None, writer }
+        Self {
+            view: BossView {
+                log: Arc::new(log), storage_warning, write_status, ..Default::default()
+            },
+            trip: None,
+            writer,
+            rmt_prices_fetched_at: None,
+            rmt_prices_requested_at: None,
+        }
+    }
+
+    pub fn next_market_refresh(&mut self, now: Instant, allow_query: bool) -> Option<Value> {
+        if !self.view.catalog_ready || !allow_query {
+            return None;
+        }
+        if self.rmt_prices_fetched_at
+            .is_some_and(|at| now.duration_since(at) < RMT_PRICE_REFRESH_INTERVAL)
+        {
+            return None;
+        }
+        if self.rmt_prices_requested_at
+            .is_some_and(|at| now.duration_since(at) < RMT_PRICE_RETRY_INTERVAL)
+        {
+            return None;
+        }
+        self.rmt_prices_requested_at = Some(now);
+        Some(serde_json::json!({ "t": "market.medias" }))
     }
     pub fn publish(&self, shared: &Arc<Mutex<BossView>>) {
         if let Ok(mut state) = shared.lock() {
@@ -659,6 +871,17 @@ impl BossManager {
                         if boss.species_id.is_none() {
                             boss.species_id = BossEntry::species_id(meta);
                         }
+                        for field in ["drops", "dropsDetalhe"] {
+                            let extra = BossCatalogDrop::parse_list(meta.get(field));
+                            BossCatalogDrop::merge_missing(&mut boss.drops, &extra);
+                        }
+                        for field in ["dropsPorPremio", "dropsDetalhePorPremio"] {
+                            let extra_map = BossCatalogDrop::parse_by_reward(meta.get(field));
+                            for (reward, extra) in extra_map {
+                                let entry = boss.drops_by_reward.entry(reward).or_default();
+                                BossCatalogDrop::merge_missing(entry, &extra);
+                            }
+                        }
                     }
                     boss
                 }).collect();
@@ -666,6 +889,30 @@ impl BossManager {
                     (boss.region_order.unwrap_or(u8::MAX),
                      boss.trio_position.unwrap_or(u8::MAX)));
                 self.view.catalog_ready = true;
+            }
+        }
+        if frame.get("t").and_then(Value::as_str) == Some("market")
+            && matches!(frame.get("aba").and_then(Value::as_str), Some("medias") | Some("itens"))
+        {
+            if let Some(medias) = frame.get("medias").and_then(Value::as_object) {
+                let mut parsed = BTreeMap::new();
+                for (id_str, entry) in medias {
+                    let Ok(item_id) = id_str.parse::<u64>() else { continue; };
+                    if item_id == 0 { continue; }
+                    let orb = entry.get("orb");
+                    let avg_gems = orb
+                        .and_then(|o| o.get("media"))
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite() && *v > 0.0);
+                    let gem_units = orb
+                        .and_then(|o| o.get("unidades"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    parsed.insert(item_id, RmtItemPrice { avg_gems, gem_units });
+                }
+                self.view.rmt_gem_prices = parsed;
+                self.view.rmt_prices_ready = true;
+                self.rmt_prices_fetched_at = Some(Instant::now());
             }
         }
         if let Some(boss) = frame.get("estado").and_then(|state| state.get("boss")) {
@@ -974,6 +1221,7 @@ impl BossManager {
         self.view.auto_key = None;
         self.view.arena = None;
         self.view.cooldown_until = None;
+        self.rmt_prices_requested_at = None;
     }
 
     /// Called ONLY after a fresh, authenticated welcome from the same socket
@@ -1053,7 +1301,11 @@ mod tests {
     use crate::native_hunts::HuntEntry;
     fn manager() -> BossManager {
         let mut manager = BossManager {
-            view: BossView::default(), trip: None, writer: None,
+            view: BossView::default(),
+            trip: None,
+            writer: None,
+            rmt_prices_fetched_at: None,
+            rmt_prices_requested_at: None,
         };
         manager.ingest(&json!({"t":"welcome","bossesJogaveis":[{
             "key":"bronze","nome":"Bronze Boss",
@@ -1736,5 +1988,78 @@ mod tests {
         m.ingest(&json!({"t":"batalha","ev":[{"k":"bossMorto","key":"bronze",
             "nome":"Bronze Boss","drops":[{"itemId":70,"qtd":2}]}]}));
         assert_eq!(m.view.log[0].drops,vec![BossDrop {item_id:70,quantity:2}]);
+    }
+
+    #[test]
+    fn boss_drops_and_expected_gem_value_rotate_daily_and_use_rmt_averages() {
+        let mut m = manager();
+        m.ingest(&json!({
+            "t": "welcome",
+            "bossesJogaveis": [{
+                "key": "articuno",
+                "nome": "Articuno",
+                "entrada": {"itemId": 500, "qtd": 1},
+                "dropsPorPremio": {
+                    "tm": [{"itemId": 59194, "nome": "Elemental Piece", "chance": 0.005}],
+                    "mega": [{"itemId": 70014, "nome": "Mega Fragment", "chance": 0.0065}],
+                    "tickets": [{"itemId": 70001, "nome": "Mystic Ticket", "qtd": [1, 3]}]
+                }
+            }],
+            "bossesCatalogo": [{
+                "key": "articuno",
+                "dropsDetalhePorPremio": {
+                    "tickets": [{"itemId": 70001, "chance": 0.02}]
+                }
+            }]
+        }));
+        m.ingest(&json!({
+            "t": "market",
+            "aba": "medias",
+            "dias": 7,
+            "medias": {
+                "59194": {"orb": {"media": 1000.0, "unidades": 12}, "gold": {"media": 50000.0, "unidades": 3}},
+                "70014": {"orb": {"media": 2000.0, "unidades": 4}},
+                "70001": {"orb": {"media": 500.0, "unidades": 9}}
+            }
+        }));
+        assert!(m.view.rmt_prices_ready);
+        let articuno = &m.view.catalog[0];
+        // 2026-11-16 18:00 Brasília (21:00 UTC): articuno has "tm".
+        const START: u64 = 1_794_862_800;
+        let tm_val = articuno.expected_value_at(START, &m.view.rmt_gem_prices).unwrap();
+        assert!((tm_val.expected_gems - 5.0).abs() < 1e-9);
+        assert_eq!(tm_val.priced_drops, 1);
+
+        // Previous day: articuno had "mega".
+        let mega_val = articuno.expected_value_at(START - 1, &m.view.rmt_gem_prices).unwrap();
+        assert!((mega_val.expected_gems - 13.0).abs() < 1e-9);
+
+        // Next day: articuno has "tickets", with qtd [1, 3] (avg 2.0) * 0.02 * 500 = 20.0 gems.
+        let ticket_val = articuno.expected_value_at(START + 86_400, &m.view.rmt_gem_prices).unwrap();
+        assert!((ticket_val.expected_gems - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn market_refresh_respects_catalog_gate_and_cooldowns() {
+        let mut m = manager();
+        let t0 = Instant::now();
+        assert!(m.next_market_refresh(t0, true).is_none(), "waits for catalog");
+        m.ingest(&json!({
+            "t": "welcome",
+            "bossesJogaveis": [{"key": "articuno", "entrada": {"itemId": 500, "qtd": 1}}]
+        }));
+        assert!(m.next_market_refresh(t0, false).is_none(), "respects allow_query=false");
+        assert_eq!(m.next_market_refresh(t0, true), Some(json!({"t": "market.medias"})));
+        assert!(m.next_market_refresh(t0 + Duration::from_secs(5), true).is_none());
+        assert_eq!(
+            m.next_market_refresh(t0 + Duration::from_secs(16), true),
+            Some(json!({"t": "market.medias"})),
+        );
+        m.ingest(&json!({
+            "t": "market",
+            "aba": "medias",
+            "medias": {"59194": {"orb": {"media": 100.0, "unidades": 1}}}
+        }));
+        assert!(m.next_market_refresh(Instant::now(), true).is_none(), "fresh for 5m");
     }
 }

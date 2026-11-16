@@ -1309,6 +1309,17 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                         boss_manager.view.warning != boss_warning {
                         boss_manager.publish(&boss);
                     }
+                    let allow_market_query = !market.snatch_critical(&market_cfg)
+                        && !market.has_pending_scan()
+                        && !market.is_rate_limited(Instant::now());
+                    if let Some(payload) = boss_manager.next_market_refresh(
+                        Instant::now(),
+                        allow_market_query,
+                    ) {
+                        if socket.send(Message::Text(payload.to_string().into())).is_err() {
+                            break;
+                        }
+                    }
                     // The 60 ms worker wake catches narrow travel openings for
                     // hunts and Center. BossManager owns both legs of boss travel
                     // so its token validation and lifecycle remain authoritative.
@@ -1677,6 +1688,11 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                                 }
                                 boss_manager.ingest(&frame);
                                 if frame.get("t").and_then(Value::as_str) == Some("welcome") ||
+                                    (frame.get("t").and_then(Value::as_str) == Some("market")
+                                        && matches!(
+                                            frame.get("aba").and_then(Value::as_str),
+                                            Some("medias") | Some("itens")
+                                        )) ||
                                     frame.get("estado").and_then(|s| s.get("boss")).is_some() ||
                                     frame.get("ev").and_then(Value::as_array).is_some_and(|ev|
                                         ev.iter().any(|e| e.get("k").and_then(Value::as_str)

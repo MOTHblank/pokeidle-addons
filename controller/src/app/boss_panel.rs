@@ -9,8 +9,9 @@ use super::{
 use super::hunt_panel::components::{
     atlas_type_multiplier, atlas_type_name, atlas_types_for_active, draw_atlas_matchup,
 };
-use crate::native_boss::{BossEntry, BossView};
+use crate::native_boss::{BossCatalogDrop, BossEntry, BossView};
 use crate::native_hunts::HuntView;
+use crate::native_items::ItemCatalog;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -124,6 +125,57 @@ fn boss_reward_label(entry: &BossEntry, now: u64) -> Option<String> {
         "tickets" => tr("Mystic + Safari").to_owned(),
         other => other.to_owned(),
     })
+}
+
+fn format_gems(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 {
+        return "0".to_owned();
+    }
+    if value >= 100.0 {
+        format!("{:.0}", value)
+    } else if value >= 10.0 {
+        format!("{:.1}", value)
+    } else {
+        format!("{:.2}", value)
+    }
+}
+
+fn format_drop_rate(drop: &BossCatalogDrop) -> String {
+    let qty_prefix = match drop.quantity_range {
+        Some((min, max)) if (min, max) != (1, 1) => {
+            if min == max {
+                Some(format!("×{}", min))
+            } else {
+                Some(format!("×{}–{}", min, max))
+            }
+        }
+        _ => None,
+    };
+    match (drop.chance, qty_prefix) {
+        (Some(chance), Some(qty)) => {
+            let pct = chance * 100.0;
+            if pct >= 1.0 {
+                format!("{} ({:.1}%)", qty, pct)
+            } else {
+                format!("{} ({:.2}%)", qty, pct)
+            }
+        }
+        (Some(chance), None) => {
+            let pct = chance * 100.0;
+            if pct >= 1.0 {
+                format!("{:.1}%", pct)
+            } else {
+                format!("{:.2}%", pct)
+            }
+        }
+        (None, Some(qty)) => qty,
+        (None, None) => "—".to_owned(),
+    }
+}
+
+fn seconds_until_boss_rotation(now: u64) -> u64 {
+    let shifted = (now as i64).saturating_add(3 * 3_600);
+    (86_400 - shifted.rem_euclid(86_400)) as u64
 }
 
 fn boss_region_heading(entry: &BossEntry) -> Option<String> {
@@ -310,6 +362,22 @@ fn draw_boss_selector(
                     if let Some(reward) = boss_reward_label(entry, now) {
                         ui.label(RichText::new(reward).size(9.0).color(ACCENT));
                     }
+                    if view.rmt_prices_ready {
+                        if let Some(val) = entry
+                            .expected_value_at(now, &view.rmt_gem_prices)
+                            .filter(|v| v.priced_drops > 0)
+                        {
+                            ui.label(
+                                RichText::new(format!(
+                                    "~{} ◇ / {}",
+                                    format_gems(val.expected_gems),
+                                    tr("try"),
+                                ))
+                                .size(9.0)
+                                .color(GOOD),
+                            );
+                        }
+                    }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.vertical(|ui| {
@@ -405,6 +473,7 @@ fn draw_boss_details(
     hunt: &HuntView,
     live: bool,
     reference: Option<&AtlasReference>,
+    item_catalog: Option<&ItemCatalog>,
     restock_enabled: bool,
     pending_start: Option<(&str, bool)>,
     action: &mut Option<GameCommand>,
@@ -419,6 +488,8 @@ fn draw_boss_details(
         .filter(|(key, _)| *key == entry.key.as_str())
         .map(|(_, repeat)| repeat);
     let any_pending = pending_start.is_some();
+    let todays_drops = entry.drops_at(now);
+    let attempt_value = entry.expected_value_at(now, &view.rmt_gem_prices);
 
     egui::Frame::new()
         .fill(PANEL)
@@ -443,6 +514,26 @@ fn draw_boss_details(
                 if let Some(reward) = boss_reward_label(entry, now) {
                     resource_chip(ui, &reward);
                 }
+                if !todays_drops.is_empty() {
+                    if !view.rmt_prices_ready {
+                        resource_chip(ui, &format!("{}: …", tr("Est. value / attempt")));
+                    } else if let Some(val) = attempt_value.as_ref().filter(|v| v.priced_drops > 0) {
+                        resource_chip(ui, &format!(
+                            "{}: ~{} ◇",
+                            tr("Est. value / attempt"),
+                            format_gems(val.expected_gems),
+                        ));
+                        if attempts > 0 {
+                            resource_chip(ui, &format!(
+                                "{}: ~{} ◇",
+                                tr("Total est. value"),
+                                format_gems(val.expected_gems * attempts as f64),
+                            ));
+                        }
+                    } else {
+                        resource_chip(ui, &format!("{}: —", tr("Est. value / attempt")));
+                    }
+                }
                 resource_chip(ui, &format!(
                     "{}: {}", tr("Boss damage"), boss_damage_multiplier(entry, hunt),
                 ));
@@ -455,6 +546,53 @@ fn draw_boss_details(
             });
             ui.add_space(5.0);
             draw_boss_weaknesses(ui, reference, &entry.types);
+            if !todays_drops.is_empty() {
+                ui.add_space(7.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(tr("Today's drops")).size(10.0).strong().color(TEXT));
+                    ui.label(
+                        RichText::new(format!("({})", tr("7d RMT ◇ avg")))
+                            .size(9.0)
+                            .color(DIM),
+                    );
+                });
+                ui.add_space(3.0);
+                for drop in todays_drops {
+                    let catalog_name = crate::native_items::display_name(item_catalog, drop.item_id);
+                    let item_name = if catalog_name.starts_with("Item #") {
+                        drop.name.clone().unwrap_or(catalog_name)
+                    } else {
+                        catalog_name
+                    };
+                    let rate = format_drop_rate(drop);
+                    let price_text = if !view.rmt_prices_ready {
+                        "…".to_owned()
+                    } else if let Some(avg_gems) = view
+                        .rmt_gem_prices
+                        .get(&drop.item_id)
+                        .and_then(|p| p.avg_gems)
+                        .filter(|g| g.is_finite() && *g > 0.0)
+                    {
+                        if let Some(eq) = drop.expected_quantity() {
+                            format!(
+                                "{} ◇  (+{} ◇/{})",
+                                format_gems(avg_gems),
+                                format_gems(eq * avg_gems),
+                                tr("try"),
+                            )
+                        } else {
+                            format!("{} ◇", format_gems(avg_gems))
+                        }
+                    } else {
+                        tr("No ◇ sales (7d)").to_owned()
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(item_name).size(10.0).color(TEXT));
+                        ui.label(RichText::new(rate).size(10.0).color(MUTED));
+                        ui.label(RichText::new(price_text).size(10.0).color(GOOD));
+                    });
+                }
+            }
 
             ui.add_space(8.0);
             let lead_types = reference.map(|guide| atlas_types_for_active(hunt, guide))
@@ -998,6 +1136,10 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    let until_rotation = seconds_until_boss_rotation(now);
+    if until_rotation <= 60 {
+        ui.ctx().request_repaint_after(Duration::from_secs(until_rotation.max(1)));
+    }
 
     if let (Some(key), Some(repeat)) =
         (view.request_key.as_deref(), view.request_repeat) {
@@ -1164,7 +1306,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                                 .find(|entry| entry.key == *selected) {
                                 draw_boss_details(
                                     ui, entry, &view, &hunt, live,
-                                    reference.as_deref(), restock_enabled,
+                                    reference.as_deref(),
+                                    app.inventory_catalog.as_deref(),
+                                    restock_enabled,
                                     pending_start.as_ref().map(|(key, repeat)| (key.as_str(), *repeat)),
                                     &mut action,
                                     now,
@@ -1183,7 +1327,9 @@ pub(super) fn draw_boss_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         .find(|entry| entry.key == *selected) {
                         draw_boss_details(
                             ui, entry, &view, &hunt, live,
-                            reference.as_deref(), restock_enabled,
+                            reference.as_deref(),
+                            app.inventory_catalog.as_deref(),
+                            restock_enabled,
                                     pending_start.as_ref().map(|(key, repeat)| (key.as_str(), *repeat)),
                                     &mut action,
                             now,
