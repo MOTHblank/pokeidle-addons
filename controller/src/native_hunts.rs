@@ -252,6 +252,8 @@ pub struct HuntView {
     /// Catalog quotes are alternatives by currency, not additive costs.
     pub ball_quotes: Arc<BTreeMap<u64,BallQuote>>,
     pub outland_tier:Option<u8>,
+    /// Server-provided Outland Bronze Boss Token probability (fraction per kill).
+    pub boss_token_chance:Option<f64>,
     /// Equipped hunt bicycle. Its factor divides player walking duration only.
     /// None means on foot; combat cooldowns and wild movement are unaffected.
     pub bicycle_rarity:Option<String>,
@@ -619,6 +621,7 @@ impl HuntIntel {
         self.view.pending_outland_tier=None;
         self.pending_outland_at=None;
         self.view.outland_tier=None;
+        self.view.boss_token_chance=None;
         self.view.outland_catalog=None;
         self.view.outland_tier_error=None;
         self.view.pending_hunt_slug = None;
@@ -1050,6 +1053,10 @@ impl HuntIntel {
         if let Some(slug) = state.get("huntSlug").and_then(Value::as_str) {
             self.adopt_hunt(slug, now);
         }
+        if let Some(raw)=state.get("chanceBossToken") {
+            self.view.boss_token_chance=raw.as_f64()
+                .filter(|p|p.is_finite()&&(0.0..=1.0).contains(p));
+        }
         if let Some(raw)=state.get("tierOutland")
             .or_else(||state.get("outlandTier"))
             .or_else(||state.get("outland_tier")) {
@@ -1352,6 +1359,9 @@ impl HuntIntel {
                         (mult.is_finite()&&mult>=1.0).then_some((key.to_owned(),mult))
                     }).collect();
                 }
+                self.view.boss_token_chance=frame.get("chanceBossToken")
+                    .and_then(Value::as_f64)
+                    .filter(|p|p.is_finite()&&(0.0..=1.0).contains(p));
                 self.view.outland_catalog=frame.get("catalogoOutlandTiers")
                     .or_else(||frame.get("outlandTiers"))
                     .and_then(parse_outland_catalog);
@@ -1683,6 +1693,21 @@ pub fn atlas_pace_scenario(hunt: &HuntEntry, measured_kills_h: f64) -> Option<(f
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn boss_token_chance_uses_authoritative_welcome_and_state_value() {
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest_value(&json!({"t":"welcome","chanceBossToken":0.0002,
+            "estado":{"level":150}}),now);
+        assert_eq!(intel.snapshot().boss_token_chance,Some(0.0002));
+        intel.ingest_value(&json!({"t":"estado","estado":{"chanceBossToken":0.0003}}),now);
+        assert_eq!(intel.snapshot().boss_token_chance,Some(0.0003));
+        intel.ingest_value(&json!({"t":"estado","estado":{"chanceBossToken":2.0}}),now);
+        assert_eq!(intel.snapshot().boss_token_chance,None);
+        intel.on_disconnect();
+        assert_eq!(intel.snapshot().boss_token_chance,None);
+    }
+
     #[test]
     fn bicycle_fallbacks_match_upstream_hunt_speed_not_town_square_speed() {
         let factors=default_bicycle_factors();
