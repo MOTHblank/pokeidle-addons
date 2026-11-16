@@ -44,11 +44,22 @@ The default trace directory is:
 Each JSONL packet record keeps both receipt time and the server timestamp when
 present. Kill windows use the server clock when its elapsed interval is
 consistent with the monotonic receipt interval; otherwise the reducer falls
-back to the local monotonic clock instead of mixing clock domains. For `campo.init`, `mapa ?? slug` is the authoritative map identity;
-the current hunt slug is recorded separately. Field records retain the server's
-actual movement contract (`dc/dr -> c/r`, `em`, `ms`) for the hero and every
-mob, plus spawn/death/removal/respawn and target state. Battle records retain
-the full event list and normalized wild-death boundaries.
+back to the local monotonic clock instead of mixing clock domains. For `campo.init`,
+`mapa ?? slug` is the authoritative map identity; the current hunt slug is
+recorded separately.
+
+Field records preserve the server movement contract for the hero and every mob:
+`dc/dr -> c/r` are the source and destination tiles, `vc/vr` are an optional
+server-selected intermediate tile, and `em/ms` carry the step start and
+duration. The normalized movement record retains the ordered server-supplied
+tile sequence and marks the optional midpoint as the same two-leg, equal-time
+interpolation used by upstream `campo.mjs`; it does not query collision geometry
+or reconstruct a route. Descriptive `walkFrom`, `walkTo`, `walkVia`,
+`stepStartAt` and `stepMs` aliases are accepted as well. When the upstream
+client defaults are used (`em = 0`, `ms = 300`), explicit provenance flags
+distinguish those defaults from timing values actually included in the packet.
+Field observations also retain spawn/death/removal/respawn and target state.
+Battle records retain the full event list and normalized wild-death boundaries.
 
 The calibration snapshot contains the active Pokémon identity/species/level,
 IVs, server battle stats, held item, TM/AOE state, bicycle rarity/factor,
