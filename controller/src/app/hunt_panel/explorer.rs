@@ -242,7 +242,7 @@ impl ExplorerCache {
             self.forecast_revision=estimates.revision;
             self.model_signature=estimates.active_signature.clone();
             self.trainer_level=view.trainer_level;
-            self.outland_catalog=view.outland_catalog;
+            self.outland_catalog=view.outland_catalog.clone();
             self.roster_ready=view.roster_ready;
             self.ball_quotes=Some(Arc::clone(&view.ball_quotes));
             self.initialized=true;
