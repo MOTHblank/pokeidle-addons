@@ -284,6 +284,18 @@ pub(super) fn draw_atlas_models(
     // a source that is already active in the live state.
     if view.bonuses.kick_capture_active {effective_modifiers.kick_capture=false;}
     if view.bonuses.kick_shiny_active {effective_modifiers.kick_shiny=false;}
+    // Upstream bonusLootPct is additive: active store/farm-event bonus plus guild bonus.
+    // Raid farm is deliberately excluded because it belongs to Raid rewards, not Outland hunts.
+    let live_drop_pct=if live {
+        view.bonuses.extra_loot_pct.max(0.0)
+            + if view.bonuses.guild_known {view.bonuses.guild_pct.max(0.0)}else{0.0}
+    }else{0.0};
+    effective_modifiers.drop_event*=1.0+live_drop_pct/100.0;
+    if live_drop_pct>0.0{
+        ui.label(RichText::new(tr_dynamic(format!(
+            "Live Outland drop bonus · +{live_drop_pct:.1}%"
+        ))).size(10.0).color(GOOD));
+    }
     ui.add_space(9.0);
     let f=if live{cache.get(&hunt.slug)}else{None};
     let kills=f.as_ref().map(|f|f.kills_h);
@@ -424,12 +436,13 @@ pub(super) fn draw_atlas_models(
             .selected_text(match scenario.rare_target{
                 70000=>tr("Bronze Boss Token"),70011=>tr("Key Fragment"),
                 70012=>tr("Shiny Stone Fragment"),70013=>tr("Bicycle Fragment"),
-                70017=>tr("Shiny Egg Fragment"),_=>"Unknown",
+                70017=>tr("Shiny Egg Fragment"),models::SACRIFICE_BONE_ID=>tr("Sacrifice Bone"),_=>"Unknown",
             }).show_ui(ui,|ui|{
                 for (id,name) in [
                     (70000,tr("Bronze Boss Token")),(70011,tr("Key Fragment")),
                     (70012,tr("Shiny Stone Fragment")),(70013,tr("Bicycle Fragment")),
                     (70017,tr("Shiny Egg Fragment")),
+                    (models::SACRIFICE_BONE_ID,tr("Sacrifice Bone")),
                 ]{
                     ui.selectable_value(&mut scenario.rare_target,id,name);
                 }
@@ -462,11 +475,26 @@ pub(super) fn draw_atlas_models(
                         for (label,number) in [
                             (tr("Units/h"),format!("{:.5}",item.units_h)),
                             (tr("Chance / 24h"),format!("{:.2}%",item.chance_24h*100.0)),
-                            (tr("Craft time"),format!("{:.1}h",item.craft_hours)),
                         ]{
                             ui.vertical(|ui|{
                                 ui.label(RichText::new(label).size(9.0).color(DIM));
                                 ui.label(RichText::new(number)
+                                    .size(11.0).strong().color(TEXT));
+                            });
+                            ui.add_space(12.0);
+                        }
+                        if item.craft_hours>0.0{
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new(tr("Craft time")).size(9.0).color(DIM));
+                                ui.label(RichText::new(format!("{:.1}h",item.craft_hours))
+                                    .size(11.0).strong().color(TEXT));
+                            });
+                            ui.add_space(12.0);
+                        }
+                        if item.id==models::SACRIFICE_BONE_ID{
+                            ui.vertical(|ui|{
+                                ui.label(RichText::new(tr("Altar points/h")).size(9.0).color(DIM));
+                                ui.label(RichText::new(format!("{:.2}",item.altar_points_h))
                                     .size(11.0).strong().color(TEXT));
                             });
                             ui.add_space(12.0);
