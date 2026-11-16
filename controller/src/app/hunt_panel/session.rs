@@ -79,32 +79,40 @@ pub(super) fn draw_atlas_session(
                             "{} unique drops",session.acquired.len()
                         )).size(10.0).color(MUTED));
                     });
-                    let mut drops=session.acquired.iter().collect::<Vec<_>>();
-                    drops.sort_by(|a,b|b.1.cmp(a.1).then_with(||a.0.cmp(b.0)));
-                    if drops.is_empty(){
+                    let mut drops=session.acquired.iter()
+                        .map(|(name,qty)|(name.clone(),*qty)).collect::<Vec<_>>();
+                    if !drops.iter().any(|(name,_)|name=="Sacrifice Bone"){
+                        drops.push(("Sacrifice Bone".to_owned(),0));
+                    }
+                    drops.sort_by(|a,b|b.1.cmp(&a.1).then_with(||a.0.cmp(&b.0)));
+                    // Keep the new Outland reward visible even before its first recorded drop.
+                    if let Some(position)=drops.iter().position(|(name,_)|name=="Sacrifice Bone"){
+                        let bone=drops.remove(position);
+                        drops.insert(0,bone);
+                    }
+                    if session.acquired.is_empty(){
                         ui.label(RichText::new(tr("No confirmed battle drops yet."))
                             .size(11.0).color(MUTED));
-                    }else{
-                        for (name,qty) in drops.iter().take(8){
-                            ui.horizontal_wrapped(|ui|{
-                                ui.label(RichText::new(*name)
-                                    .size(11.0).color(TEXT));
-                                ui.label(RichText::new(format!("×{qty}"))
-                                    .size(11.0).strong().color(ACCENT));
-                            });
-                        }
-                        if drops.len()>8{
-                            ui.collapsing(format!(
-                                "All acquired items ({} unique)",drops.len()
-                            ),|ui|{
-                                for (name,qty) in drops.iter().take(200){
-                                    ui.label(format!("{name} ×{qty}"));
-                                }
-                                if drops.len()>200{
-                                    ui.label(tr("Showing the first 200 items."));
-                                }
-                            });
-                        }
+                    }
+                    for (name,qty) in drops.iter().take(8){
+                        ui.horizontal_wrapped(|ui|{
+                            ui.label(RichText::new(name)
+                                .size(11.0).color(TEXT));
+                            ui.label(RichText::new(format!("×{qty}"))
+                                .size(11.0).strong().color(ACCENT));
+                        });
+                    }
+                    if drops.len()>8{
+                        ui.collapsing(format!(
+                            "All acquired items ({} unique)",session.acquired.len()
+                        ),|ui|{
+                            for (name,qty) in drops.iter().take(200){
+                                ui.label(format!("{name} ×{qty}"));
+                            }
+                            if drops.len()>200{
+                                ui.label(tr("Showing the first 200 items."));
+                            }
+                        });
                     }
                     if !session.recent_drops.is_empty(){
                         ui.collapsing(tr("Latest drop events"),|ui|{
