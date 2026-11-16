@@ -157,10 +157,9 @@ pub const TIER_MULTIPLIERS:[f64;40]=[
     4.5,5.0,5.25,6.0,6.5,7.0,7.5,8.0,8.5,9.0,
     9.5,10.0,10.5,11.0,12.0,13.0,14.0,16.0,17.0,20.0,
 ];
-// Legacy server builds exposed only eight settings. Preserve their identifiers
-// and values when that exact catalog is supplied by the welcome frame.
+// Legacy server builds exposed only eight settings. Preserve their unlock
+// levels when translating old tier IDs to the current catalog.
 pub const LEGACY_TIER_LEVELS:[u32;8]=[150,1_000,2_000,4_000,8_000,16_000,24_000,36_000];
-pub const LEGACY_TIER_MULTIPLIERS:[f64;8]=[1.0,1.25,1.5,2.0,3.0,4.0,6.0,8.0];
 
 pub fn default_outland_tiers()->Vec<OutlandTier>{
     TIER_LEVELS.iter().zip(TIER_MULTIPLIERS.iter()).enumerate()
@@ -184,9 +183,6 @@ pub fn canonical_outland_tier(tier:u8)->Option<u8>{
         }
         _=>None,
     }
-}
-pub fn outland_tier_number(tier:u8)->Option<u8>{
-    match tier {1..=8=>Some(tier),101..=140=>Some(tier-100),_=>None}
 }
 // Upstream v1.398.1, shared/ovo-shiny.mjs: 32 level bands through Paldea.
 // A fragment is only possible at level 5,000+, outside Outland.
