@@ -256,9 +256,9 @@ pub struct HuntView {
     /// None means on foot; combat cooldowns and wild movement are unaffected.
     pub bicycle_rarity:Option<String>,
     pub bicycle_factor:Option<f64>,
-    /// Validated eight-tier table from the game's welcome catalog.
-    /// Absent catalogs use the pinned upstream v1.314.2 thresholds.
-    pub outland_catalog:Option<[(u32,f64);8]>,
+    /// Validated server-provided legacy (8) or current (40) Outland tiers.
+    /// Absent catalogs use the current upstream 40-tier ladder.
+    pub outland_catalog:Option<Vec<crate::native_atlas_models::OutlandTier>>,
     /// Awaiting authoritative tierOutland from the game (not socket send).
     pub pending_outland_tier:Option<u8>,
     pub outland_tier_error:Option<String>,
@@ -288,12 +288,30 @@ pub struct HuntView {
     pub last_error: Option<String>,
 }
 impl HuntView {
-    pub fn outland_requirement(&self,tier:u8)->Option<(u32,f64)> {
-        let index=usize::from(tier.checked_sub(1)?);
-        if index>=8{return None}
-        Some(self.outland_catalog.map(|rows|rows[index]).unwrap_or((
-            crate::native_atlas_models::TIER_LEVELS[index],
-            crate::native_atlas_models::TIER_MULTIPLIERS[index])))
+    pub fn outland_tiers(&self)->Vec<crate::native_atlas_models::OutlandTier>{
+        self.outland_catalog.clone()
+            .unwrap_or_else(crate::native_atlas_models::default_outland_tiers)
+    }
+    /// Resolve legacy saved tier numbers against the current ladder when the
+    /// server does not explicitly provide the old eight-row catalog.
+    pub fn resolve_outland_tier(&self,tier:u8)->Option<u8>{
+        let rows=self.outland_tiers();
+        if rows.iter().any(|row|row.id==tier){return Some(tier)}
+        let canonical=crate::native_atlas_models::canonical_outland_tier(tier)?;
+        rows.iter().any(|row|row.id==canonical).then_some(canonical)
+    }
+    pub fn active_outland_tier(&self)->Option<u8>{
+        self.outland_tier.and_then(|tier|self.resolve_outland_tier(tier))
+    }
+    pub fn outland_tier_number(&self,tier:u8)->Option<u8>{
+        let resolved=self.resolve_outland_tier(tier)?;
+        self.outland_tiers().into_iter()
+            .find(|row|row.id==resolved).map(|row|row.number)
+    }
+    pub fn outland_requirement(&self,tier:u8)->Option<(u32,f64)>{
+        let resolved=self.resolve_outland_tier(tier)?;
+        self.outland_tiers().into_iter().find(|row|row.id==resolved)
+            .map(|row|(row.required_level,row.multiplier))
     }
     pub fn unlocked_outland_tier(&self,tier:u8)->Option<f64>{
         let (level,mult)=self.outland_requirement(tier)?;
@@ -358,20 +376,27 @@ fn equipped_bicycle(raw:&Value,factors:&BTreeMap<String,f64>)
         .filter(|factor|factor.is_finite()&&*factor>1.0);
     (rarity.filter(|_|factor.is_some()),factor)
 }
-fn parse_outland_catalog(raw:&Value)->Option<[(u32,f64);8]>{
-    let rows=raw.as_array().filter(|rows|rows.len()==8)?;
-    let mut out=[(0u32,0.0f64);8];
+fn parse_outland_catalog(raw:&Value)->Option<Vec<crate::native_atlas_models::OutlandTier>>{
+    let rows=raw.as_array()?;
+    let legacy=rows.len()==8;
+    if !legacy&&rows.len()!=40{return None}
+    let mut out=Vec::with_capacity(rows.len());
     for (index,row) in rows.iter().enumerate(){
         let tier=row.get("tier").and_then(Value::as_u64)?;
+        let expected=if legacy{index as u64+1}else{101+index as u64};
+        let number=row.get("numero").and_then(Value::as_u64)
+            .unwrap_or(index as u64+1);
         let level=row.get("nivel").or_else(||row.get("level"))
             .and_then(Value::as_u64).and_then(|v|u32::try_from(v).ok())?;
         let mult=row.get("mult").or_else(||row.get("multiplier"))
             .and_then(Value::as_f64)?;
-        if tier!=index as u64+1 || level==0 ||
-            (index>0&&level<=out[index-1].0) ||
-            !mult.is_finite() || !(1.0..=100.0).contains(&mult) ||
-            (index>0&&mult<out[index-1].1) {return None}
-        out[index]=(level,mult);
+        if tier!=expected || number!=index as u64+1 || level==0 ||
+            out.last().is_some_and(|previous:&crate::native_atlas_models::OutlandTier|
+                level<=previous.required_level || mult<previous.multiplier) ||
+            !mult.is_finite() || !(1.0..=100.0).contains(&mult) {return None}
+        out.push(crate::native_atlas_models::OutlandTier{
+            id:tier as u8,number:number as u8,required_level:level,multiplier:mult
+        });
     }
     Some(out)
 }
@@ -489,9 +514,8 @@ impl HuntIntel {
     /// The UI never overwrites outland_tier optimistically: a matching server
     /// state is the only confirmation that the setting took effect.
     pub fn request_outland_tier(&mut self,tier:u8,now:Instant)->Result<(),String>{
-        if !(1..=8).contains(&tier){
-            return Err("Unknown Outland tier".into());
-        }
+        let tier=self.view.resolve_outland_tier(tier)
+            .ok_or("Unknown Outland tier")?;
         if self.view.outland_tier.is_none(){
             return Err("Waiting for server-reported Outland tier".into());
         }
@@ -500,14 +524,15 @@ impl HuntIntel {
         let threshold=self.view.outland_requirement(tier)
             .ok_or("Unknown Outland tier")?.0;
         if level<threshold {
+            let number=self.view.outland_tier_number(tier).unwrap_or(tier);
             return Err(format!(
-                "Outland {tier} requires trainer level {threshold}"
+                "Outland {number} requires trainer level {threshold}"
             ));
         }
         if self.view.pending_outland_tier.is_some(){
             return Err("An Outland tier change is already awaiting confirmation".into());
         }
-        if self.view.outland_tier==Some(tier){
+        if self.view.active_outland_tier()==Some(tier){
             return Err("Outland tier is already active".into());
         }
         self.view.pending_outland_tier=Some(tier);
@@ -1016,9 +1041,11 @@ impl HuntIntel {
             .or_else(||state.get("outlandTier"))
             .or_else(||state.get("outland_tier")) {
             self.view.outland_tier=raw.as_u64()
-                .filter(|tier|(1..=8).contains(tier)).map(|tier|tier as u8);
-            if self.view.outland_tier.is_some() &&
-                self.view.pending_outland_tier==self.view.outland_tier{
+                .filter(|tier|crate::native_atlas_models::valid_outland_tier_id(*tier))
+                .and_then(|tier|u8::try_from(tier).ok());
+            let confirmed=self.view.outland_tier
+                .and_then(|tier|self.view.resolve_outland_tier(tier));
+            if confirmed.is_some() && self.view.pending_outland_tier==confirmed{
                 self.view.pending_outland_tier=None;
                 self.pending_outland_at=None;
                 self.view.outland_tier_error=None;
