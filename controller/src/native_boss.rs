@@ -20,6 +20,11 @@ const MAX_LOOT: usize = 500;
 /// controller request does not hammer the entry command while the server is
 /// deliberately cooling down.
 const BOSS_NEXT_FIGHT_DELAY: Duration = Duration::from_secs(10);
+// Match shared/dia-sazonal.mjs: the rotation day changes at midnight in Brasília.
+const SECONDS_PER_DAY: i64 = 86_400;
+const BRASILIA_UTC_OFFSET_SECONDS: i64 = -3 * 60 * 60;
+// 2026-11-17, the ROTACAO_BOSS_DIA_ZERO in shared/bosses-lendarios.mjs.
+const BOSS_REWARD_ROTATION_START_DAY: i64 = 20_774;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BossEntry {
@@ -80,6 +85,28 @@ impl BossEntry {
         let ideal = if self.team_ideal == 0 { 5 } else { self.team_ideal };
         let deficit = (f64::from(ideal) - strength).max(0.0);
         Some(3.0_f64.powf(deficit))
+    }
+
+    /// Resolve the current trio reward exactly like shared/bosses-lendarios.mjs.
+    /// Each region keeps its three boss positions, but their rewards rotate
+    /// daily at midnight Brasília time (UTC-3), starting on 2026-11-17.
+    pub fn reward_at(&self, unix_seconds: u64) -> Option<&str> {
+        let Some(position) = self.trio_position else {
+            return self.reward.as_deref();
+        };
+        let Ok(unix_seconds) = i64::try_from(unix_seconds) else {
+            return self.reward.as_deref();
+        };
+        let local_day = (unix_seconds + BRASILIA_UTC_OFFSET_SECONDS)
+            .div_euclid(SECONDS_PER_DAY);
+        let rotation_day =
+            (local_day - BOSS_REWARD_ROTATION_START_DAY).rem_euclid(3);
+        let reward_index = (i64::from(position) - rotation_day).rem_euclid(3);
+        Some(match reward_index {
+            0 => "tm",
+            1 => "mega",
+            _ => "tickets",
+        })
     }
 
     fn upstream_region_level(region_order: u8) -> u32 {
@@ -1097,6 +1124,32 @@ mod tests {
         assert!((boss.team_strength(&hunt).unwrap()-1.5).abs()<1e-9);
         let expected=3.0_f64.powf(3.5);
         assert!((boss.damage_multiplier(&hunt).unwrap()-expected).abs()<1e-9);
+    }
+
+    #[test]
+    fn legendary_boss_rewards_follow_upstream_brasilia_daily_rotation() {
+        let parse = |key: &str| BossEntry::parse(&json!({
+            "key":key,
+            "entrada":{"itemId":500,"qtd":1}
+        })).expect("playable legendary boss");
+
+        let articuno = parse("articuno");
+        let moltres = parse("moltres");
+        let zapdos = parse("zapdos");
+        // 2026-11-17 00:00:00 in Brasília (03:00 UTC).
+        const START: u64 = 1_794_884_400;
+
+        // The previous reward day remains active through 23:59:59 Brasília.
+        assert_eq!(articuno.reward_at(START - 1), Some("mega"));
+        assert_eq!(articuno.reward_at(START), Some("tm"));
+        assert_eq!(moltres.reward_at(START), Some("mega"));
+        assert_eq!(zapdos.reward_at(START), Some("tickets"));
+
+        // Position zero rotates backwards through the same three rewards.
+        assert_eq!(articuno.reward_at(START + 86_400), Some("tickets"));
+        assert_eq!(moltres.reward_at(START + 86_400), Some("tm"));
+        assert_eq!(zapdos.reward_at(START + 86_400), Some("mega"));
+        assert_eq!(articuno.reward_at(START + 172_800), Some("mega"));
     }
 
     #[test]
