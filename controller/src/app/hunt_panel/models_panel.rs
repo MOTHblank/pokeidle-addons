@@ -519,6 +519,7 @@ pub(super) fn draw_atlas_models(
                 .striped(true).spacing([14.0,5.0]).show(ui,|ui|{
                     ui.strong(tr("Tier"));ui.strong(tr("Required Lv"));ui.strong(tr("Multiplier"));
                     ui.strong(tr("Token %/kill"));ui.strong(tr("Key/Stone/Bicycle %/kill"));
+                    ui.strong(tr("Sacrifice Bone %/kill"));
                     ui.strong(tr("Access"));ui.end_row();
                     for tier in &outland_tiers{
                         let mult=tier.multiplier;
@@ -527,6 +528,7 @@ pub(super) fn draw_atlas_models(
                         ui.label(format!("{mult:.2}×"));
                         ui.label(format!("{:.5}%",0.0005*mult*100.0));
                         ui.label(format!("{:.6}%",0.000005*mult*100.0));
+                        ui.label(format!("{:.6}%",models::SACRIFICE_BONE_CHANCE*mult*100.0));
                         ui.label(if view.unlocked_outland_tier(tier.id).is_some(){
                             tr("Level eligible")
                         }else{tr("Locked / unknown")});
