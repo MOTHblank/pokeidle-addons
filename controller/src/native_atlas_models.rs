@@ -198,6 +198,8 @@ pub fn shiny_egg_chance(level:u32,outland:bool)->f64{
     let steps=SHINY_EGG_LEVELS.partition_point(|threshold|level>=*threshold);
     if steps==0 {0.0}else{1.0/80_000.0+(steps-1) as f64*0.000_000_5}
 }
+pub const BOSS_TOKEN_ID:u64=70000;
+pub const BOSS_TOKEN_CHANCE_DEFAULT:f64=0.000_1;
 pub const SACRIFICE_BONE_ID:u64=70018;
 pub const SACRIFICE_BONE_CHANCE:f64=0.000_004;
 pub const SACRIFICE_BONE_POINTS:u32=100;
@@ -207,7 +209,7 @@ pub struct RareKind {
     pub id:u64,pub name:&'static str,pub base:f64,pub craft:u32,pub altar_points:u32,
 }
 pub const OUTLAND_RARES:[RareKind;5]=[
-    RareKind{id:70000,name:"Bronze Boss Token",base:0.0005,craft:1,altar_points:0},
+    RareKind{id:BOSS_TOKEN_ID,name:"Bronze Boss Token",base:BOSS_TOKEN_CHANCE_DEFAULT,craft:1,altar_points:0},
     RareKind{id:70011,name:"Key Fragment",base:0.000005,craft:10,altar_points:0},
     RareKind{id:70012,name:"Shiny Stone Fragment",base:0.000005,craft:10,altar_points:0},
     RareKind{id:70013,name:"Bicycle Fragment",base:0.000005,craft:10,altar_points:0},
@@ -236,13 +238,29 @@ pub fn rare_scenarios_with_gate(
     outland:bool,hunt_level:u32,gate:Option<(u32,f64)>,
     trainer_level:Option<u32>,kills_h:f64,mods:&Modifiers
 )->Vec<RareForecast>{
+    rare_scenarios_with_gate_and_token_chance(
+        outland,hunt_level,gate,trainer_level,kills_h,None,mods)
+}
+/// Prefer the live server value for Bronze Boss Token when it is available.
+/// Upstream app.js defaults chanceBossToken to 0.0001 and multiplies it only
+/// by the selected Outland tier factor.
+pub fn rare_scenarios_with_gate_and_token_chance(
+    outland:bool,hunt_level:u32,gate:Option<(u32,f64)>,
+    trainer_level:Option<u32>,kills_h:f64,boss_token_chance:Option<f64>,
+    mods:&Modifiers
+)->Vec<RareForecast>{
     if !mods.valid()||!kills_h.is_finite()||kills_h<0.0{return vec![]}
     if outland{
         let Some((required,mult))=gate else{return vec![]};
         if trainer_level.is_none_or(|n|n<required) ||
             !mult.is_finite()||mult<=0.0{return vec![]}
-        OUTLAND_RARES.iter().filter_map(|kind|
-            rare_row(*kind,kind.base*mult,kills_h,mods)).collect()
+        let token_chance=boss_token_chance
+            .filter(|p|p.is_finite()&&(0.0..=1.0).contains(p))
+            .unwrap_or(BOSS_TOKEN_CHANCE_DEFAULT);
+        OUTLAND_RARES.iter().filter_map(|kind|{
+            let base=if kind.id==BOSS_TOKEN_ID{token_chance}else{kind.base};
+            rare_row(*kind,base*mult,kills_h,mods)
+        }).collect()
     }else{
         let chance=shiny_egg_chance(hunt_level,false);
         rare_row(RareKind{id:70017,name:"Shiny Egg Fragment",base:chance,craft:10,altar_points:0},
@@ -343,6 +361,12 @@ mod tests {
         assert_eq!(shiny_egg_chance(160300,true),0.0);
         let base=rare_scenarios_with_gate(true,200,Some((150,1.0)),Some(200),500.0,&m);
         assert_eq!(base.len(),5);
+        let token=base.iter().find(|row|row.id==BOSS_TOKEN_ID).unwrap();
+        assert!((token.per_kill-BOSS_TOKEN_CHANCE_DEFAULT).abs()<1e-15);
+        let server=rare_scenarios_with_gate_and_token_chance(true,200,Some((150,1.0)),
+            Some(200),500.0,Some(0.0002),&m);
+        let server_token=server.iter().find(|row|row.id==BOSS_TOKEN_ID).unwrap();
+        assert!((server_token.per_kill-0.0002).abs()<1e-15);
         let bone=base.iter().find(|row|row.id==SACRIFICE_BONE_ID).unwrap();
         assert!((bone.per_kill-SACRIFICE_BONE_CHANCE).abs()<1e-15);
         assert!((bone.units_h-500.0*SACRIFICE_BONE_CHANCE).abs()<1e-12);
