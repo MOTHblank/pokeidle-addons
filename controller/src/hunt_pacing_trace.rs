@@ -446,29 +446,100 @@ impl Drop for EnabledCollector {
     }
 }
 
+/// Read a server-authored tile from either the compact campo protocol or
+/// descriptive client field names. Values are preserved as JSON so the trace
+/// never rounds or reconstructs server coordinates.
+fn point_pair(raw: &Value) -> Option<(Value, Value)> {
+    if let Some(values) = raw.as_array() {
+        let col = values.first()?.clone();
+        let row = values.get(1)?.clone();
+        if col.is_null() || row.is_null() { return None; }
+        return Some((col, row));
+    }
+    let first = |keys: &[&str]| {
+        keys.iter().find_map(|key| raw.get(*key)
+            .filter(|value| !value.is_null()).cloned())
+    };
+    Some((
+        first(&["col", "column", "x", "c", "tx"] )?,
+        first(&["row", "y", "r", "ty"] )?,
+    ))
+}
+
+fn movement_pair(
+    raw: &Value,
+    descriptive_key: &str,
+    compact_col_key: &str,
+    compact_row_key: &str,
+) -> Option<(Value, Value)> {
+    raw.get(descriptive_key).and_then(point_pair)
+        .or_else(|| point_pair(&json!([
+            raw.get(compact_col_key)?.clone(),
+            raw.get(compact_row_key)?.clone()
+        ])))
+}
+
 fn movement(
     entity: &str,
     slot: Option<Value>,
     raw: &Value,
     server_ts: Option<u64>,
 ) -> Option<Value> {
-    let to_col = raw.get("c")?.clone();
-    let to_row = raw.get("r")?.clone();
-    let from_col = raw.get("dc").cloned().unwrap_or_else(|| to_col.clone());
-    let from_row = raw.get("dr").cloned().unwrap_or_else(|| to_row.clone());
-    let transition = from_col != to_col || from_row != to_row;
+    // Current upstream campo.mjs uses dc/dr -> c/r, with vc/vr as an
+    // optional server-selected intermediate tile. Keep the descriptive
+    // walkFrom/walkTo/walkVia aliases readable as well.
+    let (to_col, to_row) = movement_pair(raw, "walkTo", "c", "r")?;
+    let from_reported = movement_pair(raw, "walkFrom", "dc", "dr");
+    let (from_col, from_row) = from_reported.clone()
+        .unwrap_or_else(|| (to_col.clone(), to_row.clone()));
+    let via = movement_pair(raw, "walkVia", "vc", "vr");
+    let transition = match via.as_ref() {
+        Some((via_col, via_row)) =>
+            from_col != *via_col || from_row != *via_row
+                || *via_col != to_col || *via_row != to_row,
+        None => from_col != to_col || from_row != to_row,
+    };
+
+    let step_start = raw.get("stepStartAt").filter(|value| !value.is_null())
+        .or_else(|| raw.get("em").filter(|value| !value.is_null()));
+    let step_duration = raw.get("stepMs").filter(|value| !value.is_null())
+        .or_else(|| raw.get("ms").filter(|value| !value.is_null()));
+    let step_start_server_reported = step_start.is_some();
+    let step_duration_server_reported = step_duration.is_some();
+
+    let mut path_tiles = vec![json!({"col": from_col, "row": from_row})];
+    if let Some((via_col, via_row)) = via.as_ref() {
+        path_tiles.push(json!({"col": via_col, "row": via_row}));
+    }
+    path_tiles.push(json!({"col": to_col, "row": to_row}));
+
     Some(json!({
         "entity": entity,
         "slot": slot,
         "transition": transition,
         "from_col": from_col,
         "from_row": from_row,
+        "via_col": via.as_ref().map(|point| point.0.clone()).unwrap_or(Value::Null),
+        "via_row": via.as_ref().map(|point| point.1.clone()).unwrap_or(Value::Null),
         "to_col": to_col,
         "to_row": to_row,
-        "step_started_at": raw.get("em").cloned().unwrap_or_else(|| json!(0)),
-        "step_duration_ms": raw.get("ms").cloned().unwrap_or_else(|| json!(300)),
+        "path_tiles": path_tiles,
+        "interpolation_mode": if via.is_some() {
+            "two-leg-equal-time"
+        } else {
+            "linear"
+        },
+        "interpolation_segment_count": if via.is_some() { 2 } else { 1 },
+        "step_started_at": step_start.cloned().unwrap_or_else(|| json!(0)),
+        "step_duration_ms": step_duration.cloned().unwrap_or_else(|| json!(300)),
+        "step_start_server_reported": step_start_server_reported,
+        "step_duration_server_reported": step_duration_server_reported,
+        "from_server_reported": from_reported.is_some(),
+        "via_server_reported": via.is_some(),
+        "to_server_reported": true,
         "server_timestamp": server_ts,
-        "direction": raw.get("d").cloned().unwrap_or(Value::Null),
+        "direction": raw.get("direction").or_else(|| raw.get("d"))
+            .cloned().unwrap_or(Value::Null),
     }))
 }
 
@@ -619,8 +690,46 @@ mod tests {
         assert_eq!(value["to_col"], 12);
         assert_eq!(value["step_started_at"], 1234);
         assert_eq!(value["step_duration_ms"], 275);
+        assert_eq!(value["step_start_server_reported"], true);
+        assert_eq!(value["step_duration_server_reported"], true);
         assert_eq!(value["transition"], true);
         assert_eq!(value["server_timestamp"], 1500);
+        assert_eq!(value["path_tiles"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn movement_preserves_server_intermediate_tile_and_client_interpolation() {
+        let value = movement("mob", Some(json!(7)), &json!({
+            "dc": 10, "dr": 8, "vc": 11, "vr": 9, "c": 12, "r": 8,
+            "em": 1234, "ms": 600
+        }), Some(1500)).unwrap();
+        assert_eq!(value["via_col"], 11);
+        assert_eq!(value["via_row"], 9);
+        assert_eq!(value["path_tiles"].as_array().unwrap().len(), 3);
+        assert_eq!(value["path_tiles"][1]["col"], 11);
+        assert_eq!(value["path_tiles"][1]["row"], 9);
+        assert_eq!(value["interpolation_mode"], "two-leg-equal-time");
+        assert_eq!(value["interpolation_segment_count"], 2);
+        assert_eq!(value["transition"], true);
+    }
+
+    #[test]
+    fn movement_accepts_descriptive_server_field_aliases() {
+        let value = movement("hero", None, &json!({
+            "walkFrom": {"x": 10, "y": 8},
+            "walkTo": [12, 8],
+            "stepStartAt": 4321,
+            "stepMs": 275,
+            "direction": 2
+        }), None).unwrap();
+        assert_eq!(value["from_col"], 10);
+        assert_eq!(value["from_row"], 8);
+        assert_eq!(value["to_col"], 12);
+        assert_eq!(value["step_started_at"], 4321);
+        assert_eq!(value["step_duration_ms"], 275);
+        assert_eq!(value["direction"], 2);
+        assert_eq!(value["step_start_server_reported"], true);
+        assert_eq!(value["step_duration_server_reported"], true);
     }
 
     #[test]
@@ -629,6 +738,10 @@ mod tests {
         assert_eq!(value["from_col"], 3);
         assert_eq!(value["from_row"], 4);
         assert_eq!(value["step_duration_ms"], 300);
+        assert_eq!(value["step_start_server_reported"], false);
+        assert_eq!(value["step_duration_server_reported"], false);
+        assert_eq!(value["from_server_reported"], false);
+        assert_eq!(value["via_server_reported"], false);
         assert_eq!(value["transition"], false);
     }
 }
