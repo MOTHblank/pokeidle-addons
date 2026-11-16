@@ -286,7 +286,7 @@ pub(super) fn draw_atlas_models(
     if view.bonuses.kick_shiny_active {effective_modifiers.kick_shiny=false;}
     // Upstream bonusLootPct is additive: active store/farm-event bonus plus guild bonus.
     // Raid farm is deliberately excluded because it belongs to Raid rewards, not Outland hunts.
-    let live_drop_pct=if live {
+    let live_drop_pct=if live&&outland {
         view.bonuses.extra_loot_pct.max(0.0)
             + if view.bonuses.guild_known {view.bonuses.guild_pct.max(0.0)}else{0.0}
     }else{0.0};
