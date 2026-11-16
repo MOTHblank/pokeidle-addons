@@ -68,17 +68,23 @@ pub(super) fn draw_atlas_context(ui:&mut egui::Ui,view:&HuntView,live:bool)->boo
     open
 }
 
-/// Outland tiers are a server-backed account setting, not eight hunt slugs.
-/// This control deliberately stays outside Explorer and Models so an account
-/// can choose its real active tier from any Hunt Atlas workspace.
+/// Outland tiers are a server-backed account setting, not hunt slugs.
+/// The selector follows the current 40-tier upstream catalog and keeps the
+/// legacy eight-tier list when an older server explicitly sends that catalog.
 pub(super) fn draw_atlas_outland_tier(
     ui:&mut egui::Ui,view:&HuntView,native:&NativeSession,
     account:usize,live:bool,error:&mut Option<String>,
 ){
-    let active=view.outland_tier;
-    let pending=view.pending_outland_tier;
+    let tiers=view.outland_tiers();
+    let active=view.active_outland_tier();
+    let pending=view.pending_outland_tier
+        .and_then(|tier|view.resolve_outland_tier(tier));
     let level=view.trainer_level;
+    let minimum_level=tiers.first().map(|tier|tier.required_level).unwrap_or(150);
     let mut request=None;
+    let tier_name=|tier:u8|view.outland_tier_number(tier)
+        .map(|number|format!("Outland {number}"))
+        .unwrap_or_else(||format!("Outland {tier}"));
     egui::Frame::new().fill(PANEL_ALT)
         .corner_radius(8.0).inner_margin(egui::Margin::symmetric(11,7))
         .show(ui,|ui|{
@@ -87,37 +93,42 @@ pub(super) fn draw_atlas_outland_tier(
                 ui.label(RichText::new(tr("OUTLAND TIER"))
                     .size(10.0).strong().color(DIM));
                 ui.label(RichText::new(match active{
-                    Some(tier)=>tr_dynamic(format!("● Outland {tier} active")),
-                    None=>tr("Awaiting game state").to_owned()
+                    Some(tier)=>tr_dynamic(format!("● {} active",tier_name(tier))),
+                    None=>tr("Awaiting game state".to_owned())
                 }).size(11.0).strong().color(if active.is_some(){GOOD}else{WARN}));
-                let label=pending.map(|tier|tr_dynamic(format!("Requesting Outland {tier}…")))
+                let label=pending.map(|tier|
+                    tr_dynamic(format!("Requesting {}…",tier_name(tier))))
+                    .or_else(||active.map(|tier|tier_name(tier)))
                     .unwrap_or_else(||tr("Choose tier").into());
                 egui::ComboBox::from_id_salt(("atlas-outland-tier",account))
                     .selected_text(label)
-                    .width(170.0)
+                    .width(235.0)
                     .show_ui(ui,|ui|{
-                        for tier in 1u8..=8{
-                            let Some((threshold,multiplier))=
-                                view.outland_requirement(tier) else{continue};
-                            let eligible=view.unlocked_outland_tier(tier).is_some();
-                            let enabled=live && active.is_some() &&
-                                pending.is_none() && eligible && active!=Some(tier);
-                            ui.add_enabled_ui(enabled,|ui|{
-                                if ui.selectable_label(active==Some(tier),format!(
-                                    "Outland {tier} · Lv {threshold} · ×{multiplier:.2} rare drops"
-                                )).clicked(){
-                                    request=Some(tier);
-                                }
-                            });
-                        }
+                        egui::ScrollArea::vertical().max_height(320.0).show(ui,|ui|{
+                            for tier in &tiers{
+                                let eligible=view.unlocked_outland_tier(tier.id).is_some();
+                                let enabled=live && active.is_some() &&
+                                    pending.is_none() && eligible && active!=Some(tier.id);
+                                ui.add_enabled_ui(enabled,|ui|{
+                                    if ui.selectable_label(active==Some(tier.id),format!(
+                                        "Outland {} · Lv {} · ×{:.2} rare drops",
+                                        tier.number,tier.required_level,tier.multiplier
+                                    )).clicked(){
+                                        request=Some(tier.id);
+                                    }
+                                });
+                            }
+                        });
                     });
                 if let Some(tier)=pending{
-                    ui.colored_label(WARN,tr_dynamic(format!("Waiting for Outland {tier} confirmation")));
+                    ui.colored_label(WARN,tr_dynamic(format!(
+                        "Waiting for {} confirmation",tier_name(tier))));
                 }else if level.is_none(){
                     ui.label(RichText::new(tr("Trainer level unavailable"))
                         .size(10.0).color(MUTED));
-                }else if level.is_some_and(|level|level<150){
-                    ui.label(RichText::new(tr("Unlocks at trainer Lv 150"))
+                }else if level.is_some_and(|level|level<minimum_level){
+                    ui.label(RichText::new(tr_dynamic(format!(
+                        "Unlocks at trainer Lv {minimum_level}")))
                         .size(10.0).color(MUTED));
                 }else if !live{
                     ui.label(RichText::new(tr("Offline · read only"))
