@@ -94,7 +94,7 @@ pub(super) fn draw_atlas_outland_tier(
                     .size(10.0).strong().color(DIM));
                 ui.label(RichText::new(match active{
                     Some(tier)=>tr_dynamic(format!("● {} active",tier_name(tier))),
-                    None=>tr("Awaiting game state".to_owned())
+                    None=>tr("Awaiting game state").to_owned()
                 }).size(11.0).strong().color(if active.is_some(){GOOD}else{WARN}));
                 let label=pending.map(|tier|
                     tr_dynamic(format!("Requesting {}…",tier_name(tier))))
