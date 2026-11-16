@@ -212,7 +212,14 @@ No visual runtime acceptance is asserted by this document.
   pacing profile (source/map/`s`/`sAoe`/confidence bounds), bicycle factor,
   explicit AoE state, seasonal type, gym podium and forecast-relevant XP/gold
   modifiers. Learned-map revisions only trigger profile-key recomputation; an
-  ignored learned map does not invalidate a forecast. Geometry revisions,
+  ignored learned map does not invalidate a forecast.   Bicycle speed factors follow upstream
+  `shared/bicicletas.mjs`'s hunt-specific `fatorPassoNaHunt`, not its separate
+  town-square `fatorPassoNaPraca`: Common 2.0×, Uncommon 2.2×, Rare 2.6×,
+  Mythic 3.0× and Legendary 3.5×. The authenticated welcome bicycle table
+  overrides these pinned fallbacks when present; the multiplier divides only
+  reducible player walking time, never combat cooldowns or wild movement.
+
+  Geometry revisions,
   spawn-radius samples and Euclidean geometry hashes are not forecast inputs.
   Every forecast carries diagnostic pacing provenance: exact vendored map,
   learned map ID, or global fallback, plus the effective baseline and p10/p90
