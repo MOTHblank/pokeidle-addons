@@ -198,18 +198,26 @@ pub fn shiny_egg_chance(level:u32,outland:bool)->f64{
     let steps=SHINY_EGG_LEVELS.partition_point(|threshold|level>=*threshold);
     if steps==0 {0.0}else{1.0/80_000.0+(steps-1) as f64*0.000_000_5}
 }
+pub const SACRIFICE_BONE_ID:u64=70018;
+pub const SACRIFICE_BONE_CHANCE:f64=0.000_004;
+pub const SACRIFICE_BONE_POINTS:u32=100;
+
 #[derive(Clone,Copy,Debug)]
-pub struct RareKind {pub id:u64,pub name:&'static str,pub base:f64,pub craft:u32}
-pub const OUTLAND_RARES:[RareKind;4]=[
-    RareKind{id:70000,name:"Bronze Boss Token",base:0.0005,craft:1},
-    RareKind{id:70011,name:"Key Fragment",base:0.000005,craft:10},
-    RareKind{id:70012,name:"Shiny Stone Fragment",base:0.000005,craft:10},
-    RareKind{id:70013,name:"Bicycle Fragment",base:0.000005,craft:10},
+pub struct RareKind {
+    pub id:u64,pub name:&'static str,pub base:f64,pub craft:u32,pub altar_points:u32,
+}
+pub const OUTLAND_RARES:[RareKind;5]=[
+    RareKind{id:70000,name:"Bronze Boss Token",base:0.0005,craft:1,altar_points:0},
+    RareKind{id:70011,name:"Key Fragment",base:0.000005,craft:10,altar_points:0},
+    RareKind{id:70012,name:"Shiny Stone Fragment",base:0.000005,craft:10,altar_points:0},
+    RareKind{id:70013,name:"Bicycle Fragment",base:0.000005,craft:10,altar_points:0},
+    RareKind{id:SACRIFICE_BONE_ID,name:"Sacrifice Bone",base:SACRIFICE_BONE_CHANCE,
+        craft:0,altar_points:SACRIFICE_BONE_POINTS},
 ];
 #[derive(Clone,Debug)]
 pub struct RareForecast {
     pub id:u64,pub name:&'static str,pub per_kill:f64,pub units_h:f64,
-    pub mean_hours:f64,pub craft_hours:f64,pub chance_24h:f64,
+    pub mean_hours:f64,pub craft_hours:f64,pub chance_24h:f64,pub altar_points_h:f64,
 }
 fn rare_row(kind:RareKind,chance:f64,kills_h:f64,mods:&Modifiers)->Option<RareForecast>{
     if !kills_h.is_finite()||kills_h<0.0||!mods.valid(){return None}
@@ -218,8 +226,9 @@ fn rare_row(kind:RareKind,chance:f64,kills_h:f64,mods:&Modifiers)->Option<RareFo
     let units_h=kills_h*p;
     Some(RareForecast{id:kind.id,name:kind.name,per_kill:p,units_h,
         mean_hours:if units_h>0.0{1.0/units_h}else{f64::INFINITY},
-        craft_hours:if units_h>0.0{kind.craft as f64/units_h}else{f64::INFINITY},
-        chance_24h:at_least_one(p,24.0*kills_h)?,})
+        craft_hours:if units_h>0.0&&kind.craft>0{kind.craft as f64/units_h}else{0.0},
+        chance_24h:at_least_one(p,24.0*kills_h)?,
+        altar_points_h:units_h*kind.altar_points as f64,})
 }
 /// Exact server-provided Outland gate when available; fallback is handled
 /// by the caller's HuntView. Never present locked-tier rare yields.
@@ -236,7 +245,7 @@ pub fn rare_scenarios_with_gate(
             rare_row(*kind,kind.base*mult,kills_h,mods)).collect()
     }else{
         let chance=shiny_egg_chance(hunt_level,false);
-        rare_row(RareKind{id:70017,name:"Shiny Egg Fragment",base:chance,craft:10},
+        rare_row(RareKind{id:70017,name:"Shiny Egg Fragment",base:chance,craft:10,altar_points:0},
             chance,kills_h,mods).into_iter().collect()
     }
 }
@@ -333,7 +342,12 @@ mod tests {
         assert!((shiny_egg_chance(160300,false)-0.000028).abs()<1e-15);
         assert_eq!(shiny_egg_chance(160300,true),0.0);
         let base=rare_scenarios_with_gate(true,200,Some((150,1.0)),Some(200),500.0,&m);
-        assert_eq!(base.len(),4);
+        assert_eq!(base.len(),5);
+        let bone=base.iter().find(|row|row.id==SACRIFICE_BONE_ID).unwrap();
+        assert!((bone.per_kill-SACRIFICE_BONE_CHANCE).abs()<1e-15);
+        assert!((bone.units_h-500.0*SACRIFICE_BONE_CHANCE).abs()<1e-12);
+        assert!((bone.altar_points_h-bone.units_h*SACRIFICE_BONE_POINTS as f64).abs()<1e-12);
+        assert_eq!(bone.craft_hours,0.0);
         let mut boosted=m.clone();boosted.loot=2.0;
         assert!(rare_scenarios_with_gate(true,200,Some((150,1.0)),Some(200),500.0,&boosted)[0].units_h>base[0].units_h);
         assert!(rare_scenarios_with_gate(true,200,Some((36000,8.0)),Some(200),500.0,&m).is_empty());
