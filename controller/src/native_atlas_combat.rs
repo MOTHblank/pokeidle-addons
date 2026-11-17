@@ -47,10 +47,12 @@ struct CombatSample {
 
 #[derive(Clone, Copy, Debug)]
 struct DeadTime {
+    #[allow(dead_code)]
     fixed_s: f64,
     walking_s: f64,
 }
 impl DeadTime {
+    #[cfg(test)]
     fn total_s(self)->f64 { self.fixed_s+self.walking_s }
 }
 
@@ -165,6 +167,7 @@ fn mean_ttk(moves: &[Attack], tackle: Attack, global_gap_s: f64,
     }
     Some(spent/hp.len() as f64)
 }
+#[cfg(test)]
 fn baseline_dead_time(map_baseline_s:f64)->DeadTime {
     let parts=hunt_pacing_model::baseline_dead_time(map_baseline_s);
     DeadTime { fixed_s:parts.fixed_s, walking_s:parts.walking_s }

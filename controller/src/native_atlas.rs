@@ -157,6 +157,7 @@ pub struct Forecast {
     pub seconds_per_kill: f64,
     pub combat_seconds_per_kill: f64,
     pub dead_time_seconds_per_kill: f64,
+    #[allow(dead_code)]
     pub pacing:ForecastPacing,
     pub coverage: f64,
     pub calibrated: bool,

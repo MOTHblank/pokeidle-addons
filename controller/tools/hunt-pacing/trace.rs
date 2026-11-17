@@ -53,6 +53,7 @@ pub struct TraceRecord {
 
 #[derive(Clone, Debug)]
 pub struct TraceSession {
+    #[allow(dead_code)]
     pub path: PathBuf,
     pub records: Vec<TraceRecord>,
 }

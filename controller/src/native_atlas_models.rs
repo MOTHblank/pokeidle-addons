@@ -263,6 +263,7 @@ fn rare_row(kind:RareKind,chance:f64,kills_h:f64,mods:&Modifiers)->Option<RareFo
 }
 /// Exact server-provided Outland gate when available; fallback is handled
 /// by the caller's HuntView. Never present locked-tier rare yields.
+#[cfg(test)]
 pub fn rare_scenarios_with_gate(
     outland:bool,hunt_level:u32,gate:Option<(u32,f64)>,
     trainer_level:Option<u32>,kills_h:f64,mods:&Modifiers
@@ -273,6 +274,7 @@ pub fn rare_scenarios_with_gate(
 /// Prefer the live server value for Bronze Boss Token when it is available.
 /// Upstream app.js defaults chanceBossToken to 0.0001 and multiplies it only
 /// by the selected Outland tier factor.
+#[cfg(test)]
 pub fn rare_scenarios_with_gate_and_token_chance(
     outland:bool,hunt_level:u32,gate:Option<(u32,f64)>,
     trainer_level:Option<u32>,kills_h:f64,boss_token_chance:Option<f64>,

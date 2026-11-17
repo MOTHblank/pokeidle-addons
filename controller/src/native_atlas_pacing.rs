@@ -5,7 +5,9 @@
 
 use std::{collections::BTreeMap, sync::OnceLock};
 
+#[cfg(test)]
 pub const SOURCE_EXTENSION_VERSION: &str = "1.0.17";
+#[cfg(test)]
 pub const SOURCE_GAME_VERSION: &str = "1.409.0";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,9 +33,13 @@ pub struct HuntPacing {
 
 #[derive(Debug)]
 pub struct PacingDataset {
+    #[allow(dead_code)]
     pub origin: String,
+    #[allow(dead_code)]
     pub source: String,
+    #[allow(dead_code)]
     pub game_version: String,
+    #[allow(dead_code)]
     pub generated_at: String,
     pub fallback: PacingRange,
     pub aoe_gain: f64,
@@ -173,6 +179,7 @@ pub fn resolve(slug:&str, learned_map:Option<&str>) -> ResolvedPacing {
     }
 }
 
+#[cfg(test)]
 pub fn capture_ceiling(slug:&str)->Option<u32> {
     dataset().hunts.get(slug).map(|hunt|hunt.capture_ceiling)
 }

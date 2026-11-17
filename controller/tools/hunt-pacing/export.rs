@@ -1,4 +1,4 @@
-use crate::reduce::{MapReduction, ProfileStats, ReducedDataset};
+use crate::reduce::{ProfileStats, ReducedDataset};
 use crate::hunt_pacing_model;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
