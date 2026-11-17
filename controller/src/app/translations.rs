@@ -167,6 +167,7 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Z-Move + AoE TM" => "Z-Move + TM AoE",
         "Mega + Shiny Mega" => "Mega + Mega Shiny",
         "Mystic + Safari" => "Mystic + Safari",
+        "Sacrifice Bone" => "Osso do Sacrifício",
         "try" => "tent.",
         "Est. value / attempt" => "Valor est. / tentativa",
         "Total est. value" => "Valor est. total",

@@ -2041,7 +2041,13 @@ mod tests {
 
     #[test]
     fn market_refresh_respects_catalog_gate_and_cooldowns() {
-        let mut m = manager();
+        let mut m = BossManager {
+            view: BossView::default(),
+            trip: None,
+            writer: None,
+            rmt_prices_fetched_at: None,
+            rmt_prices_requested_at: None,
+        };
         let t0 = Instant::now();
         assert!(m.next_market_refresh(t0, true).is_none(), "waits for catalog");
         m.ingest(&json!({
