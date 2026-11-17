@@ -678,22 +678,45 @@ pub fn stop_existing(config: &Config, pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     {
         logging::warn(&format!("Recovered Firefox PID {pid} ignored window close; terminating"));
-        let output = Command::new("taskkill.exe")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output()
-            .map_err(|error| format!("could not terminate recovered Firefox: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "could not terminate recovered Firefox: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
+        terminate_windows_pid(pid)?;
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
     return Err("recovered browser shutdown is unsupported on this platform".to_string());
     if !wait_pid(pid, Duration::from_secs(3)) {
         return Err("recovered Firefox did not exit after termination request".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_windows_pid(pid: u32) -> Result<(), String> {
+    use std::ffi::c_void;
+    type Handle = *mut c_void;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> Handle;
+        fn TerminateProcess(process: Handle, exit_code: u32) -> i32;
+        fn GetLastError() -> u32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+    if handle.is_null() {
+        let error = std::io::Error::last_os_error();
+        if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+            return Ok(());
+        }
+        return Err(format!("could not terminate recovered Firefox: {error}"));
+    }
+    let ok = unsafe { TerminateProcess(handle, 1) };
+    let error = (ok == 0).then(std::io::Error::last_os_error);
+    unsafe { CloseHandle(handle) };
+    if let Some(error) = error {
+        return Err(format!("could not terminate recovered Firefox: {error}"));
     }
     Ok(())
 }

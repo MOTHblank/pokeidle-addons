@@ -77,37 +77,146 @@ fn body(kind: AlertKind) -> &'static str {
     }
 }
 
+#[cfg(windows)]
+fn show_windows_notification(message: &str) -> Result<(), String> {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static ALERT_ID: AtomicU32 = AtomicU32::new(1);
+
+    type Handle = *mut c_void;
+    const NIM_ADD: u32 = 0x0000_0000;
+    const NIM_DELETE: u32 = 0x0000_0002;
+    const NIF_ICON: u32 = 0x0000_0002;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const NIF_INFO: u32 = 0x0000_0010;
+    const NIIF_INFO: u32 = 0x0000_0001;
+    const IDI_APPLICATION: *const u16 = 32512 as *const u16;
+    const WS_OVERLAPPED: u32 = 0;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+
+    #[cfg_attr(target_arch = "x86", repr(C, packed(1)))]
+    #[cfg_attr(not(target_arch = "x86"), repr(C))]
+    struct NotifyIconDataW {
+        cb_size: u32,
+        hwnd: Handle,
+        uid: u32,
+        u_flags: u32,
+        u_callback_message: u32,
+        h_icon: Handle,
+        sz_tip: [u16; 128],
+        dw_state: u32,
+        dw_state_mask: u32,
+        sz_info: [u16; 256],
+        u_timeout_or_version: u32,
+        sz_info_title: [u16; 64],
+        dw_info_flags: u32,
+        guid_item: Guid,
+        h_balloon_icon: Handle,
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn CreateWindowExW(
+            ex_style: u32,
+            class_name: *const u16,
+            window_name: *const u16,
+            style: u32,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            parent: Handle,
+            menu: Handle,
+            instance: Handle,
+            param: *mut c_void,
+        ) -> Handle;
+        fn DestroyWindow(hwnd: Handle) -> i32;
+        fn LoadIconW(instance: Handle, icon_name: *const u16) -> Handle;
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn Shell_NotifyIconW(message: u32, data: *const NotifyIconDataW) -> i32;
+    }
+
+    fn copy_wide<const N: usize>(dest: &mut [u16; N], text: &str) {
+        for (slot, unit) in dest.iter_mut().take(N.saturating_sub(1)).zip(text.encode_utf16()) {
+            *slot = unit;
+        }
+    }
+
+    let class_name: Vec<u16> = "STATIC\0".encode_utf16().collect();
+    let hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            std::ptr::null(),
+            WS_OVERLAPPED,
+            0,
+            0,
+            0,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if hwnd.is_null() {
+        return Err(format!("CreateWindowExW failed: {}", std::io::Error::last_os_error()));
+    }
+
+    let mut data: NotifyIconDataW = unsafe { std::mem::zeroed() };
+    data.cb_size = std::mem::size_of::<NotifyIconDataW>() as u32;
+    data.hwnd = hwnd;
+    data.uid = ALERT_ID.fetch_add(1, Ordering::Relaxed);
+    data.u_flags = NIF_ICON | NIF_TIP | NIF_INFO;
+    data.h_icon = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
+    data.dw_info_flags = NIIF_INFO;
+    copy_wide(&mut data.sz_tip, "Moth Controller");
+    copy_wide(&mut data.sz_info_title, "Moth Controller");
+    copy_wide(&mut data.sz_info, message);
+
+    let added = unsafe { Shell_NotifyIconW(NIM_ADD, &data) };
+    if added == 0 {
+        unsafe { DestroyWindow(hwnd) };
+        return Err("Shell_NotifyIconW(NIM_ADD) returned FALSE".into());
+    }
+
+    std::thread::sleep(Duration::from_secs(6));
+    unsafe {
+        Shell_NotifyIconW(NIM_DELETE, &data);
+        DestroyWindow(hwnd);
+    }
+    Ok(())
+}
+
 fn show_notification(message: &'static str) {
     // No worker exists unless an alert is actually emitted.
     let _ = std::thread::Builder::new().name("moth-desktop-alert".into()).spawn(move || {
         #[cfg(windows)]
-        let output = {
-            use std::os::windows::process::CommandExt;
-            // The message is one of the fixed strings above, never user content.
-            // PowerShell's Windows Runtime toast APIs need no external packages.
-            let xml = format!("<toast><visual><binding template='ToastGeneric'><text>Moth Controller</text><text>{message}</text></binding></visual></toast>");
-            let script = format!(
-                "$ErrorActionPreference='Stop'; \
-                 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; \
-                 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] > $null; \
-                 $doc = New-Object Windows.Data.Xml.Dom.XmlDocument; \
-                 $doc.LoadXml(\"{xml}\"); \
-                 $toast = [Windows.UI.Notifications.ToastNotification]::new($doc); \
-                 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Moth Controller').Show($toast)"
-            );
-            let mut command = std::process::Command::new("powershell.exe");
-            command.creation_flags(0x08000000); // no console
-            command.args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &script])
-                .output()
-        };
+        if let Err(error) = show_windows_notification(message) {
+            crate::logging::warn(&format!("Desktop notification unavailable: {error}"));
+        }
         #[cfg(not(windows))]
-        let output = std::process::Command::new("notify-send")
-            .arg("Moth Controller").arg(message).output();
-        match output {
-            Ok(result) if result.status.success() => {}
-            Ok(result) => crate::logging::warn(&format!(
-                "Desktop notification unavailable (exit status {})", result.status)),
-            Err(error) => crate::logging::warn(&format!("Desktop notification unavailable: {error}")),
+        {
+            let output = std::process::Command::new("notify-send")
+                .arg("Moth Controller").arg(message).output();
+            match output {
+                Ok(result) if result.status.success() => {}
+                Ok(result) => crate::logging::warn(&format!(
+                    "Desktop notification unavailable (exit status {})", result.status)),
+                Err(error) => crate::logging::warn(&format!("Desktop notification unavailable: {error}")),
+            }
         }
     });
 }
