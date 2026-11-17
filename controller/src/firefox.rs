@@ -291,6 +291,46 @@ pub fn launch_kick_login(config: &Config) -> Result<Child, String> {
         .map_err(format_spawn_error)
 }
 
+/// Open a Kick channel in this account's ordinary Firefox profile, without any
+/// automation or remote-debugging flags.
+pub fn open_kick_stream(config: &Config, slug: &str) -> Result<(), String> {
+    migrate_legacy_profile(config)?;
+    if !config.profile_dir.is_dir() {
+        return Err("This PokéIdle Firefox profile does not exist yet. Sign in to PokéIdle with this account first.".into());
+    }
+    let mut command = kick_stream_command(config, slug)?;
+    logging::info(&format!(
+        "{}: opening Kick channel in account Firefox profile",
+        config.profile.label()
+    ));
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(format_spawn_error)
+}
+
+fn kick_stream_command(config: &Config, slug: &str) -> Result<Command, String> {
+    let slug = slug.trim().to_ascii_lowercase();
+    if slug.is_empty()
+        || slug.len() > 25
+        || !slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    {
+        return Err("Invalid Kick channel".to_owned());
+    }
+    let mut command = Command::new(&config.firefox_executable);
+    command
+        .arg("--profile")
+        .arg(&config.profile_dir)
+        .arg("--new-tab")
+        .arg(format!("https://kick.com/{slug}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    Ok(command)
+}
+
 /// Open the selected account profile in an ordinary, user-controlled Firefox
 /// window for interactive Google/PokéIdle authentication.
 /// Do not add a BiDi/Remote Agent port, and never open sign-in URLs inside
@@ -926,6 +966,30 @@ mod unmonitored_login_tests {
     #[test]
     fn twitch_stream_refuses_invalid_channel_names() {
         assert!(twitch_stream_command(&config(), "not/a/channel").is_err());
+    }
+
+    #[test]
+    fn kick_stream_uses_account_profile_without_automation_flags() {
+        let config = config();
+        let command = kick_stream_command(&config, "Some_Channel").unwrap();
+        let args: Vec<_> = command.get_args()
+            .map(|arg| arg.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--profile".to_owned()));
+        assert!(args.contains(&config.profile_dir.to_string_lossy().to_string()));
+        assert!(args.contains(&"--new-tab".to_owned()));
+        assert!(args.contains(&"https://kick.com/some_channel".to_owned()));
+        assert!(!args.iter().any(|arg| {
+            arg.as_str() == "--no-remote" ||
+            arg.contains("remote-debugging") ||
+            arg.contains("marionette") ||
+            arg.contains("headless")
+        }));
+    }
+
+    #[test]
+    fn kick_stream_refuses_invalid_channel_names() {
+        assert!(kick_stream_command(&config(), "").is_err());
+        assert!(kick_stream_command(&config(), "not/a/channel").is_err());
     }
 
 

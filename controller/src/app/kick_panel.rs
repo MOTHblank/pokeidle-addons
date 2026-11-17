@@ -73,6 +73,10 @@ pub(super) fn open_kick_channels_in_regular_browser(channels: &[String]) -> Resu
 fn kick_label(pt: bool, en: &'static str, br: &'static str) -> &'static str {
     if pt { br } else { en }
 }
+fn open_channel(profile: GameProfile, slug: &str) -> Result<(), String> {
+    let config = Config::for_profile(profile)?;
+    firefox::open_kick_stream(&config, slug)
+}
 fn kick_error_ui(error: &str) -> String {
     if pt_br() { translations::kick_error(error.to_owned()) }
     else { error.to_owned() }
@@ -527,8 +531,8 @@ fn kick_channel_line(ui: &mut egui::Ui, channel: &KickChannelRow,
                 }
                 open = ui.small_button("↗")
                     .on_hover_text(kick_label(br,
-                        "Open channel in your default browser",
-                        "Abrir canal no navegador padrão"))
+                        "Open in this account's Firefox profile",
+                        "Abrir no perfil Firefox desta conta"))
                     .clicked();
             });
             if let Some(error) = &channel.error {
@@ -827,8 +831,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
         "Marque seus streamers favoritos. Eles ocupam vagas na ordem em que foram marcados; outros canais oficiais ao vivo ocupam o restante."))
         .size(10.0).color(MUTED));
     ui.label(RichText::new(kick_label(br,
-        "The ↗ Open channel button tries to open Kick in your system's default browser. Kick often rejects connections from browsers used by the app.",
-        "O botão ↗ Abrir canal tenta abrir a Kick no navegador padrão do sistema. A Kick frequentemente rejeita conexões pelos navegadores usados pelo aplicativo."))
+        "The ↗ Open channel button opens Kick in this account's Firefox profile without automation flags.",
+        "O botão ↗ Abrir canal abre a Kick no perfil Firefox desta conta sem sinalizadores de automação."))
         .size(10.0).color(MUTED));
     ui.add_space(6.0);
 
@@ -860,9 +864,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             desired.contains(&channel.slug));
         if favorite_clicked { app.toggle_kick_favorite(index, &channel.slug); }
         if open {
-            if let Err(error) = open_kick_channels_in_regular_browser(
-                &[channel.slug.clone()]) {
-                app.set_status(error, true);
+            if let Err(error) = open_channel(profile, &channel.slug) {
+                app.set_status(kick_error_ui(&error), true);
             }
         }
         ui.add_space(4.0);
@@ -876,9 +879,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                     desired.contains(&channel.slug));
                 if favorite_clicked { app.toggle_kick_favorite(index, &channel.slug); }
                 if open {
-                    if let Err(error) = open_kick_channels_in_regular_browser(
-                        &[channel.slug.clone()]) {
-                        app.set_status(error, true);
+                    if let Err(error) = open_channel(profile, &channel.slug) {
+                        app.set_status(kick_error_ui(&error), true);
                     }
                 }
                 ui.add_space(4.0);
