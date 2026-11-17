@@ -168,6 +168,8 @@ pub(super) fn pt<'a>(en: &'a str) -> &'a str {
         "Mega + Shiny Mega" => "Mega + Mega Shiny",
         "Mystic + Safari" => "Mystic + Safari",
         "Sacrifice Bone" => "Osso do Sacrifício",
+        "Altar points/h" => "Pontos do Altar/h",
+        "Sacrifice Bone %/kill" => "Osso do Sacrifício %/abate",
         "try" => "tent.",
         "Est. value / attempt" => "Valor est. / tentativa",
         "Total est. value" => "Valor est. total",
