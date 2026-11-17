@@ -39,10 +39,10 @@ Os workflows usam os runners gratuitos do GitHub para repositórios públicos:
 
 - Alterações comuns de código não disparam testes/builds de release. O workflow de release roda quando a versão do Controller muda, quando há um pedido explícito de release ou por execução manual.
 - Para baixar um build de teste sem publicar uma versão, abra [Actions → Build e release do Moth Controller](https://github.com/MOTHblank/pokeidle-addons/actions/workflows/build-controller.yml), clique em **Run workflow** e mantenha **Publicar a release** desmarcado. Os binários ficam nos artefatos da execução por 7 dias.
-- Para publicar uma **nova** versão, atualize `version` em `controller/Cargo.toml` (e sincronize `controller/Cargo.lock`) e faça o commit em `master`. O workflow identifica a mudança de versão, compila Windows x86_64 e Linux x86_64, gera atestados de proveniência e SHA-256, e cria a [GitHub Release](https://github.com/MOTHblank/pokeidle-addons/releases) com os dois pacotes. Também aceita uma tag `vX.Y.Z` correspondente ao `Cargo.toml`.
+- Para publicar uma **nova** versão, atualize `version` em `controller/Cargo.toml` (e sincronize `controller/Cargo.lock`) e faça o commit em `master`. O workflow identifica a mudança de versão, compila Windows x86_64, gera atestados de proveniência e SHA-256, e cria a [GitHub Release](https://github.com/MOTHblank/pokeidle-addons/releases) com os pacotes Setup e Portable. Também aceita uma tag `vX.Y.Z` correspondente ao `Cargo.toml`.
 - Também é possível iniciar o workflow manualmente em `master` e marcar **Publicar a release**; releases existentes não são sobrescritas.
 
-Os pacotes publicados são **Setup Windows**, **Portable Windows** e um `.zip` para Linux, acompanhados de SHA-256. A publicação só ocorre quando os builds Windows e Linux são concluídos com sucesso, incluindo as **atestações de proveniência geradas pelo GitHub Actions**. Essas atestações não são assinaturas Authenticode do Windows.
+Os pacotes publicados são **Setup Windows** e **Portable Windows**, acompanhados de SHA-256. O Linux não é mais suportado. Quem precisar de uma versão Linux deve entrar em contato diretamente com o desenvolvedor. A publicação só ocorre após a compilação Windows e a geração das **atestações de proveniência do GitHub Actions**. Essas atestações não são assinaturas Authenticode do Windows.
 
 ### Como verificar a proveniência
 
@@ -51,7 +51,6 @@ Após baixar os arquivos de uma release, instale o [GitHub CLI](https://cli.gith
 ```sh
 gh attestation verify Moth-Controller-Setup-v0.2.3.exe -R MOTHblank/pokeidle-addons
 gh attestation verify Moth-Controller-Portable-v0.2.3-windows-x86_64.exe -R MOTHblank/pokeidle-addons
-gh attestation verify moth-controller-v0.2.3-linux-x86_64.zip -R MOTHblank/pokeidle-addons
 ```
 
 A verificação confere a integridade do arquivo e a identidade do workflow/repositório que gerou a compilação. Consulte também os arquivos `.sha256` anexos para uma conferência simples de hash.
