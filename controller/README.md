@@ -1,5 +1,7 @@
 # Moth Controller — Desenvolvimento
 
+O aplicativo é distribuído e suportado somente no Windows. O suporte a Linux foi descontinuado; quem precisar de uma versão Linux deve entrar em contato diretamente com o desenvolvedor.
+
 Aplicativo desktop do [PokéIdle Addons](../README.md), desenvolvido em Rust com egui/eframe. Gerencia até quatro perfis independentes do PokéIdle com sessões nativas em segundo plano.
 
 **[Baixar a versão mais recente](https://github.com/MOTHblank/pokeidle-addons/releases/latest)**
@@ -182,22 +184,6 @@ Windows usa um arquivo criptografado com DPAPI específico do perfil Kick;
 Linux usa um item separado no Secret Service. Não existe fallback para
 arquivo em texto simples. O token pode expirar e exigir substituição.
 Não compartilhe tokens em logs, issues ou repositórios.
-
-## Linux
-
-A versão Linux usa Firefox nativo, X11 ou Wayland, `libsqlite3` para importar o login do Kick e o serviço de segredos do desktop para guardar sessões sem arquivos em texto simples. Instale `libsecret-tools` e configure um chaveiro Secret Service desbloqueado (por exemplo, GNOME Keyring ou KWallet com suporte Secret Service). Também são necessários `curl` e `xdg-open` (`xdg-utils`).
-
-No arquivo Linux distribuído, execute `./check-linux-deps.sh` para identificar dependências ausentes. Consulte [as instruções Linux](../.github/release-notes/LEIA-ME-LINUX.md). Sem um chaveiro funcional, o aplicativo ainda pode pedir login pelo Firefox a cada execução; não salva credenciais em texto simples.
-
-## Cross-build Linux no Windows
-
-Com `cargo-zigbuild`, Zig e o alvo Rust `x86_64-unknown-linux-gnu` instalados, no diretório `controller/` execute:
-
-```powershell
-cargo zigbuild --release --locked --target x86_64-unknown-linux-gnu.2.35
-```
-
-O executável Linux é gerado em `target/x86_64-unknown-linux-gnu/release/moth-controller`. A importação de cookie Kick usa `libsqlite3.so.0` na máquina Linux de destino, sem precisar vincular SQLite ao compilar no Windows.
 
 ## Compilação
 

@@ -1,4 +1,4 @@
-name: Build e release do Moth Controller (Windows e Linux)
+name: Build e release do Moth Controller (Windows)
 
 on:
   # Release automática somente quando Cargo.toml muda em master.
@@ -191,88 +191,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  linux:
-    name: Linux x86_64 (glibc 2.35)
-    needs: versao
-    if: needs.versao.outputs.publish == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - name: Obter código
-        uses: actions/checkout@v4
-
-      - name: Instalar dependências Linux
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev libgtk-3-dev libudev-dev \
-            libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
-            libxinerama-dev libxkbcommon-dev libwayland-dev \
-            libgl1-mesa-dev libegl1-mesa-dev libsqlite3-0 zip
-
-      - name: Instalar Rust estável
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache do Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: controller -> target
-
-      - name: Executar testes
-        working-directory: controller
-        run: cargo test --locked
-
-      - name: Compilar release
-        working-directory: controller
-        run: cargo build --release --locked
-
-      - name: Verificar bibliotecas compartilhadas
-        shell: bash
-        run: |
-          set -euo pipefail
-          ldd controller/target/release/moth-controller | tee /tmp/moth-controller-ldd.txt
-          if grep -q 'not found' /tmp/moth-controller-ldd.txt; then
-            echo "::error::O executável Linux tem dependências ausentes"
-            exit 1
-          fi
-
-      - name: Preparar ZIP Linux e SHA-256
-        shell: bash
-        env:
-          RELEASE_VERSION: ${{ needs.versao.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist/package
-          install -m755 controller/target/release/moth-controller dist/package/moth-controller
-          install -m755 controller/linux/check-linux-deps.sh dist/package/check-linux-deps.sh
-          cp .github/release-notes/LEIA-ME-LINUX.md dist/package/LEIA-ME-LINUX.md
-          cp LICENSE dist/package/LICENSE.txt
-          arquivo="moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
-          (cd dist/package && zip -q "../$arquivo" moth-controller check-linux-deps.sh LEIA-ME-LINUX.md LICENSE.txt)
-          (cd dist && sha256sum "$arquivo" > "$arquivo.sha256")
-
-      - name: Atestar proveniência do pacote Linux
-        uses: actions/attest@v4
-        with:
-          subject-path: dist/*.zip
-
-      - name: Enviar artefato Linux
-        uses: actions/upload-artifact@v4
-        with:
-          name: moth-controller-linux
-          path: |
-            dist/*.zip
-            dist/*.sha256
-          if-no-files-found: error
-          retention-days: 7
-
   publicar:
     name: Publicar GitHub Release
-    needs: [versao, windows, linux]
+    needs: [versao, windows]
     if: needs.versao.outputs.publish == 'true'
     runs-on: ubuntu-22.04
     permissions:
@@ -301,7 +222,6 @@ jobs:
           fi
           test -s "dist/$portable"
           test -s "dist/Moth-Controller-Setup-v$RELEASE_VERSION.exe"
-          test -s "dist/moth-controller-v$RELEASE_VERSION-linux-x86_64.zip"
           (cd dist && for checksum in *.sha256; do sed -i 's/\r$//' "$checksum"; done && sha256sum -c ./*.sha256)
 
       - name: Publicar sem sobrescrever versões existentes
@@ -331,10 +251,10 @@ jobs:
           fi
 
           notes=".github/release-notes/$tag.md"
-          title="Moth Controller $tag — Windows e Linux"
+          title="Moth Controller $tag — Windows"
           if [[ -s "$notes" ]]; then
             gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --notes-file "$notes"
           else
             gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --generate-notes
           fi
-          echo "Release $tag publicada com instalador Windows, portátil, Linux e checksums."
+          echo "Release $tag publicada com instalador Windows, versão portátil e checksums."
