@@ -652,6 +652,7 @@ impl MarketBuyer {
         self.update_pending();
     }
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn ingest(&mut self, text: &str, now: Instant, cfg:&MarketRules) {
         let Ok(frame)=serde_json::from_str::<Value>(text) else{return};
         self.ingest_value(&frame, now, cfg);

@@ -14,8 +14,8 @@ pub const RELEASES_URL: &str = "https://github.com/MOTHblank/pokeidle-addons/rel
 #[cfg(windows)]
 const LEGACY_WINDOWS_UPDATE_ASSET: &str = "Moth-Controller-Portable-windows-x86_64.exe";
 #[cfg(windows)]
-const WINDOWS_UNINSTALL_KEY: &str =
-    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{5E1E5540-9723-4D63-9A92-7A9AA6BDA74C}_is1";
+const WINDOWS_UNINSTALL_SUBKEY: &str =
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{5E1E5540-9723-4D63-9A92-7A9AA6BDA74C}_is1";
 #[cfg(windows)]
 const WINDOWS_APP_FILENAME: &str = "Moth Controller.exe";
 
@@ -228,36 +228,165 @@ fn fetch_latest_release() -> Result<ReleaseInfo, String> {
 }
 
 #[cfg(windows)]
-fn hidden_reg_command() -> Command {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new("reg.exe");
-    command.creation_flags(0x08000000);
-    command
+mod win32_reg {
+    use std::ffi::c_void;
+
+    type HKey = *mut c_void;
+    const HKEY_CURRENT_USER: HKey = 0x8000_0001u32 as usize as HKey;
+    const KEY_QUERY_VALUE: u32 = 0x0001;
+    const KEY_SET_VALUE: u32 = 0x0002;
+    const REG_SZ: u32 = 1;
+    const ERROR_SUCCESS: i32 = 0;
+    const ERROR_MORE_DATA: i32 = 234;
+
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn RegOpenKeyExW(
+            key: HKey,
+            sub_key: *const u16,
+            options: u32,
+            desired: u32,
+            result: *mut HKey,
+        ) -> i32;
+        fn RegQueryValueExW(
+            key: HKey,
+            value_name: *const u16,
+            reserved: *mut u32,
+            kind: *mut u32,
+            data: *mut u8,
+            data_bytes: *mut u32,
+        ) -> i32;
+        fn RegSetValueExW(
+            key: HKey,
+            value_name: *const u16,
+            reserved: u32,
+            kind: u32,
+            data: *const u8,
+            data_bytes: u32,
+        ) -> i32;
+        fn RegCloseKey(key: HKey) -> i32;
+    }
+
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    pub fn key_exists(subkey: &str) -> bool {
+        let subkey = wide(subkey);
+        let mut handle: HKey = std::ptr::null_mut();
+        let status = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                0,
+                KEY_QUERY_VALUE,
+                &mut handle,
+            )
+        };
+        if status == ERROR_SUCCESS {
+            unsafe { RegCloseKey(handle) };
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn query_string(subkey: &str, name: &str) -> Option<String> {
+        let subkey = wide(subkey);
+        let name = wide(name);
+        let mut handle: HKey = std::ptr::null_mut();
+        let status = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                0,
+                KEY_QUERY_VALUE,
+                &mut handle,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        let mut kind: u32 = 0;
+        let mut bytes: u32 = 512;
+        let mut buffer = vec![0u16; (bytes / 2) as usize];
+        let mut read_status = unsafe {
+            RegQueryValueExW(
+                handle,
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut kind,
+                buffer.as_mut_ptr() as *mut u8,
+                &mut bytes,
+            )
+        };
+        if read_status == ERROR_MORE_DATA && bytes > 0 {
+            buffer.resize((bytes as usize).div_ceil(2), 0);
+            read_status = unsafe {
+                RegQueryValueExW(
+                    handle,
+                    name.as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut kind,
+                    buffer.as_mut_ptr() as *mut u8,
+                    &mut bytes,
+                )
+            };
+        }
+        unsafe { RegCloseKey(handle) };
+        if read_status != ERROR_SUCCESS || kind != REG_SZ {
+            return None;
+        }
+        let len = (bytes as usize / 2).min(buffer.len());
+        let end = buffer[..len].iter().position(|&c| c == 0).unwrap_or(len);
+        let text = String::from_utf16_lossy(&buffer[..end]).trim().to_owned();
+        (!text.is_empty()).then_some(text)
+    }
+
+    pub fn set_string(subkey: &str, name: &str, value: &str) -> Result<(), String> {
+        let subkey = wide(subkey);
+        let name = wide(name);
+        let value = wide(value);
+        let mut handle: HKey = std::ptr::null_mut();
+        let open_status = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                0,
+                KEY_SET_VALUE,
+                &mut handle,
+            )
+        };
+        if open_status != ERROR_SUCCESS {
+            return Err(format!("RegOpenKeyExW failed with error {open_status}"));
+        }
+        let byte_len = u32::try_from(value.len() * 2).unwrap_or(u32::MAX);
+        let write_status = unsafe {
+            RegSetValueExW(
+                handle,
+                name.as_ptr(),
+                0,
+                REG_SZ,
+                value.as_ptr() as *const u8,
+                byte_len,
+            )
+        };
+        unsafe { RegCloseKey(handle) };
+        if write_status != ERROR_SUCCESS {
+            return Err(format!("RegSetValueExW failed with error {write_status}"));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
 fn windows_uninstall_key_exists() -> bool {
-    hidden_reg_command()
-        .args(["query", WINDOWS_UNINSTALL_KEY])
-        .output()
-        .is_ok_and(|output| output.status.success())
+    win32_reg::key_exists(WINDOWS_UNINSTALL_SUBKEY)
 }
 
 #[cfg(windows)]
 fn windows_registry_value(name: &str) -> Option<String> {
-    let output = hidden_reg_command()
-        .args(["query", WINDOWS_UNINSTALL_KEY, "/v", name])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().find_map(|line| {
-        let (_, value) = line.split_once("REG_SZ")?;
-        let value = value.trim();
-        (!value.is_empty()).then(|| value.to_owned())
-    })
+    win32_reg::query_string(WINDOWS_UNINSTALL_SUBKEY, name)
 }
 
 #[cfg(windows)]
@@ -315,26 +444,8 @@ pub fn repair_windows_install_metadata() -> Result<bool, String> {
         return Ok(false);
     }
 
-    let output = hidden_reg_command()
-        .args([
-            "add",
-            WINDOWS_UNINSTALL_KEY,
-            "/v",
-            "DisplayVersion",
-            "/t",
-            "REG_SZ",
-            "/d",
-            current,
-            "/f",
-        ])
-        .output()
+    win32_reg::set_string(WINDOWS_UNINSTALL_SUBKEY, "DisplayVersion", current)
         .map_err(|error| format!("could not repair Windows install metadata: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "could not repair Windows install metadata: reg.exe exited with {}",
-            output.status
-        ));
-    }
     Ok(true)
 }
 
@@ -506,26 +617,137 @@ fn parse_sha256(value: &str) -> Result<String, String> {
 
 #[cfg(windows)]
 fn windows_sha256(path: &Path) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new("certutil.exe");
-    command.creation_flags(0x08000000);
-    let output = command
-        .arg("-hashfile")
-        .arg(path)
-        .arg("SHA256")
-        .output()
-        .map_err(|error| format!("could not run Windows SHA-256 verification: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Windows SHA-256 verification failed with status {}",
-            output.status
-        ));
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("could not open update file for SHA-256 verification: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("could not read update file for SHA-256 verification: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines()
-        .map(|line| line.split_whitespace().collect::<String>().to_ascii_lowercase())
-        .find(|line| line.len() == 64 && line.chars().all(|value| value.is_ascii_hexdigit()))
-        .ok_or_else(|| "Windows did not return a readable SHA-256 digest.".to_string())
+    Ok(hasher.finish_hex())
+}
+
+#[cfg(windows)]
+struct Sha256 {
+    state: [u32; 8],
+    buffer: [u8; 64],
+    buffer_len: usize,
+    total_len: u64,
+}
+
+#[cfg(windows)]
+impl Sha256 {
+    fn new() -> Self {
+        Self {
+            state: [
+                0x6a09_e667, 0xbb67_ae85, 0x3c6e_f372, 0xa54f_f53a,
+                0x510e_527f, 0x9b05_688c, 0x1f83_d9ab, 0x5be0_cd19,
+            ],
+            buffer: [0u8; 64],
+            buffer_len: 0,
+            total_len: 0,
+        }
+    }
+
+    fn update(&mut self, mut data: &[u8]) {
+        self.total_len += data.len() as u64;
+        if self.buffer_len > 0 {
+            let take = (64 - self.buffer_len).min(data.len());
+            self.buffer[self.buffer_len..self.buffer_len + take].copy_from_slice(&data[..take]);
+            self.buffer_len += take;
+            data = &data[take..];
+            if self.buffer_len == 64 {
+                let block = self.buffer;
+                self.compress(&block);
+                self.buffer_len = 0;
+            }
+        }
+        while data.len() >= 64 {
+            let (block, rest) = data.split_at(64);
+            self.compress(block.try_into().expect("64-byte block"));
+            data = rest;
+        }
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.buffer_len = data.len();
+        }
+    }
+
+    fn finish_hex(mut self) -> String {
+        let bit_len = self.total_len.wrapping_mul(8);
+        self.update(&[0x80]);
+        if self.buffer_len > 56 {
+            self.buffer[self.buffer_len..64].fill(0);
+            let block = self.buffer;
+            self.compress(&block);
+            self.buffer_len = 0;
+        }
+        self.buffer[self.buffer_len..56].fill(0);
+        self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
+        let block = self.buffer;
+        self.compress(&block);
+
+        let mut hex = String::with_capacity(64);
+        for word in self.state {
+            use std::fmt::Write;
+            let _ = write!(&mut hex, "{word:08x}");
+        }
+        hex
+    }
+
+    fn compress(&mut self, block: &[u8; 64]) {
+        const K: [u32; 64] = [
+            0x428a_2f98, 0x7137_4491, 0xb5c0_fbcf, 0xe9b5_dba5, 0x3956_c25b, 0x59f1_11f1, 0x923f_82a4, 0xab1c_5ed5,
+            0xd807_aa98, 0x1283_5b01, 0x2431_85be, 0x550c_7dc3, 0x72be_5d74, 0x80de_b1fe, 0x9bdc_06a7, 0xc19b_f174,
+            0xe49b_69c1, 0xefbe_4786, 0x0fc1_9dc6, 0x240c_a1cc, 0x2de9_2c6f, 0x4a74_84aa, 0x5cb0_a9dc, 0x76f9_88da,
+            0x983e_5152, 0xa831_c66d, 0xb003_27c8, 0xbf59_7fc7, 0xc6e0_0bf3, 0xd5a7_9147, 0x06ca_6351, 0x1429_2967,
+            0x27b7_0a85, 0x2e1b_2138, 0x4d2c_6dfc, 0x5338_0d13, 0x650a_7354, 0x766a_0abb, 0x81c2_c92e, 0x9272_2c85,
+            0xa2bf_e8a1, 0xa81a_664b, 0xc24b_8b70, 0xc76c_51a3, 0xd192_e819, 0xd699_0624, 0xf40e_3585, 0x106a_a070,
+            0x19a4_c116, 0x1e37_6c08, 0x2748_774c, 0x34b0_bcb5, 0x391c_0cb3, 0x4ed8_aa4a, 0x5b9c_ca4f, 0x682e_6ff3,
+            0x748f_82ee, 0x78a5_636f, 0x84c8_7814, 0x8cc7_0208, 0x90be_fffa, 0xa450_6ceb, 0xbef9_a3f7, 0xc671_78f2,
+        ];
+        let mut w = [0u32; 64];
+        for (i, chunk) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = self.state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
 }
 
 #[cfg(windows)]
@@ -646,20 +868,27 @@ pub fn maybe_run_update_helper() -> bool {
 
 #[cfg(windows)]
 fn parent_process_alive(parent_pid: u32) -> bool {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new("tasklist.exe");
-    command.creation_flags(0x08000000);
-    let output = command
-        .arg("/FI")
-        .arg(format!("PID eq {parent_pid}"))
-        .args(["/FO", "CSV", "/NH"])
-        .output();
-    let Ok(output) = output else {
-        // If tasklist itself is unavailable, the file replacement loop below
-        // remains the final authority on whether the old image is released.
-        return true;
-    };
-    String::from_utf8_lossy(&output.stdout).contains(&format!("\"{parent_pid}\""))
+    use std::ffi::c_void;
+    type Handle = *mut c_void;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    const ERROR_ACCESS_DENIED: u32 = 5;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> Handle;
+        fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
+        fn GetLastError() -> u32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, parent_pid) };
+    if handle.is_null() {
+        return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
+    }
+    let alive = unsafe { WaitForSingleObject(handle, 0) } == WAIT_TIMEOUT;
+    unsafe { CloseHandle(handle) };
+    alive
 }
 
 #[cfg(windows)]

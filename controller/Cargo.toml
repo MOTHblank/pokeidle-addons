@@ -32,5 +32,4 @@ tray-icon = "0.26.1"
 [profile.release]
 lto = true
 codegen-units = 1
-strip = true
 panic = "unwind"

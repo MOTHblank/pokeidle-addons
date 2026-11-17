@@ -65,6 +65,7 @@ pub fn dead_time_s(map_baseline_s: f64, combat_s: f64, bicycle_factor: f64) -> f
     dead_time_parts(map_baseline_s, combat_s, bicycle_factor).total_s()
 }
 
+#[allow(dead_code)]
 pub fn total_cycle_s(map_baseline_s: f64, combat_s: f64, bicycle_factor: f64) -> f64 {
     combat_s.max(0.0) + dead_time_s(map_baseline_s, combat_s, bicycle_factor)
 }

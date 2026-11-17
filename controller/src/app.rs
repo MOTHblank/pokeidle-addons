@@ -850,6 +850,7 @@ impl TrayRuntime {
 
         let icon = TrayIconBuilder::new()
             .with_id("moth-pokeidle-controller")
+            .with_guid(0x5e1e_5540_9723_4d63_9a92_7a9a_a6bd_a74d)
             .with_tooltip("Moth · PokéIdle")
             .with_icon(make_tray_icon()?)
             .with_menu(Box::new(menu))
@@ -1567,6 +1568,8 @@ impl eframe::App for ControllerApp {
         // eframe 0.36 calls logic even when the native window is hidden.
         // Keep lifecycle/event processing here so tray mode never depends on
         // painting a frame just to drain worker completions.
+        self.restore_existing_window(ctx);
+        self.handle_window_close(ctx);
         self.refresh_processes();
         self.inspect_notification_transitions();
         self.sync_pokeidle_kick_streamers();
@@ -1586,8 +1589,6 @@ impl eframe::App for ControllerApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.restore_existing_window(ui.ctx());
-        self.handle_window_close(ui.ctx());
         // Explicit developer capture may follow other pages, but ordinary
         // diagnostics never starts it or leaves any background worker.
         let recording_frame_start = self.recording.as_ref()

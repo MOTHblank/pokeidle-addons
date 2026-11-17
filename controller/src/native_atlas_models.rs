@@ -235,7 +235,7 @@ impl OutlandRareChances {
 
 #[derive(Clone,Copy,Debug)]
 pub struct RareKind {
-    pub id:u64,pub name:&'static str,pub base:f64,pub craft:u32,pub altar_points:u32,
+    pub id:u64,pub name:&'static str,#[allow(dead_code)] pub base:f64,pub craft:u32,pub altar_points:u32,
 }
 pub const OUTLAND_RARES:[RareKind;5]=[
     RareKind{id:BOSS_TOKEN_ID,name:"Bronze Boss Token",base:BOSS_TOKEN_CHANCE_DEFAULT,craft:1,altar_points:0},
