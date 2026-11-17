@@ -201,6 +201,7 @@ impl ExplorerCache {
             }
             AtlasSort::OutlandRare=>{
                 key_scenario.ball=BallKind::Ultra;
+                key_scenario.tier=view.active_outland_tier().unwrap_or(scenario.tier);
                 key_scenario.accepted_fraction_override=None;
             }
             _=>key_scenario=AtlasScenario::default(),
@@ -348,7 +349,7 @@ pub(super) fn atlas_species_rows(
                 AtlasSort::OutlandRare=>forecast.as_ref().and_then(|f|
                     models::rare_scenarios_with_gate_and_chances(
                         hunt.area.eq_ignore_ascii_case("outland"),hunt.level,
-                        view.outland_requirement(scenario.tier),
+                        view.outland_requirement(view.active_outland_tier().unwrap_or(scenario.tier)),
                         view.trainer_level,f.kills_h,view.outland_rare_chances(),
                         &scenario.modifiers)
                         .into_iter().find(|r|r.id==scenario.rare_target)
