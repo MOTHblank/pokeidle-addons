@@ -254,6 +254,9 @@ pub struct HuntView {
     pub outland_tier:Option<u8>,
     /// Server-provided Outland Bronze Boss Token probability (fraction per kill).
     pub boss_token_chance:Option<f64>,
+    pub key_fragment_chance:Option<f64>,
+    pub shiny_stone_fragment_chance:Option<f64>,
+    pub bicycle_fragment_chance:Option<f64>,
     /// Equipped hunt bicycle. Its factor divides player walking duration only.
     /// None means on foot; combat cooldowns and wild movement are unaffected.
     pub bicycle_rarity:Option<String>,
@@ -318,6 +321,14 @@ impl HuntView {
     pub fn unlocked_outland_tier(&self,tier:u8)->Option<f64>{
         let (level,mult)=self.outland_requirement(tier)?;
         (self.trainer_level? >= level).then_some(mult)
+    }
+    pub fn outland_rare_chances(&self)->crate::native_atlas_models::OutlandRareChances{
+        crate::native_atlas_models::OutlandRareChances{
+            boss_token:self.boss_token_chance,
+            key_fragment:self.key_fragment_chance,
+            shiny_stone_fragment:self.shiny_stone_fragment_chance,
+            bicycle_fragment:self.bicycle_fragment_chance,
+        }
     }
 }
 /// Refuse partial, reordered or malformed tables from a remote game message.
@@ -622,6 +633,9 @@ impl HuntIntel {
         self.pending_outland_at=None;
         self.view.outland_tier=None;
         self.view.boss_token_chance=None;
+        self.view.key_fragment_chance=None;
+        self.view.shiny_stone_fragment_chance=None;
+        self.view.bicycle_fragment_chance=None;
         self.view.outland_catalog=None;
         self.view.outland_tier_error=None;
         self.view.pending_hunt_slug = None;
@@ -1362,6 +1376,14 @@ impl HuntIntel {
                 self.view.boss_token_chance=frame.get("chanceBossToken")
                     .and_then(Value::as_f64)
                     .filter(|p|p.is_finite()&&(0.0..=1.0).contains(p));
+                let valid_prob=|v:Option<&Value>|v.and_then(Value::as_f64)
+                    .filter(|p|p.is_finite()&&(0.0..=1.0).contains(p));
+                self.view.key_fragment_chance=valid_prob(
+                    frame.get("casas").and_then(|c|c.get("fragmento")).and_then(|f|f.get("chanceDrop")));
+                self.view.shiny_stone_fragment_chance=valid_prob(
+                    frame.get("shinyStone").and_then(|s|s.get("chanceDrop")));
+                self.view.bicycle_fragment_chance=valid_prob(
+                    frame.get("bicicletas").and_then(|b|b.get("fragmento")).and_then(|f|f.get("chanceDrop")));
                 self.view.outland_catalog=frame.get("catalogoOutlandTiers")
                     .or_else(||frame.get("outlandTiers"))
                     .and_then(parse_outland_catalog);

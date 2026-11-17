@@ -437,9 +437,9 @@ pub(super) fn draw_atlas_models(
             });
     });
     if let Some(speed)=kills {
-        let rare=models::rare_scenarios_with_gate_and_token_chance(outland,hunt.level,
+        let rare=models::rare_scenarios_with_gate_and_chances(outland,hunt.level,
             view.outland_requirement(scenario.tier),view.trainer_level,speed,
-            view.boss_token_chance,&effective_modifiers);
+            view.outland_rare_chances(),&effective_modifiers);
         if rare.is_empty(){
             ui.label(RichText::new(if outland{
                 tr("Preview tier is locked at this trainer level, or the level is unavailable.")
@@ -515,9 +515,10 @@ pub(super) fn draw_atlas_models(
                         ui.label(tier.number.to_string());
                         ui.label(tier.required_level.to_string());
                         ui.label(format!("{mult:.2}×"));
-                        ui.label(format!("{:.5}%",view.boss_token_chance
-                            .unwrap_or(models::BOSS_TOKEN_CHANCE_DEFAULT)*mult*100.0));
-                        ui.label(format!("{:.6}%",0.000005*mult*100.0));
+                        ui.label(format!("{:.5}%",view.outland_rare_chances()
+                            .base_for(models::BOSS_TOKEN_ID)*mult*100.0));
+                        ui.label(format!("{:.6}%",view.outland_rare_chances()
+                            .base_for(models::KEY_FRAGMENT_ID)*mult*100.0));
                         ui.label(format!("{:.6}%",models::SACRIFICE_BONE_CHANCE*mult*100.0));
                         ui.label(if view.unlocked_outland_tier(tier.id).is_some(){
                             tr("Level eligible")

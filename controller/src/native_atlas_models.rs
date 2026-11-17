@@ -200,9 +200,38 @@ pub fn shiny_egg_chance(level:u32,outland:bool)->f64{
 }
 pub const BOSS_TOKEN_ID:u64=70000;
 pub const BOSS_TOKEN_CHANCE_DEFAULT:f64=0.000_1;
+pub const KEY_FRAGMENT_ID:u64=70011;
+pub const SHINY_STONE_FRAGMENT_ID:u64=70012;
+pub const BICYCLE_FRAGMENT_ID:u64=70013;
+pub const OUTLAND_FRAGMENT_CHANCE_DEFAULT:f64=0.000_004;
 pub const SACRIFICE_BONE_ID:u64=70018;
 pub const SACRIFICE_BONE_CHANCE:f64=0.000_004;
 pub const SACRIFICE_BONE_POINTS:u32=100;
+
+#[derive(Clone,Copy,Debug,Default,PartialEq)]
+pub struct OutlandRareChances {
+    pub boss_token:Option<f64>,
+    pub key_fragment:Option<f64>,
+    pub shiny_stone_fragment:Option<f64>,
+    pub bicycle_fragment:Option<f64>,
+}
+impl OutlandRareChances {
+    pub fn base_for(&self,id:u64)->f64{
+        let override_chance=match id {
+            BOSS_TOKEN_ID=>self.boss_token,
+            KEY_FRAGMENT_ID=>self.key_fragment,
+            SHINY_STONE_FRAGMENT_ID=>self.shiny_stone_fragment,
+            BICYCLE_FRAGMENT_ID=>self.bicycle_fragment,
+            _=>None,
+        }.filter(|p|p.is_finite()&&(0.0..=1.0).contains(p));
+        override_chance.unwrap_or(match id {
+            BOSS_TOKEN_ID=>BOSS_TOKEN_CHANCE_DEFAULT,
+            KEY_FRAGMENT_ID|SHINY_STONE_FRAGMENT_ID|BICYCLE_FRAGMENT_ID=>OUTLAND_FRAGMENT_CHANCE_DEFAULT,
+            SACRIFICE_BONE_ID=>SACRIFICE_BONE_CHANCE,
+            _=>0.0,
+        })
+    }
+}
 
 #[derive(Clone,Copy,Debug)]
 pub struct RareKind {
@@ -210,9 +239,9 @@ pub struct RareKind {
 }
 pub const OUTLAND_RARES:[RareKind;5]=[
     RareKind{id:BOSS_TOKEN_ID,name:"Bronze Boss Token",base:BOSS_TOKEN_CHANCE_DEFAULT,craft:1,altar_points:0},
-    RareKind{id:70011,name:"Key Fragment",base:0.000005,craft:10,altar_points:0},
-    RareKind{id:70012,name:"Shiny Stone Fragment",base:0.000005,craft:10,altar_points:0},
-    RareKind{id:70013,name:"Bicycle Fragment",base:0.000005,craft:10,altar_points:0},
+    RareKind{id:KEY_FRAGMENT_ID,name:"Key Fragment",base:OUTLAND_FRAGMENT_CHANCE_DEFAULT,craft:10,altar_points:0},
+    RareKind{id:SHINY_STONE_FRAGMENT_ID,name:"Shiny Stone Fragment",base:OUTLAND_FRAGMENT_CHANCE_DEFAULT,craft:10,altar_points:0},
+    RareKind{id:BICYCLE_FRAGMENT_ID,name:"Bicycle Fragment",base:OUTLAND_FRAGMENT_CHANCE_DEFAULT,craft:10,altar_points:0},
     RareKind{id:SACRIFICE_BONE_ID,name:"Sacrifice Bone",base:SACRIFICE_BONE_CHANCE,
         craft:0,altar_points:SACRIFICE_BONE_POINTS},
 ];
@@ -249,16 +278,24 @@ pub fn rare_scenarios_with_gate_and_token_chance(
     trainer_level:Option<u32>,kills_h:f64,boss_token_chance:Option<f64>,
     mods:&Modifiers
 )->Vec<RareForecast>{
+    rare_scenarios_with_gate_and_chances(
+        outland,hunt_level,gate,trainer_level,kills_h,
+        OutlandRareChances{boss_token:boss_token_chance,..Default::default()},
+        mods,
+    )
+}
+pub fn rare_scenarios_with_gate_and_chances(
+    outland:bool,hunt_level:u32,gate:Option<(u32,f64)>,
+    trainer_level:Option<u32>,kills_h:f64,chances:OutlandRareChances,
+    mods:&Modifiers
+)->Vec<RareForecast>{
     if !mods.valid()||!kills_h.is_finite()||kills_h<0.0{return vec![]}
     if outland{
         let Some((required,mult))=gate else{return vec![]};
         if trainer_level.is_none_or(|n|n<required) ||
             !mult.is_finite()||mult<=0.0{return vec![]}
-        let token_chance=boss_token_chance
-            .filter(|p|p.is_finite()&&(0.0..=1.0).contains(p))
-            .unwrap_or(BOSS_TOKEN_CHANCE_DEFAULT);
         OUTLAND_RARES.iter().filter_map(|kind|{
-            let base=if kind.id==BOSS_TOKEN_ID{token_chance}else{kind.base};
+            let base=chances.base_for(kind.id);
             rare_row(*kind,base*mult,kills_h,mods)
         }).collect()
     }else{
