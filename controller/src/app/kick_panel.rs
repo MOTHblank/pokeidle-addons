@@ -54,8 +54,7 @@ pub(super) fn open_kick_channels_in_regular_browser(channels: &[String]) -> Resu
             continue;
         }
         let url = format!("https://kick.com/{channel}");
-        let mut command = Command::new(if cfg!(windows) { "explorer.exe" } else { "xdg-open" });
-        #[cfg(windows)]
+        let mut command = Command::new("explorer.exe");
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);

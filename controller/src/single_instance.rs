@@ -46,10 +46,7 @@ pub enum Launch {
 /// the guard early would allow another instance to launch during shutdown.
 pub struct SingleInstance {
     signal: Arc<RestoreSignal>,
-    #[cfg(windows)]
     _platform: windows::Guard,
-    #[cfg(unix)]
-    _platform: unix::Guard,
 }
 
 impl SingleInstance {
@@ -68,28 +65,11 @@ pub fn report_acquire_error(error: &str) {
 
 pub fn acquire() -> Result<Launch, String> {
     let signal = Arc::new(RestoreSignal::default());
-    #[cfg(windows)]
-    {
-        return match windows::acquire(Arc::clone(&signal))? {
-            Some(guard) => Ok(Launch::Primary(SingleInstance {
-                signal, _platform: guard
-            })),
-            None => Ok(Launch::Existing),
-        };
-    }
-    #[cfg(unix)]
-    {
-        return match unix::acquire(Arc::clone(&signal))? {
-            Some(guard) => Ok(Launch::Primary(SingleInstance {
-                signal, _platform: guard
-            })),
-            None => Ok(Launch::Existing),
-        };
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = signal;
-        Err("single-instance control is unsupported on this platform".into())
+    match windows::acquire(Arc::clone(&signal))? {
+        Some(guard) => Ok(Launch::Primary(SingleInstance {
+            signal, _platform: guard
+        })),
+        None => Ok(Launch::Existing),
     }
 }
 

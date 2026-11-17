@@ -20,7 +20,7 @@ pub fn open_profile_folder(profile: GameProfile) -> Result<(), String> {
     std::fs::create_dir_all(&config.profile_dir)
         .map_err(|e| format!("could not create profile directory: {e}"))?;
 
-    std::process::Command::new(if cfg!(windows) { "explorer.exe" } else { "xdg-open" })
+    std::process::Command::new("explorer.exe")
         .arg(&config.profile_dir)
         .spawn()
         .map_err(|e| format!("could not open profile folder: {e}"))?;

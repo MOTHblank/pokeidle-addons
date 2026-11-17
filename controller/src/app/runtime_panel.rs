@@ -254,14 +254,6 @@ pub(super) fn draw_credits(app: &mut ControllerApp, ui: &mut egui::Ui) {
                         }
                     }
 
-                    #[cfg(not(windows))]
-                    if newer {
-                        ui.hyperlink_to(
-                            RichText::new(tr("Release notes")).size(9.0),
-                            _notes_url.as_deref().unwrap_or(update::RELEASES_URL),
-                        );
-                    }
-
                     if let Some(error) = failure.as_ref() {
                         ui.label(RichText::new("!").size(10.0).strong().color(BAD))
                             .on_hover_text(error.as_str());

@@ -34,13 +34,7 @@ fn advance_credential_revision(profile:GameProfile)->u64 {
     CREDENTIAL_REVISION[profile.index()].fetch_add(1,Ordering::AcqRel)+1
 }
 
-// Windows can link against the built-in WinSQLite3 API. On Linux, resolve
-// the distro's versioned SQLite runtime at first use. This avoids requiring a
-// Linux development sysroot/libsqlite3.so during Windows -> Linux zigbuild,
-// without bundling a separate SQLite engine or reading cookies as text.
-#[cfg(not(target_os = "linux"))]
-#[cfg_attr(windows, link(name = "winsqlite3"))]
-#[cfg_attr(not(windows), link(name = "sqlite3"))]
+#[link(name = "winsqlite3")]
 unsafe extern "C" {
     fn sqlite3_open_v2(filename: *const c_char, db: *mut *mut c_void,
         flags: c_int, vfs: *const c_char) -> c_int;
@@ -75,7 +69,6 @@ struct SqliteApi {
     column_int64: ColumnInt64,
 }
 
-#[cfg(not(target_os = "linux"))]
 fn sqlite_api() -> Result<&'static SqliteApi, String> {
     static API: SqliteApi = SqliteApi {
         open: sqlite3_open_v2,
@@ -88,56 +81,6 @@ fn sqlite_api() -> Result<&'static SqliteApi, String> {
         column_int64: sqlite3_column_int64,
     };
     Ok(&API)
-}
-
-#[cfg(target_os = "linux")]
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    fn dlclose(handle: *mut c_void) -> c_int;
-}
-
-#[cfg(target_os = "linux")]
-fn sqlite_api() -> Result<&'static SqliteApi, String> {
-    static API: OnceLock<Result<SqliteApi, &'static str>> = OnceLock::new();
-    API.get_or_init(|| {
-        // RTLD_NOW = 2 on Linux. Load the versioned SONAME available in
-        // regular runtime packages, not the unversioned -dev symlink.
-        let handle = unsafe { dlopen(c"libsqlite3.so.0".as_ptr(), 2) };
-        if handle.is_null() {
-            return Err("Twitch login requires libsqlite3.so.0 (install libsqlite3-0)");
-        }
-        macro_rules! load {
-            ($name:literal, $ty:ty) => {{
-                let address = unsafe { dlsym(handle, concat!($name, "\0").as_ptr().cast()) };
-                if address.is_null() {
-                    return Err("Installed SQLite is missing required symbols");
-                }
-                // Linux/POSIX dlsym yields a C function address. Only call it
-                // with the exact ABI and signature declared for that symbol.
-                unsafe { std::mem::transmute::<*mut c_void, $ty>(address) }
-            }};
-        }
-        let loaded = (|| -> Result<SqliteApi, &'static str> {
-            Ok(SqliteApi {
-                open: load!("sqlite3_open_v2", Open),
-                close: load!("sqlite3_close", Close),
-                prepare: load!("sqlite3_prepare_v2", Prepare),
-                step: load!("sqlite3_step", Step),
-                finalize: load!("sqlite3_finalize", Finalize),
-                column_text: load!("sqlite3_column_text", ColumnText),
-                column_bytes: load!("sqlite3_column_bytes", ColumnBytes),
-                column_int64: load!("sqlite3_column_int64", ColumnInt64),
-            })
-        })();
-        if loaded.is_err() {
-            unsafe { dlclose(handle); }
-        }
-        // On success the library stays resident, keeping all function
-        // pointers valid through Database/Statement Drop and across threads.
-        loaded
-    }).as_ref().map_err(|message| (*message).to_owned())
 }
 
 struct Database {

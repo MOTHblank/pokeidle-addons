@@ -449,11 +449,6 @@ pub fn repair_windows_install_metadata() -> Result<bool, String> {
     Ok(true)
 }
 
-#[cfg(not(windows))]
-pub fn repair_windows_install_metadata() -> Result<bool, String> {
-    Ok(false)
-}
-
 #[cfg(windows)]
 pub fn download_update(status: &SharedUpdateStatus) -> Result<bool, String> {
     let (release, kind) = {
@@ -518,11 +513,6 @@ pub fn download_update(status: &SharedUpdateStatus) -> Result<bool, String> {
         return Err(format!("could not start update download: {error}"));
     }
     Ok(true)
-}
-
-#[cfg(not(windows))]
-pub fn download_update(_status: &SharedUpdateStatus) -> Result<bool, String> {
-    Err("In-app installation is currently available on Windows only.".into())
 }
 
 #[cfg(windows)]
@@ -826,11 +816,6 @@ pub fn request_restart_and_install(status: &SharedUpdateStatus) -> Result<String
         }
     }
     Ok(version)
-}
-
-#[cfg(not(windows))]
-pub fn request_restart_and_install(_status: &SharedUpdateStatus) -> Result<String, String> {
-    Err("In-app installation is currently available on Windows only.".into())
 }
 
 /// Returns true when this process was launched as the short-lived Windows

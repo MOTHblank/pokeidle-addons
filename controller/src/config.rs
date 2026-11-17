@@ -520,23 +520,9 @@ impl Config {
 }
 
 pub(crate) fn data_root() -> Result<PathBuf, String> {
-    #[cfg(windows)]
-    {
-        return env::var_os("LOCALAPPDATA")
-            .map(|root| PathBuf::from(root).join("Moth").join("PokeIdle"))
-            .ok_or_else(|| "could not determine the Windows local application data directory".to_string());
-    }
-    #[cfg(not(windows))]
-    {
-        // Respect XDG_DATA_HOME, otherwise use ~/.local/share. Profiles,
-        // extension state and logs share the same durable app directory.
-        let root = env::var_os("XDG_DATA_HOME")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-            .ok_or_else(|| "could not determine XDG_DATA_HOME or HOME".to_string())?;
-        Ok(root.join("Moth").join("PokeIdle"))
-    }
+    env::var_os("LOCALAPPDATA")
+        .map(|root| PathBuf::from(root).join("Moth").join("PokeIdle"))
+        .ok_or_else(|| "could not determine the Windows local application data directory".to_string())
 }
 
 fn find_firefox() -> Option<PathBuf> {
@@ -544,18 +530,6 @@ fn find_firefox() -> Option<PathBuf> {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);
-        }
-        // Accept MOTH_FIREFOX=firefox as well as an absolute executable path
-        // on Linux. Never attempt to pass a shell command to Command::new.
-        #[cfg(not(windows))]
-        if path.components().count() == 1 {
-            if let Some(executable) = path.to_str() {
-                if let Some(found) = firefox_from_path(&[executable])
-                    .into_iter().find(|candidate| candidate.is_file())
-                {
-                    return Some(found);
-                }
-            }
         }
     }
 
@@ -617,29 +591,6 @@ fn firefox_standard_candidates() -> Vec<PathBuf> {
     }
 
     paths
-}
-
-#[cfg(not(windows))]
-fn firefox_developer_candidates() -> Vec<PathBuf> {
-    firefox_from_path(&["firefox-developer-edition", "firefox-developer", "firefox-dev"])
-}
-
-#[cfg(not(windows))]
-fn firefox_standard_candidates() -> Vec<PathBuf> {
-    firefox_from_path(&["firefox", "firefox-bin"])
-}
-
-#[cfg(not(windows))]
-fn firefox_from_path(executables: &[&str]) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path_var) = env::var_os("PATH") {
-        for directory in env::split_paths(&path_var) {
-            for executable in executables {
-                candidates.push(directory.join(executable));
-            }
-        }
-    }
-    candidates
 }
 
 

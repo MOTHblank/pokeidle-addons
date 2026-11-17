@@ -1473,20 +1473,14 @@ impl ControllerApp {
     fn handle_window_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|input| input.viewport().close_requested())
             || self.workspace.exit_approved { return; }
-        #[cfg(windows)]
         let explicit_tray_exit = self.tray_exit_requested.swap(false, Ordering::AcqRel);
-        #[cfg(not(windows))]
-        let explicit_tray_exit = false;
 
-        #[cfg(windows)]
         if !explicit_tray_exit && self.preferences.close_to_tray && self.tray.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.tray_hidden.store(true, Ordering::Relaxed);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             return;
         }
-        #[cfg(not(windows))]
-        let _ = explicit_tray_exit;
 
         if self.preferences.confirm_exit_with_accounts && self.accounts_have_live_work() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1599,10 +1593,7 @@ impl eframe::App for ControllerApp {
             && self.workspace.panel_tab == PanelTab::Diagnostics
             && self.diagnostics.as_ref().is_none_or(|sampler| !sampler.paused)
             && {
-                #[cfg(windows)]
                 let hidden = self.tray_hidden.load(Ordering::Relaxed);
-                #[cfg(not(windows))]
-                let hidden = false;
                 should_sample(true, hidden, ui.ctx().input(|input| input.viewport().focused))
             }).then(Instant::now);
         // Drain replies from requests made on the previous UI frame before
@@ -1638,10 +1629,7 @@ impl eframe::App for ControllerApp {
         }
         // Ignore background-refresh settings: an unfocused or tray-hidden
         // window must never keep live sampling.
-        #[cfg(windows)]
         let tray_hidden = self.tray_hidden.load(Ordering::Relaxed);
-        #[cfg(not(windows))]
-        let tray_hidden = false;
         let focused = ui.ctx().input(|input| input.viewport().focused);
         let diagnostics_active = self.diagnostics_enabled && should_sample(
             self.workspace.panel_tab == PanelTab::Diagnostics, tray_hidden, focused

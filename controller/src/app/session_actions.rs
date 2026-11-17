@@ -478,8 +478,7 @@ impl ControllerApp {
                 return;
             }
         }
-        let opener = if cfg!(windows) { "notepad.exe" } else { "xdg-open" };
-        match std::process::Command::new(opener).arg(&path).spawn() {
+        match std::process::Command::new("notepad.exe").arg(&path).spawn() {
             Ok(_) => self.set_status(format!("Opened controller log · {}", path.display()), false),
             Err(error) => self.set_status(format!("Could not open log: {error}"), true),
         }

@@ -113,8 +113,3 @@ pub fn set_start_with_windows(enabled: bool) -> Result<(), String> {
         Ok(())
     }
 }
-
-#[cfg(not(windows))]
-pub fn set_start_with_windows(_enabled: bool) -> Result<(), String> {
-    Err("Windows startup registration is not available on this platform".into())
-}

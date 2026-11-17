@@ -152,12 +152,6 @@ fn logical_processor_count() -> u32 {
     }
 }
 
-#[cfg(not(windows))]
-fn logical_processor_count() -> u32 {
-    std::thread::available_parallelism()
-        .map(|value| value.get() as u32).unwrap_or(1).max(1)
-}
-
 fn system_cpu_percent(one_core_percent: Option<f64>) -> Option<f64> {
     one_core_percent.map(|percent| percent / f64::from(logical_processor_count().max(1)))
 }
@@ -620,9 +614,6 @@ fn read_process_counters(include_threads: bool) -> Option<ProcessCounters> {
         threads: thread_count,
     })
 }
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn read_process_counters(_include_threads: bool) -> Option<ProcessCounters> { None }
 
 #[cfg(test)]
 mod tests {

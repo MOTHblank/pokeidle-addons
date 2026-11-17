@@ -203,20 +203,8 @@ fn show_windows_notification(message: &str) -> Result<(), String> {
 fn show_notification(message: &'static str) {
     // No worker exists unless an alert is actually emitted.
     let _ = std::thread::Builder::new().name("moth-desktop-alert".into()).spawn(move || {
-        #[cfg(windows)]
         if let Err(error) = show_windows_notification(message) {
             crate::logging::warn(&format!("Desktop notification unavailable: {error}"));
-        }
-        #[cfg(not(windows))]
-        {
-            let output = std::process::Command::new("notify-send")
-                .arg("Moth Controller").arg(message).output();
-            match output {
-                Ok(result) if result.status.success() => {}
-                Ok(result) => crate::logging::warn(&format!(
-                    "Desktop notification unavailable (exit status {})", result.status)),
-                Err(error) => crate::logging::warn(&format!("Desktop notification unavailable: {error}")),
-            }
         }
     });
 }

@@ -7,10 +7,7 @@ impl ControllerApp {
     }
 
     pub(super) fn hidden_in_tray(&self) -> bool {
-        #[cfg(windows)]
-        { self.tray_hidden.load(Ordering::Relaxed) }
-        #[cfg(not(windows))]
-        { false }
+        self.tray_hidden.load(Ordering::Relaxed)
     }
 
     pub(super) fn controller_in_background(&self, ctx: &egui::Context) -> bool {
@@ -74,15 +71,6 @@ impl ControllerApp {
         if self.accounts_have_live_work() {
             return Err("Stop all accounts before restoring settings".into());
         }
-        // Exclude non-portable Windows startup/tray state on Linux.
-        #[cfg(not(windows))]
-        let backup = {
-            let mut backup = backup;
-            backup.app.start_with_windows = false;
-            backup.app.start_minimized = false;
-            backup.app.close_to_tray = false;
-            backup
-        };
         let previous = SettingsBackup::from_active(
             self.preferences, self.ui_options, &self.accounts).with_saved_kick()?;
         if backup.app.start_with_windows != previous.app.start_with_windows {

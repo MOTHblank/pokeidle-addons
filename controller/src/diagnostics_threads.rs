@@ -91,19 +91,6 @@ fn current_os_thread_id() -> Option<u64> {
     Some(u64::from(unsafe { GetCurrentThreadId() }))
 }
 
-#[cfg(target_os = "linux")]
-fn current_os_thread_id() -> Option<u64> {
-    std::fs::read_link("/proc/thread-self")
-        .ok()?
-        .file_name()?
-        .to_str()?
-        .parse::<u64>()
-        .ok()
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
-fn current_os_thread_id() -> Option<u64> { None }
-
 /// Limit untrusted OS thread descriptions before placing them in the UI.
 fn display_name(name: &str, id: u64) -> String {
     let name = name.trim();
@@ -243,9 +230,6 @@ pub(crate) fn inspect() -> Option<ThreadSnapshot> {
     Some(ThreadSnapshot { count, threads })
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
-pub(crate) fn inspect() -> Option<ThreadSnapshot> { None }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,7 +241,6 @@ mod tests {
         assert_eq!(display_name(&"a".repeat(80), 1).chars().count(), 48);
     }
 
-    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn current_process_threads_are_sampleable() {
         let snapshot = inspect().expect("running process has thread metadata");

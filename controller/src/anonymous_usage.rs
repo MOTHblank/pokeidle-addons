@@ -63,7 +63,7 @@ fn post_once(endpoint: &str, state: &State) -> Result<(), String> {
     let response = client.post(endpoint).json(&json!({
         "installation_id": state.id,
         "version": env!("CARGO_PKG_VERSION"),
-        "platform": if cfg!(windows) { "windows" } else if cfg!(target_os = "linux") { "linux" } else { "other" }
+        "platform": "windows"
     })).send().map_err(|e| e.to_string())?;
     response.error_for_status().map_err(|e| e.to_string())?;
     Ok(())

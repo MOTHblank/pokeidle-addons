@@ -291,20 +291,13 @@ fn updates(app: &mut ControllerApp, ui: &mut egui::Ui) {
         description(ui,
             "Automatic checks do not download or install anything unless you choose to.");
     }
-
-    #[cfg(not(windows))]
-    if newer {
-        description(ui,
-            "In-app installation is currently available on Windows; use Release notes to download the Linux package.");
-    }
 }
 
 fn open_data_folder() -> Result<(), String> {
     let path = crate::config::data_root()?;
     std::fs::create_dir_all(&path)
         .map_err(|error| format!("could not create data folder: {error}"))?;
-    let opener = if cfg!(windows) { "explorer.exe" } else { "xdg-open" };
-    std::process::Command::new(opener).arg(&path).spawn()
+    std::process::Command::new("explorer.exe").arg(&path).spawn()
         .map_err(|error| format!("could not open data folder: {error}"))?;
     Ok(())
 }
