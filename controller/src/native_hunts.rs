@@ -119,7 +119,10 @@ pub struct PokemonInfo {
     pub looktype: Option<u64>,
     pub shiny_looktype: Option<u64>,
     pub shiny: bool,
+    pub iv_total: Option<u64>,
     pub ivs: [Option<u64>; 6],
+    /// Stat refinement bonuses `[hp, atk, def, spAtk, spDef]` from `refino`.
+    pub refino: [u32; 5],
     pub types: Vec<String>,
     /// Server-computed battle stats take precedence over reconstructed IV stats.
     pub battle_stats: Option<[f64; 6]>,
@@ -731,7 +734,9 @@ impl HuntIntel {
             existing.held_item_id = raw.as_u64();
         }
         if let Some(n) = Self::num(value, "poder") { existing.power = Some(n); }
-        if let Some(raw) = value.get("quality") { existing.quality = raw.as_f64(); }
+        if let Some(raw) = value.get("quality").or_else(|| value.get("qualidade")) {
+            existing.quality = raw.as_f64();
+        }
         if let Some(raw) = value.get("nota") { existing.grade = raw.as_f64(); }
         if let Some(n) = Self::num(value, "potencia") { existing.potency = Some(n); }
         if let Some(raw) = value.get("looktype") { existing.looktype = raw.as_u64(); }
@@ -740,11 +745,31 @@ impl HuntIntel {
         if let Some(types) = value.get("tipos").and_then(Value::as_array) {
             existing.types = types.iter().filter_map(Value::as_str).map(str::to_owned).collect();
         }
+        if let Some(raw) = value.get("iv").or_else(|| value.get("ivTotal")) {
+            existing.iv_total = raw.as_u64();
+        }
         if let Some(ivs) = value.get("ivs") {
             for (i, field) in ["hp", "atk", "def", "spAtk", "spDef", "speed"].iter().enumerate() {
                 if let Some(raw) = ivs.get(field) {
                     existing.ivs[i] = raw.as_u64();
                 }
+            }
+        }
+        if let Some(raw) = value.get("refino") {
+            let parsed_str = raw.as_str().and_then(|s| serde_json::from_str::<Value>(s).ok());
+            let source = parsed_str.as_ref().unwrap_or(raw);
+            if source.is_null() {
+                existing.refino = [0; 5];
+            } else if let Some(obj) = source.as_object() {
+                let mut next = [0u32; 5];
+                for (i, field) in ["hp", "atk", "def", "spAtk", "spDef"].iter().enumerate() {
+                    next[i] = obj.get(*field)
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite() && *v > 0.0)
+                        .map(|v| (v.floor() as u64).min(9999) as u32)
+                        .unwrap_or(0);
+                }
+                existing.refino = next;
             }
         }
         if let Some(raw) = value.get("stats").and_then(Value::as_object) {
@@ -2165,6 +2190,28 @@ mod tests {
             "explicit slot null must remove the Pokémon from the team");
         assert!(!m.view.active_pokemon.as_ref().unwrap().starter);
         assert_eq!(m.view.bonuses.trainer_event_pct,30.0);
+    }
+    #[test]
+    fn pokemon_refino_and_iv_total_parse_object_string_and_null() {
+        let mut m = HuntIntel::new();
+        let at = Instant::now();
+        m.ingest(&json!({"t":"welcome","estado":{"activeId":7,"pokemons":[{
+            "id":7,"nome":"Tyranitar","speciesId":248,"ivTotal":157,
+            "refino":{"hp":10,"atk":20,"def":5,"spAtk":0,"spDef":5}
+        }]}}).to_string(), at);
+        let mon = m.view.active_pokemon.as_ref().unwrap();
+        assert_eq!(mon.iv_total, Some(157));
+        assert_eq!(mon.refino, [10, 20, 5, 0, 5]);
+
+        m.ingest(&json!({"t":"estado","estado":{"pkMud":[{
+            "id":7,"refino":"{\"hp\":1,\"atk\":2,\"spDef\":3}"
+        }]}}).to_string(), at + Duration::from_secs(1));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().refino, [1, 2, 0, 0, 3]);
+
+        m.ingest(&json!({"t":"estado","estado":{"pkMud":[{
+            "id":7,"refino":null
+        }]}}).to_string(), at + Duration::from_secs(2));
+        assert_eq!(m.view.active_pokemon.as_ref().unwrap().refino, [0, 0, 0, 0, 0]);
     }
     #[test]
     fn switching_requires_catalog_membership_and_resets_observation() {

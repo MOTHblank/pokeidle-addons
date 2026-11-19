@@ -259,7 +259,10 @@ pub(super) fn draw_overview_card(
     let running = app.runtimes[index].game.is_running();
     let native_view = sample.view.as_ref();
     let boss_view = sample.boss.as_ref();
-    if boss_view.and_then(overview_boss_key).is_some() && app.hunt_reference.is_none() {
+    let needs_reference = boss_view.and_then(overview_boss_key).is_some()
+        || native_view.and_then(|v| v.active_pokemon.as_ref())
+            .is_some_and(|p| p.grade.is_none());
+    if needs_reference && app.hunt_reference.is_none() {
         super::boss_panel::ensure_boss_combat_reference(app);
     }
     let account_name = native_view
@@ -941,6 +944,38 @@ fn draw_overview_team_menu(
     );
 }
 
+fn overview_pokemon_grade_color(score: f64) -> Color32 {
+    if score <= 1.0 { Color32::from_rgb(176, 181, 188) }
+    else if score <= 2.0 { Color32::from_rgb(201, 68, 68) }
+    else if score <= 3.0 { Color32::from_rgb(240, 136, 48) }
+    else if score <= 4.0 { Color32::from_rgb(58, 154, 92) }
+    else if score <= 5.0 { Color32::from_rgb(142, 228, 168) }
+    else if score <= 6.0 { Color32::from_rgb(66, 255, 154) }
+    else if score <= 7.0 { Color32::from_rgb(200, 180, 255) }
+    else if score <= 8.0 { Color32::from_rgb(216, 150, 255) }
+    else if score <= 9.0 { Color32::from_rgb(255, 184, 220) }
+    else { Color32::from_rgb(255, 126, 200) }
+}
+
+fn overview_pokemon_grade_display(
+    grade: Option<native_atlas::PokemonGrade>,
+) -> (String, Color32, bool) {
+    let label = tr("Grade");
+    match grade {
+        Some(native_atlas::PokemonGrade::Score(score)) => (
+            format!("{label} {score:.3}"),
+            overview_pokemon_grade_color(score),
+            true,
+        ),
+        Some(native_atlas::PokemonGrade::Glitch) => (
+            format!("{label} GLITCH"),
+            Color32::from_rgb(255, 126, 200),
+            true,
+        ),
+        None => (format!("{label} —"), DIM, false),
+    }
+}
+
 /// Matchup is always visible, even when the card's lower metrics show Session.
 fn draw_overview_matchup(
     app: &mut ControllerApp,
@@ -974,6 +1009,10 @@ fn draw_overview_matchup(
         .unwrap_or_else(|| if fresh && !health.pokemon_level.is_empty() {
             health.pokemon_level.clone()
         } else { "—".into() });
+    let pokemon_grade = pokemon.and_then(|p|
+        native_atlas::pokemon_grade(p, app.hunt_reference.as_deref()));
+    let (grade_text, grade_color, grade_strong) =
+        overview_pokemon_grade_display(pokemon_grade);
     let combat = overview_combat_state(view, fresh);
     ui.columns(2, |cols| {
         draw_overview_team_menu(app, &mut cols[0], index, fresh, view);
@@ -988,6 +1027,11 @@ fn draw_overview_matchup(
                     .strong().color(TEXT)).truncate()).on_hover_text(pokemon_name);
                 ui.label(RichText::new(format!("Lv. {pokemon_level}"))
                     .size(9.0).color(DIM));
+                let mut grade_rich = RichText::new(grade_text)
+                    .size(if grade_strong { 9.5 } else { 9.0 })
+                    .color(grade_color);
+                if grade_strong { grade_rich = grade_rich.strong(); }
+                ui.label(grade_rich);
             });
         });
         // Boss arena state takes precedence over the saved/current hunt.
@@ -1437,6 +1481,28 @@ mod history_ui_tests {
     fn utc_epoch_date_and_leap_day_are_stable() {
         assert_eq!(history_day_label(0),"1970-01-01");
         assert_eq!(history_day_label(19782),"2024-02-29");
+    }
+
+    #[test]
+    fn overview_pokemon_grade_display_formats_score_glitch_and_unknown() {
+        use super::{overview_pokemon_grade_display, Color32, DIM};
+        use crate::native_atlas::PokemonGrade;
+
+        let (score_text, score_color, score_strong) =
+            overview_pokemon_grade_display(Some(PokemonGrade::Score(8.42)));
+        assert!(score_text.ends_with(" 8.420"));
+        assert_eq!(score_color, Color32::from_rgb(255, 184, 220));
+        assert!(score_strong);
+
+        let (glitch_text, _, glitch_strong) =
+            overview_pokemon_grade_display(Some(PokemonGrade::Glitch));
+        assert!(glitch_text.ends_with(" GLITCH"));
+        assert!(glitch_strong);
+
+        let (none_text, none_color, none_strong) = overview_pokemon_grade_display(None);
+        assert!(none_text.ends_with(" —"));
+        assert_eq!(none_color, DIM);
+        assert!(!none_strong);
     }
 }
 

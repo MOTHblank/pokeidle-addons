@@ -40,13 +40,12 @@ pub struct Reference {
     pub catalog_sell_values: BTreeMap<u64,f64>,
     /// Untouched catalog hunt level, independent of the wild hunt level.
     pub catalog_hunt_levels: BTreeMap<u64,u32>,
+    /// Upstream evolution/mega ancestor base stats and step counts for `nota`.
+    pub nota_ancestors: BTreeMap<u64,Vec<([f64;6],u32)>>,
 }
-/// Lendários, míticos e Megas seguem contratos próprios: não devem
-/// receber chances de captura normais, mesmo que apareçam em um catálogo
-/// antigo de hunts ou em uma previsão de spawn.
-pub fn special_capture_species(id:u64)->bool{
-    static IDS:OnceLock<(BTreeSet<u64>,BTreeMap<u64,u64>,BTreeSet<u64>)>=OnceLock::new();
-    let (special,forms,megas)=IDS.get_or_init(||{
+fn special_species_tables()->&'static (BTreeSet<u64>,BTreeMap<u64,u64>,BTreeMap<u64,u64>){
+    static IDS:OnceLock<(BTreeSet<u64>,BTreeMap<u64,u64>,BTreeMap<u64,u64>)>=OnceLock::new();
+    IDS.get_or_init(||{
         let special=include_str!("../assets/visual/upstream-special-dex.tsv")
             .lines().filter_map(|line|line.parse::<u64>().ok())
             .collect::<BTreeSet<_>>();
@@ -56,12 +55,37 @@ pub fn special_capture_species(id:u64)->bool{
                 Some((id.parse::<u64>().ok()?,dex.parse::<u64>().ok()?))
             }).collect::<BTreeMap<_,_>>();
         let megas=include_str!("../assets/visual/upstream-megas.tsv")
-            .lines().filter_map(|line|line.split('\t').next()?.parse::<u64>().ok())
-            .collect::<BTreeSet<_>>();
+            .lines().filter_map(|line|{
+                let mut cols=line.split('\t');
+                let id=cols.next()?.parse::<u64>().ok()?;
+                let base=cols.next()?.parse::<u64>().ok()?;
+                Some((id,base))
+            }).collect::<BTreeMap<_,_>>();
         (special,forms,megas)
-    });
-    if megas.contains(&id){return true}
+    })
+}
+/// Lendários, míticos e Megas seguem contratos próprios: não devem
+/// receber chances de captura normais, mesmo que apareçam em um catálogo
+/// antigo de hunts ou em uma previsão de spawn.
+pub fn special_capture_species(id:u64)->bool{
+    let (special,forms,megas)=special_species_tables();
+    if megas.contains_key(&id){return true}
     let dex=if id>=13000{id%1000}else{forms.get(&id).copied().unwrap_or(id)};
+    special.contains(&dex)
+}
+/// Upstream `ehLendarioOuMitico` (shared/mistico.mjs): Megas of ordinary
+/// species still have normal `nota`, while Legendaries/Mythicals (including
+/// their forms and Megas) display `GLITCH`.
+pub fn is_legendary_or_mythical(id:u64)->bool{
+    if id==0{return false}
+    let (special,forms,megas)=special_species_tables();
+    let dex=if id>=13000{
+        id%1000
+    }else if let Some(&base)=megas.get(&id){
+        base
+    }else{
+        forms.get(&id).copied().unwrap_or(id)
+    };
     special.contains(&dex)
 }
 /// Ordinary hunts use stages exclusively. An incomplete stage catalog
@@ -228,6 +252,7 @@ pub fn load() -> Result<Reference, String> {
     }
     finalize_capture_stages(&mut reference);
     merge_upstream_megas(&mut reference);
+    finalize_nota_lineages(&mut reference);
     apply_upstream_movesets(&mut reference);
     Ok(reference)
 }
@@ -396,6 +421,194 @@ fn merge_upstream_megas(reference:&mut Reference){
             name:columns[2].to_owned(),types,base:stats,moves:base.moves,
         });
     }
+}
+/// Upstream `anotarLinhagemDaNota` (shared/linhagem-nota.mjs): collect ancestor
+/// base stats and evolution step counts (including branched, cross-gen and Mega
+/// links) so evolved Pokémon never lose `nota` relative to their pre-evolutions.
+pub fn finalize_nota_lineages(reference:&mut Reference){
+    let mut parents:BTreeMap<u64,BTreeSet<u64>>=BTreeMap::new();
+    let mut link=|from:u64,to:u64|{
+        if from==0||to==0||from==to{return}
+        parents.entry(to).or_default().insert(from);
+    };
+    for (&from,&to) in &reference.capture_evolutions { link(from,to); }
+    for line in include_str!("../assets/visual/upstream-evolution-branches.tsv").lines(){
+        if line.starts_with('#'){continue}
+        let mut values=line.split('\t');
+        if let (Some(from),Some(to))=(values.next(),values.next()){
+            if let (Ok(from),Ok(to))=(from.parse::<u64>(),to.parse::<u64>()){
+                link(from,to);
+            }
+        }
+    }
+    for line in include_str!("../assets/visual/upstream-evolution-cross.tsv").lines(){
+        if line.starts_with('#'){continue}
+        let mut values=line.split('\t');
+        if let (Some(from),Some(to))=(values.next(),values.next()){
+            if let (Ok(from),Ok(to))=(from.parse::<u64>(),to.parse::<u64>()){
+                if !reference.capture_evolutions.contains_key(&from){
+                    link(from,to);
+                }
+            }
+        }
+    }
+    for (&mega_id,&base_id) in &special_species_tables().2 {
+        link(base_id,mega_id);
+    }
+
+    reference.nota_ancestors.clear();
+    let species_ids:Vec<u64>=reference.species.keys().copied().collect();
+    for id in species_ids {
+        let mut visited=BTreeSet::from([id]);
+        let mut ancestors=Vec::new();
+        let mut layer:Vec<u64>=parents.get(&id)
+            .map(|set|set.iter().copied().collect()).unwrap_or_default();
+        for steps in 1u32..=12 {
+            if layer.is_empty(){break}
+            let mut next=Vec::new();
+            for anc_id in layer {
+                if !visited.insert(anc_id){continue}
+                if let Some(meta)=reference.species.get(&anc_id) {
+                    if meta.base.len()==6 && meta.base.iter().all(|v|v.is_finite()&&*v>0.0) {
+                        ancestors.push(([
+                            meta.base[0],meta.base[1],meta.base[2],
+                            meta.base[3],meta.base[4],meta.base[5],
+                        ], steps));
+                    }
+                }
+                if let Some(anc_parents)=parents.get(&anc_id) {
+                    next.extend(anc_parents.iter().copied());
+                }
+            }
+            layer=next;
+        }
+        if !ancestors.is_empty() {
+            reference.nota_ancestors.insert(id,ancestors);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PokemonGrade {
+    Score(f64),
+    Glitch,
+}
+
+fn js_round_positive(v: f64) -> f64 { (v + 0.5).floor() }
+
+fn ivs_from_sum(sum: u64) -> [u64; 6] {
+    let s = sum.clamp(6, 192);
+    let med = s / 6;
+    let rest = (s - med * 6) as usize;
+    let mut ivs = [med; 6];
+    for slot in ivs.iter_mut().take(rest) { *slot += 1; }
+    ivs
+}
+
+fn birth_stat_sum(ivs: [u64; 6], quality: f64, potency: u64, shiny: bool, bases: [f64; 6]) -> f64 {
+    const EXPO: [f64; 6] = [0.95, 0.8, 0.8, 0.8, 0.8, 0.95];
+    const BONUS_POTENCY: [f64; 5] = [0.0, 0.05, 0.1, 0.25, 1.0];
+    let q = quality.clamp(0.8, 1.8);
+    let p = potency.clamp(1, 5) as usize;
+    let mult = (1.0 + BONUS_POTENCY[p - 1]) * if shiny { 3.0 } else { 1.0 };
+    let mut sum = 0.0;
+    for i in 0..6 {
+        let iv = if ivs[i] > 0 { ivs[i] as f64 } else { 1.0 };
+        sum += js_round_positive((bases[i] + 2.0 * iv) * q.powf(EXPO[i]) * mult);
+    }
+    sum
+}
+
+fn strength_bounds(bases: [f64; 6]) -> (f64, f64) {
+    let min = birth_stat_sum([1; 6], 0.8, 1, false, bases).max(1.0);
+    let max = birth_stat_sum([32; 6], 1.8, 5, true, bases).max(min + 1.0);
+    (min, max)
+}
+
+fn grade_from_strength(sum: f64, (min, max): (f64, f64)) -> f64 {
+    if max <= min { return 0.0; }
+    let s = sum.clamp(min, max);
+    let lo = min.ln();
+    let hi = max.ln();
+    let raw = (10.0 * (s.max(1.0).ln() - lo) / (hi - lo)).clamp(0.0, 10.0);
+    js_round_positive(raw * 1000.0) / 1000.0
+}
+
+fn ref_strength_score(ivs: [u64; 6], quality: f64, potency: u64, shiny: bool, bases: [f64; 6]) -> f64 {
+    const REF_BASE: [f64; 6] = [80.0; 6];
+    let bounds = strength_bounds(REF_BASE);
+    (grade_from_strength(birth_stat_sum(ivs, quality, potency, shiny, bases), bounds) / 10.0)
+        .clamp(0.0, 1.0)
+}
+
+fn species_score_bounds(bases: [f64; 6]) -> (f64, f64) {
+    let min = ref_strength_score([1; 6], 0.8, 1, false, bases);
+    let max = ref_strength_score([32; 6], 1.8, 5, true, bases);
+    (min, max.max(min))
+}
+
+fn grade_from_score(score: f64, (min, max): (f64, f64)) -> f64 {
+    if max <= min { return 0.0; }
+    let s = score.clamp(min, max);
+    js_round_positive(10.0 * (s - min) / (max - min) * 1000.0) / 1000.0
+}
+
+/// Upstream `notaDePokemon` (shared/nota-pokemon.mjs): returns the active
+/// Pokémon's score (0.000–10.000) or `Glitch` for Legendary/Mythical species.
+/// Uses server-supplied `grade` when present; otherwise computes it from the
+/// Pokémon's IVs, quality, potency, shiny flag, stat refinement (`refino`),
+/// species base stats and evolution lineage (`nota_ancestors`).
+pub fn pokemon_grade(mon: &PokemonInfo, reference: Option<&Reference>) -> Option<PokemonGrade> {
+    if mon.species_id.is_some_and(is_legendary_or_mythical) {
+        return Some(PokemonGrade::Glitch);
+    }
+    if let Some(grade) = mon.grade.filter(|v| v.is_finite()) {
+        return Some(PokemonGrade::Score(grade.clamp(0.0, 10.0)));
+    }
+    let species_id = mon.species_id?;
+    let reference = reference?;
+    let meta = reference.species.get(&species_id)?;
+    if meta.base.len() != 6 || !meta.base.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return None;
+    }
+    let ivs = if mon.ivs.iter().all(Option::is_some) {
+        [
+            mon.ivs[0].unwrap_or(1), mon.ivs[1].unwrap_or(1), mon.ivs[2].unwrap_or(1),
+            mon.ivs[3].unwrap_or(1), mon.ivs[4].unwrap_or(1), mon.ivs[5].unwrap_or(1),
+        ]
+    } else if let Some(total) = mon.iv_total {
+        ivs_from_sum(total)
+    } else if mon.ivs.iter().any(Option::is_some) {
+        ivs_from_sum(mon.ivs.iter().flatten().sum())
+    } else {
+        return None;
+    };
+    let quality = mon.quality.filter(|q| q.is_finite() && *q > 0.0).unwrap_or(1.0);
+    let potency = mon.potency.unwrap_or(1).clamp(1, 5);
+    let base_limits = [
+        meta.base[0], meta.base[1], meta.base[2],
+        meta.base[3], meta.base[4], meta.base[5],
+    ];
+    let refined_bases = [
+        base_limits[0] + mon.refino[0] as f64,
+        base_limits[1] + mon.refino[1] as f64,
+        base_limits[2] + mon.refino[2] as f64,
+        base_limits[3] + mon.refino[3] as f64,
+        base_limits[4] + mon.refino[4] as f64,
+        base_limits[5],
+    ];
+    let score_bounds = species_score_bounds(base_limits);
+    let score = ref_strength_score(ivs, quality, potency, mon.shiny, refined_bases);
+    let mut grade = grade_from_score(score, score_bounds);
+    if let Some(ancestors) = reference.nota_ancestors.get(&species_id) {
+        for &(anc_bases, steps) in ancestors {
+            let anc_score = ref_strength_score(ivs, quality, potency, mon.shiny, anc_bases);
+            let anc_grade = grade_from_score(anc_score, species_score_bounds(anc_bases));
+            let floor = (anc_grade + steps.max(1) as f64 * 0.1).min(10.0);
+            if floor > grade { grade = floor; }
+        }
+    }
+    Some(PokemonGrade::Score(js_round_positive(grade * 1000.0) / 1000.0))
 }
 /// Spreadsheet move overrides from upstream shared/golpes-planilhas.mjs,
 /// v1.408.7. The static creature JSON has not been regenerated for every
@@ -959,6 +1172,65 @@ mod tests {
         view.bonuses.pokemon_event_pct=0.0;
         assert_eq!(bonus(&view,true),2.0);
         assert_eq!(bonus(&view,false),1.0);
+    }
+    #[test]
+    fn pokemon_grade_matches_upstream_nota_formula_and_lineage(){
+        let mut reference=Reference::default();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[
+                {"pokeId":246,"name":"Larvitar","type1":"ROCK","type2":"GROUND","evolvesToId":247,
+                 "baseHp":50,"baseAtk":64,"baseDef":50,"baseSpAtk":45,"baseSpDef":50,"baseSpeed":41},
+                {"pokeId":247,"name":"Pupitar","type1":"ROCK","type2":"GROUND","evolvesToId":248,
+                 "baseHp":70,"baseAtk":84,"baseDef":70,"baseSpAtk":65,"baseSpDef":70,"baseSpeed":51},
+                {"pokeId":248,"name":"Tyranitar","type1":"ROCK","type2":"DARK",
+                 "baseHp":100,"baseAtk":134,"baseDef":110,"baseSpAtk":95,"baseSpDef":100,"baseSpeed":61},
+                {"pokeId":25,"name":"Pikachu","type1":"ELECTRIC",
+                 "baseHp":35,"baseAtk":55,"baseDef":40,"baseSpAtk":50,"baseSpDef":50,"baseSpeed":90}
+            ]
+        }));
+        finalize_nota_lineages(&mut reference);
+
+        let tyranitar_normal=PokemonInfo{
+            species_id:Some(248),
+            ivs:[Some(28),Some(31),Some(24),Some(19),Some(25),Some(30)],
+            quality:Some(1.45),potency:Some(4),shiny:false,
+            ..Default::default()
+        };
+        assert_eq!(pokemon_grade(&tyranitar_normal,Some(&reference)),Some(PokemonGrade::Score(3.985)));
+
+        let tyranitar_shiny_refino=PokemonInfo{
+            species_id:Some(248),
+            ivs:[Some(28),Some(31),Some(24),Some(19),Some(25),Some(30)],
+            quality:Some(1.45),potency:Some(4),shiny:true,
+            refino:[10,20,5,0,5],
+            ..Default::default()
+        };
+        assert_eq!(pokemon_grade(&tyranitar_shiny_refino,Some(&reference)),Some(PokemonGrade::Score(8.026)));
+
+        let pikachu_min=PokemonInfo{
+            species_id:Some(25),ivs:[Some(1);6],quality:Some(0.8),potency:Some(1),shiny:false,
+            ..Default::default()
+        };
+        assert_eq!(pokemon_grade(&pikachu_min,Some(&reference)),Some(PokemonGrade::Score(0.0)));
+
+        let pikachu_max=PokemonInfo{
+            species_id:Some(25),ivs:[Some(32);6],quality:Some(1.8),potency:Some(5),shiny:true,
+            ..Default::default()
+        };
+        assert_eq!(pokemon_grade(&pikachu_max,Some(&reference)),Some(PokemonGrade::Score(10.0)));
+
+        let pikachu_iv_total=PokemonInfo{
+            species_id:Some(25),iv_total:Some(140),quality:Some(1.25),potency:Some(3),shiny:false,
+            ..Default::default()
+        };
+        assert_eq!(pokemon_grade(&pikachu_iv_total,Some(&reference)),Some(PokemonGrade::Score(2.362)));
+
+        let mewtwo=PokemonInfo{species_id:Some(150),ivs:[Some(31);6],..Default::default()};
+        assert_eq!(pokemon_grade(&mewtwo,Some(&reference)),Some(PokemonGrade::Glitch));
+
+        let mega_tyranitar=PokemonInfo{species_id:Some(3248),grade:Some(9.123),..Default::default()};
+        assert!(!is_legendary_or_mythical(3248));
+        assert_eq!(pokemon_grade(&mega_tyranitar,None),Some(PokemonGrade::Score(9.123)));
     }
 
 }
