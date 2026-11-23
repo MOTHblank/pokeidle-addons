@@ -240,7 +240,7 @@ pub(super) fn draw_atlas_compare(app:&mut ControllerApp,ui:&mut egui::Ui){
                         ui.add_space(7.0);
                         ui.label(RichText::new(tr("TOP MODELED UNLOCKED HUNTS"))
                             .size(10.0).strong().color(DIM));
-                        let mut estimates=view.hunts.iter().filter_map(|h|{
+                        let mut estimates=view.unlocked_hunts().filter_map(|h|{
                             app.runtimes[*index].hunt.hunt_estimate_cache.get(&h.slug)
                                 .map(|f|(h,f))
                         }).collect::<Vec<_>>();

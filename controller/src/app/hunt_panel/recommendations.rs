@@ -18,7 +18,7 @@ pub(super) fn ranked_hunts<'a>(
     let observed_kills = if live && m.last_battle_age_secs.is_none_or(|age|age<=180)
         && m.seconds >= 20.0 && m.kills >= 5
         && m.kills_h.is_finite() && m.kills_h > 0.0 { Some(m.kills_h) } else { None };
-    let mut ranked = view.hunts.iter().filter(|h| {
+    let mut ranked = view.unlocked_hunts().filter(|h| {
         (region.is_empty() || h.region == region || h.area == region) &&
         (species_type.is_empty() || h.species.iter().any(|sp|
             reference.and_then(|r|r.species.get(&sp.id)).is_some_and(|meta|
@@ -110,6 +110,7 @@ pub(in crate::app) struct RankingsCache {
     pub(super) region:String,
     pub(super) species_type:String,
     pub(super) live:bool,
+    pub(super) trainer_level:Option<u32>,
     pub(super) needs_fallback:bool,
     pub(super) fallback:Option<(Option<String>,Option<u64>,Option<u64>)>,
     pub(super) initialized:bool,
@@ -152,6 +153,7 @@ impl RankingsCache {
             self.reference.as_ref().map(Arc::as_ptr)!=reference.map(Arc::as_ptr) ||
             self.forecast_revision!=estimates.revision ||
             self.ranking!=Some(ranking) || self.live!=live ||
+            self.trainer_level!=view.trainer_level ||
             self.query!=query || self.region!=region ||
             self.species_type!=species_type ||
             self.fallback!=fallback;
@@ -179,6 +181,7 @@ impl RankingsCache {
             self.forecast_revision=estimates.revision;
             self.ranking=Some(ranking);
             self.live=live;
+            self.trainer_level=view.trainer_level;
             self.query=query.to_owned();
             self.region=region.to_owned();
             self.species_type=species_type.to_owned();
@@ -310,7 +313,7 @@ pub(super) fn draw_atlas_recommendations(
                         ui.label(RichText::new(tr("Where should I hunt?"))
                             .size(15.0).strong().color(TEXT));
                         ui.label(RichText::new(format!(
-                            "{} {}",hunts.hunts.len(),tr("unlocked hunts")
+                            "{} {}",hunts.unlocked_hunt_count(),tr("unlocked hunts")
                         )).size(11.0).color(MUTED));
                     });
                     ui.add_space(6.0);

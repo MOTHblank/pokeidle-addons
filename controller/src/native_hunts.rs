@@ -323,6 +323,15 @@ impl HuntView {
         self.outland_tiers().into_iter().find(|row|row.id==resolved)
             .map(|row|(row.required_level,row.multiplier))
     }
+    pub fn is_hunt_unlocked(&self, hunt: &HuntEntry) -> bool {
+        self.trainer_level.is_none_or(|level| level >= hunt.level)
+    }
+    pub fn unlocked_hunts(&self) -> impl Iterator<Item = &HuntEntry> {
+        self.hunts.iter().filter(|hunt| self.is_hunt_unlocked(hunt))
+    }
+    pub fn unlocked_hunt_count(&self) -> usize {
+        self.unlocked_hunts().count()
+    }
     pub fn unlocked_outland_tier(&self,tier:u8)->Option<f64>{
         let (level,mult)=self.outland_requirement(tier)?;
         (self.trainer_level? >= level).then_some(mult)
@@ -575,8 +584,13 @@ impl HuntIntel {
     /// Queue intent immediately so the UI shows Switching while awaiting
     /// the server's combat gate, without starting the send-confirmation timer.
     pub fn queue_hunt(&mut self, slug: &str) -> Result<(), String> {
-        if !self.view.catalog_ready || !self.view.hunts.iter().any(|h| h.slug == slug) {
+        let Some(hunt) = self.view.catalog_ready.then(|| {
+            self.view.hunts.iter().find(|h| h.slug == slug)
+        }).flatten() else {
             return Err("Hunt not present in authoritative account catalog".into());
+        };
+        if !self.view.is_hunt_unlocked(hunt) {
+            return Err(format!("Hunt requires trainer level {}", hunt.level));
         }
         self.view.pending_hunt_slug = Some(slug.to_owned());
         self.view.pending_center = false;

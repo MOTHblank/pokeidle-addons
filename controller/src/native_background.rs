@@ -651,8 +651,16 @@ impl NativeSession {
         }
         if let GameCommand::Hunt(slug) = &command {
             let current = self.hunt_snapshot();
-            if !current.catalog_ready || !current.hunts.iter().any(|hunt| hunt.slug == *slug) {
+            let Some(hunt) = current.catalog_ready.then(|| {
+                current.hunts.iter().find(|hunt| hunt.slug == *slug)
+            }).flatten() else {
                 return Err("Requested hunt is not in the server-provided unlocked hunt list".into());
+            };
+            if !current.is_hunt_unlocked(hunt) {
+                return Err(format!(
+                    "Requested hunt requires trainer level {}",
+                    hunt.level
+                ));
             }
         }
         if let GameCommand::TeamActive(id) = &command {

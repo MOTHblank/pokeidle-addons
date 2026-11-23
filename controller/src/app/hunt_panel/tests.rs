@@ -901,4 +901,53 @@ use super::*;
         assert!(rows[0].value.is_none());
         assert_eq!(rows[0].source,RateSource::Unavailable);
     }
+    #[test]
+    fn explorer_and_rankings_hide_hunts_and_species_above_trainer_level(){
+        let mut guide=guide_fixture();
+        let mut high_species=guide.species[&1].clone();
+        high_species.name="Highmon".into();
+        guide.species.insert(2,high_species);
+        let mut view=HuntView::default();
+        view.trainer_level=Some(50);
+        view.hunts=Arc::new(vec![
+            native_hunts::HuntEntry{
+                slug:"kanto-low".into(),name:"Low Hunt".into(),
+                area:"Kanto".into(),region:"Viridian".into(),level:50,
+                species:vec![native_hunts::HuntSpecies{id:1,weight:80.0}],
+                ..Default::default()
+            },
+            native_hunts::HuntEntry{
+                slug:"alola-high".into(),name:"High Hunt".into(),
+                area:"Alola".into(),region:"Melemele".into(),level:51,
+                species:vec![
+                    native_hunts::HuntSpecies{id:1,weight:20.0},
+                    native_hunts::HuntSpecies{id:2,weight:80.0},
+                ],
+                ..Default::default()
+            },
+        ]);
+        let cache=EstimateCache::default();
+        let filters=AtlasFilters::default();
+        let scenario=AtlasScenario::default();
+        let locations=atlas_locations(&view,Some(&guide));
+        assert!(locations.contains("Kanto"));
+        assert!(!locations.contains("Alola"));
+        let mut explorer=ExplorerCache::default();
+        let rows=explorer.update(&view,Some(&guide),&cache,&filters,&scenario);
+        assert_eq!(rows.len(),1,"locked-only species must not appear");
+        assert_eq!(rows[0].id,1);
+        assert_eq!(rows[0].destinations.len(),1);
+        assert_eq!(rows[0].destinations[0].hunt.slug,"kanto-low");
+
+        let mut rankings=RankingsCache::default();
+        let ranked=rankings.update(&view,None,&cache,HuntRanking::TrainerXp,true,"","","");
+        assert_eq!(ranked.len(),1);
+        assert_eq!(view.hunts[ranked[0].hunt_index].slug,"kanto-low");
+
+        view.trainer_level=Some(51);
+        let rows=explorer.update(&view,Some(&guide),&cache,&filters,&scenario);
+        assert_eq!(rows.len(),2,"leveling up unlocks previously hidden species");
+        let ranked=rankings.update(&view,None,&cache,HuntRanking::TrainerXp,true,"","","");
+        assert_eq!(ranked.len(),2,"rankings cache rebuilds when trainer level increases");
+    }
 

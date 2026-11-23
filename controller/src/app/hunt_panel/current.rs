@@ -19,7 +19,7 @@ pub(super) fn draw_atlas_current(
                     };
                     ui.label(RichText::new(format!(
                         "{title} · {} {} · {} {}",
-                        hunts.hunts.len(),tr("unlocked hunts"),hunts.battle_kills,tr("recorded kills")
+                        hunts.unlocked_hunt_count(),tr("unlocked hunts"),hunts.battle_kills,tr("recorded kills")
                     )).size(11.0).color(MUTED));
                     ui.add_space(8.0);
                     let two_columns=ui.available_width()>=720.0;

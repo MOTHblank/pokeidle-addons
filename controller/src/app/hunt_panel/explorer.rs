@@ -83,8 +83,8 @@ pub(super) struct AtlasSpeciesRow {
 pub(super) fn atlas_destinations<'a>(
     view:&'a HuntView,_reference:Option<&'a AtlasReference>
 )->Vec<(&'a native_hunts::HuntEntry,bool)> {
-    // The authenticated server's hunt catalog is the only destination list.
-    view.hunts.iter().map(|hunt|(hunt,true)).collect()
+    // Only hunts unlocked for the trainer's current level are shown.
+    view.unlocked_hunts().map(|hunt|(hunt,true)).collect()
 }
 
 /// Neutral multipliers omitted from the bundled upstream chart are 1×.
@@ -92,7 +92,7 @@ pub(super) fn atlas_locations(
     view:&HuntView,_reference:Option<&AtlasReference>
 )->std::collections::BTreeSet<String>{
     let mut locations=std::collections::BTreeSet::new();
-    for hunt in view.hunts.iter(){
+    for hunt in view.unlocked_hunts(){
         for name in [&hunt.area,&hunt.region]{
             if !name.trim().is_empty(){locations.insert(name.trim().to_owned());}
         }
@@ -955,7 +955,7 @@ pub(super) fn draw_atlas_explorer(
     ui.horizontal_wrapped(|ui|{
         ui.label(RichText::new(format!(
             "{} {} · {} {}",
-            rows.len(),tr("species"),view.hunts.len(),tr("available hunts")
+            rows.len(),tr("species"),view.unlocked_hunt_count(),tr("available hunts")
         )).strong().size(11.0).color(TEXT));
         if cache.is_pending(){
             ui.label(RichText::new(tr("Calculating combat models..."))
