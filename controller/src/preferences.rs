@@ -24,6 +24,7 @@ pub struct AppPreferences {
     pub anonymous_usage_stats: bool,
     pub log_max_megabytes: u16,
     pub log_retention_days: u16,
+    pub kick_lite_mode: bool,
 }
 
 impl Default for AppPreferences {
@@ -48,6 +49,7 @@ impl Default for AppPreferences {
             anonymous_usage_stats: true,
             log_max_megabytes: 8,
             log_retention_days: 7,
+            kick_lite_mode: false,
         }
     }
 }
@@ -85,6 +87,7 @@ impl AppPreferences {
                 .filter(|value| (1..=90).contains(value))
                 .and_then(|value| u16::try_from(value).ok())
                 .unwrap_or(defaults.log_retention_days),
+            kick_lite_mode: boolean("kickLiteMode", defaults.kick_lite_mode),
         }
     }
 
@@ -110,6 +113,7 @@ impl AppPreferences {
             "anonymousUsageStats": self.anonymous_usage_stats,
             "logMaxMegabytes": self.log_max_megabytes,
             "logRetentionDays": self.log_retention_days,
+            "kickLiteMode": self.kick_lite_mode,
         })
     }
 
@@ -160,6 +164,7 @@ mod tests {
         assert!(!preferences.notifications_enabled);
         assert!(!preferences.close_to_tray);
         assert!(preferences.check_updates_on_start);
+        assert!(!preferences.kick_lite_mode);
         assert_eq!(preferences.log_max_megabytes, 8);
         assert_eq!(preferences.log_retention_days, 7);
     }
@@ -171,6 +176,7 @@ mod tests {
         preferences.ui_scale_percent = 125;
         preferences.log_max_megabytes = 64;
         preferences.notifications_enabled = true;
+        preferences.kick_lite_mode = true;
         assert_eq!(AppPreferences::from_value(&preferences.to_value()), preferences);
         let invalid = json!({"uiScalePercent": 250, "logMaxMegabytes": 0,
             "startWithWindows": "yes", "logRetentionDays": -1});

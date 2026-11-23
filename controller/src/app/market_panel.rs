@@ -159,6 +159,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                                 format!("market-rule-item-picker-{index}-{}",rule.id),
                                 &mut retry_item_catalog
                             );
+                            if item_catalog.as_deref().is_some_and(|c| c.is_market_bound(rule.item_id)) {
+                                ui.label(RichText::new(tr("Note: Stone items become bound to the account on market purchase and cannot be resold."))
+                                    .size(10.0).color(WARN));
+                            }
                         }
                         if rule.kind.starts_with("pokemon_") {
                             ui.label(RichText::new(tr("Pokémon potency (0 = any, 1–5)"))
@@ -249,6 +253,10 @@ pub(super) fn draw(app: &mut ControllerApp, ui: &mut egui::Ui, index: usize) {
                         format!("market-snatch-item-picker-{index}"),
                         &mut retry_item_catalog
                     );
+                    if item_catalog.as_deref().is_some_and(|c| c.is_market_bound(t.item_id)) {
+                        ui.label(RichText::new(tr("Note: Stone items become bound to the account on market purchase and cannot be resold."))
+                            .size(10.0).color(WARN));
+                    }
                 }
                 if ui.add_enabled(cfg.snatch_targets.len()<40,
                     egui::Button::new(tr("Add to Snatch"))).clicked() {

@@ -159,7 +159,11 @@ impl ControllerApp {
                 self.queue_kick_token_load(index);
             }
             let monitor_missing=self.runtimes[index].kick.kick_monitor.is_none();
-            if self.runtimes[index].kick.kick_token_cached.is_some() && monitor_missing {
+            let revision = self.runtimes[index].kick.kick_token_revision;
+            if self.runtimes[index].kick.kick_token_cached.is_some()
+                && monitor_missing
+                && self.runtimes[index].kick.kick_autostart_failed_revision != Some(revision)
+            {
                 self.start_kick_account(index);
             }
             // Native workers publish roster revisions directly to the parked
@@ -292,9 +296,18 @@ impl ControllerApp {
         };
         let monitor = match KickSupervisor::start(token.clone(), &target.join(","),
             stored_channel_list(self,index),self.runtimes[index].kick.kick_discovered_live.clone(),
-            self.runtimes[index].kick.kick_stream_preferences.clone()) {
-            Ok(worker) => worker,
-            Err(error) => { self.set_status(error, true); return; },
+            self.runtimes[index].kick.kick_stream_preferences.clone(),
+            self.preferences.kick_lite_mode) {
+            Ok(worker) => {
+                self.runtimes[index].kick.kick_autostart_failed_revision = None;
+                worker
+            },
+            Err(error) => {
+                let rev = self.runtimes[index].kick.kick_token_revision;
+                self.runtimes[index].kick.kick_autostart_failed_revision = Some(rev);
+                self.set_status(error, true);
+                return;
+            },
         };
         self.runtimes[index].kick.kick_monitor = Some(monitor);
         // Kick can start before or after PokéIdle native login. Both paths
@@ -679,6 +692,10 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 (kick_label(br, "○ Sign in required", "○ Login necessário"), MUTED)
             };
             ui.label(RichText::new(status).size(10.0).color(color));
+            if app.preferences.kick_lite_mode {
+                ui.label(RichText::new(kick_label(br, "· Lite mode", "· Modo leve"))
+                    .size(10.0).color(ACCENT));
+            }
         });
         ui.add_space(7.0);
         ui.columns(3, |cols| {
@@ -817,7 +834,8 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
             "Maximum simultaneous streams", "Máximo de streams simultâneas"))
             .size(11.0).color(TEXT));
         let limit = &mut app.runtimes[index].kick.kick_stream_preferences.max_streams;
-        if ui.add(egui::Slider::new(limit, 0..=12).show_value(true)).changed() {
+        let slider = ui.add(egui::Slider::new(limit, 0..=12).show_value(true));
+        if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
             app.persist_kick_channels(index);
         }
     });

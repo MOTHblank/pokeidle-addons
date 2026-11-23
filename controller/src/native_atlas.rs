@@ -697,6 +697,85 @@ fn gym_damage_multiplier(view:&HuntView,mon:&PokemonInfo,player:&ReferenceSpecie
     let best=types.iter().filter_map(|kind|view.gym_podium.get(kind)).copied().min();
     match best {Some(1)=>1.25,Some(2)=>1.10,Some(3)=>1.05,_=>1.0}
 }
+/// Upstream `bpDaEspecie` (`shared/bestiario.mjs`):
+/// 25k → +5 bp, 150k → +15 bp, 500k → +50 bp (highest tier only, not cumulative).
+pub fn bestiary_species_bp(kills: u64) -> u32 {
+    if kills >= 500_000 { 50 }
+    else if kills >= 150_000 { 15 }
+    else if kills >= 25_000 { 5 }
+    else { 0 }
+}
+fn is_standard_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "NORMAL" | "FIRE" | "WATER" | "ELECTRIC" | "GRASS" | "ICE"
+            | "FIGHTING" | "POISON" | "GROUND" | "FLYING" | "PSYCHIC" | "BUG"
+            | "ROCK" | "GHOST" | "DRAGON" | "DARK" | "STEEL" | "FAIRY"
+    )
+}
+/// Upstream `especiesDoBestiario` + `bonusPorTipo` (`shared/bestiario.mjs`):
+/// sums per-species Bestiary basis points into each of the species' types
+/// across non-Outland, non-Mega, non-Legendary/Mythical playable hunt species.
+pub fn bestiary_bp_by_type(view: &HuntView, reference: &Reference) -> BTreeMap<String, u32> {
+    let mut out = BTreeMap::new();
+    if view.pokedex_kills.is_empty() {
+        return out;
+    }
+    let (_, _, megas) = special_species_tables();
+    let mut candidate_ids = BTreeSet::new();
+    for hunt in view.hunts.iter() {
+        if hunt.area.eq_ignore_ascii_case("outland") { continue; }
+        for spawn in &hunt.species {
+            let id = spawn.id;
+            if id == 0
+                || (2001..=2047).contains(&id)
+                || (10501..=10548).contains(&id)
+                || megas.contains_key(&id)
+                || is_legendary_or_mythical(id)
+            {
+                continue;
+            }
+            candidate_ids.insert(id);
+        }
+    }
+    let mut seen_keys = BTreeSet::new();
+    for id in candidate_ids {
+        // Non-Outland `chavePokedex(id)` == `dexDe(id)`: `id >= 13000 => id % 1000`, else `id`.
+        let key = if id >= 13_000 { id % 1_000 } else { id };
+        if !seen_keys.insert(key) { continue; }
+        let Some(meta) = reference.species.get(&id) else { continue };
+        let kills = view.pokedex_kills.get(&key).copied().unwrap_or(0)
+            .saturating_add(if id != key { view.pokedex_kills.get(&id).copied().unwrap_or(0) } else { 0 });
+        let bp = bestiary_species_bp(kills);
+        if bp == 0 { continue; }
+        let mut applied = Vec::with_capacity(2);
+        for raw_type in &meta.types {
+            let kind = raw_type.to_ascii_uppercase();
+            if is_standard_type(&kind) && !applied.contains(&kind) {
+                applied.push(kind.clone());
+                *out.entry(kind).or_insert(0) += bp;
+            }
+        }
+    }
+    out
+}
+/// Upstream `multBestiario(bpPorTipo, tipos)` (`shared/bestiario.mjs`):
+/// `1 + sum(bp[t]) / 10_000` across distinct types of the target wild Pokémon.
+pub fn bestiary_damage_multiplier(bp_by_type: &BTreeMap<String, u32>, target_types: &[String]) -> f64 {
+    if bp_by_type.is_empty() || target_types.is_empty() {
+        return 1.0;
+    }
+    let mut bp = 0u32;
+    let mut seen = Vec::with_capacity(2);
+    for raw_type in target_types {
+        let kind = raw_type.to_ascii_uppercase();
+        if !seen.contains(&kind) {
+            seen.push(kind.clone());
+            bp = bp.saturating_add(bp_by_type.get(&kind).copied().unwrap_or(0));
+        }
+    }
+    if bp > 0 { 1.0 + bp as f64 / 10_000.0 } else { 1.0 }
+}
 /// The legacy entry point intentionally models a single-target Pokémon.
 /// Live UI must pass the user's explicit AoE preference to estimate_with_aoe.
 #[cfg(test)]
@@ -710,8 +789,12 @@ pub fn estimate_with_aoe(
     let player=reference.species.get(&mon.species_id?)?;
     let stats=pokemon_stats(mon,player)?;
     let learned_map=view.learned_hunt_maps.get(&hunt.slug).map(String::as_str);
+    let bestiary_bp=bestiary_bp_by_type(view,reference);
+    let prey=crate::native_atlas_models::active_prey_effects(
+        view.automation.as_ref(),view.server_now);
     let pace=combat::simulate(hunt,mon,player,reference,&stats,aoe_enabled,
         view.seasonal_type.as_deref(),gym_damage_multiplier(view,mon,player),
+        &bestiary_bp,&prey,
         view.bicycle_factor.unwrap_or(1.0),learned_map)?;
     let kills_h=pace.kills_h;
     let loot_pct=(if view.bonuses.guild_known {view.bonuses.guild_pct} else {0.0})
@@ -913,7 +996,8 @@ mod tests {
         assert_eq!(aggron.types,vec!["STEEL"]);
         assert_eq!(aggron.base[2],230.0);
         assert_eq!(include_str!("../assets/visual/upstream-megas.tsv").lines()
-            .filter(|line|line.starts_with(|c:char|c.is_ascii_digit())).count(),94);
+            .filter(|line|line.starts_with(|c:char|c.is_ascii_digit())).count(),95);
+        assert!(special_capture_species(9359),"Mega Absol Z must not use ordinary capture odds");
         assert_eq!(reference.species[&3970].moves.len(),12);
         assert!(reference.species[&6].moves.len()>=10,
             "Regular species must also use the current spreadsheet");
@@ -928,22 +1012,22 @@ mod tests {
                 assert!(form_dex.insert(id,dex).is_none(),"Duplicate form {id}");
             }
         }
-        assert_eq!(form_dex.len(),104);
+        assert_eq!(form_dex.len(),107);
         for (id,dex) in [
-            (4053,53),(8413,413),(9413,413),(8483,483),(8484,484),
+            (4053,53),(4076,76),(8413,413),(9413,413),(8483,483),(8484,484),
             (8492,492),(8555,555),(9555,555),(9646,646),
-            (8487,487),(8648,648),(8898,898),(9898,898),
+            (8487,487),(8648,648),(8800,800),(9800,800),(8898,898),(9898,898),
             (9017,1017),(8017,1017),(12017,1017),
         ] {
             assert_eq!(form_dex.get(&id),Some(&dex),"Form {id} must use its national dex");
         }
         let mut reference=Reference::default();
-        for id in [8483,8484,8492,9646,8487,8648,8898,9898,9017,8017,12017] {
+        for id in [8483,8484,8492,9646,8487,8648,8800,9800,8898,9898,9017,8017,12017] {
             assert!(special_capture_species(id),"Legendary/mythical form {id}");
             reference.capture_stages.insert(id,100);
             assert_eq!(capture_inputs(&reference,id),(None,None));
         }
-        for id in [4053,8413,9413,8555,9555] {
+        for id in [4053,4076,8413,9413,8555,9555] {
             assert!(!special_capture_species(id),"Ordinary form {id}");
             reference.capture_stages.insert(id,100);
             assert_eq!(capture_inputs(&reference,id),(Some(100),None));
@@ -1121,12 +1205,12 @@ mod tests {
         let sheet=include_str!("../assets/visual/upstream-movesets-v1408.tsv");
         let rows=sheet.lines().filter(|row|!row.starts_with('#')&&!row.is_empty())
             .collect::<Vec<_>>();
-        assert_eq!(rows.len(),13_427,"upstream v1.408.7 moves changed");
+        assert_eq!(rows.len(),13_530,"upstream v1.465.1 moves changed");
         let ids=rows.iter().filter_map(|row|row.split('\t').next())
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(ids.len(),1_243,"upstream v1.408.7 species changed");
+        assert_eq!(ids.len(),1_248,"upstream v1.465.1 species changed");
         let mut reference=Reference::default();
-        for id in [1,19,775,9006] {
+        for id in [1,19,765,775,4076,8800,9006,9359,9800] {
             reference.species.insert(id,ReferenceSpecies {
                 name:format!("Species {id}"),types:vec!["NORMAL".into()],
                 base:vec![100.0;6],moves:Vec::new(),
@@ -1137,6 +1221,9 @@ mod tests {
             let moves=&reference.species[&id].moves;
             assert_eq!(moves.len(),expected,"wrong spreadsheet for {id}");
             assert!(moves.iter().all(|move_|move_.min_level==1));
+        }
+        for id in [765,4076,8800,9359,9800] {
+            assert!(!reference.species[&id].moves.is_empty(),"missing moveset for {id}");
         }
         assert_eq!(reference.species[&1].moves[0].cooldown,13_500.0);
         assert!(reference.species[&9006].moves.iter().any(|move_|
@@ -1231,6 +1318,120 @@ mod tests {
         let mega_tyranitar=PokemonInfo{species_id:Some(3248),grade:Some(9.123),..Default::default()};
         assert!(!is_legendary_or_mythical(3248));
         assert_eq!(pokemon_grade(&mega_tyranitar,None),Some(PokemonGrade::Score(9.123)));
+    }
+    #[test]
+    fn bestiary_tiers_stack_across_species_and_dual_types_matching_upstream(){
+        assert_eq!(bestiary_species_bp(24_999),0);
+        assert_eq!(bestiary_species_bp(25_000),5);
+        assert_eq!(bestiary_species_bp(149_999),5);
+        assert_eq!(bestiary_species_bp(150_000),15);
+        assert_eq!(bestiary_species_bp(499_999),15);
+        assert_eq!(bestiary_species_bp(500_000),50);
+
+        let mut reference=Reference::default();
+        reference.chart=built_in_type_chart();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[
+                {"pokeId":4,"name":"Charmander","type1":"FIRE",
+                 "baseHp":39,"baseAtk":52,"baseDef":43,"baseSpAtk":60,"baseSpDef":50,"baseSpeed":65},
+                {"pokeId":5,"name":"Charmeleon","type1":"FIRE",
+                 "baseHp":58,"baseAtk":64,"baseDef":58,"baseSpAtk":80,"baseSpDef":65,"baseSpeed":80},
+                {"pokeId":6,"name":"Charizard","type1":"FIRE","type2":"FLYING",
+                 "baseHp":78,"baseAtk":84,"baseDef":78,"baseSpAtk":109,"baseSpDef":85,"baseSpeed":100},
+                {"pokeId":2006,"name":"Outland Charizard","type1":"FIRE","type2":"FLYING",
+                 "baseHp":78,"baseAtk":84,"baseDef":78,"baseSpAtk":109,"baseSpDef":85,"baseSpeed":100}
+            ]
+        }));
+        let mut view=HuntView::default();
+        view.hunts=std::sync::Arc::new(vec![
+            HuntEntry{
+                slug:"fire-hunt".into(),name:"Fire".into(),area:"kanto".into(),region:"kanto".into(),
+                level:50,total_spawns:10,looktype:None,
+                species:vec![
+                    HuntSpecies{id:4,weight:4.0},
+                    HuntSpecies{id:5,weight:3.0},
+                    HuntSpecies{id:6,weight:3.0},
+                ],
+            },
+            HuntEntry{
+                slug:"outland-fire".into(),name:"Outland Fire".into(),area:"outland".into(),region:"outland".into(),
+                level:200,total_spawns:10,looktype:None,
+                species:vec![HuntSpecies{id:2006,weight:10.0}],
+            },
+        ]);
+        // Exact Pokepedia example: 150k Charmander (+15), 500k Charmeleon (+50), 25k Charizard (+5 FIRE, +5 FLYING).
+        // Outland species (2006) must be excluded from contributing bp.
+        view.pokedex_kills=std::sync::Arc::new(BTreeMap::from([
+            (4, 150_000),
+            (5, 500_000),
+            (6, 25_000),
+            (2006, 500_000),
+        ]));
+        let bp=bestiary_bp_by_type(&view,&reference);
+        assert_eq!(bp.get("FIRE"),Some(&70));
+        assert_eq!(bp.get("FLYING"),Some(&5));
+        assert!((bestiary_damage_multiplier(&bp,&["FIRE".into()])-1.0070).abs()<1e-12);
+        assert!((bestiary_damage_multiplier(&bp,&["FIRE".into(),"FLYING".into()])-1.0075).abs()<1e-12);
+    }
+    #[test]
+    fn bestiary_and_prey_damage_defense_and_spawn_affect_combat_forecast(){
+        let mut reference=Reference::default();
+        reference.chart=built_in_type_chart();
+        merge_creature_catalog(&mut reference,&serde_json::json!({
+            "creatures":[
+                {"pokeId":25,"name":"Pikachu","type1":"ELECTRIC",
+                 "baseHp":35,"baseAtk":55,"baseDef":40,"baseSpAtk":50,"baseSpDef":50,"baseSpeed":90,
+                 "attacks":[{"type":"ELECTRIC","power":40.0,"cooldownMs":2000,"category":"SPECIAL","learnLevel":1}]},
+                {"pokeId":19,"name":"Rattata","type1":"NORMAL",
+                 "baseHp":120,"baseAtk":80,"baseDef":90,"baseSpAtk":60,"baseSpDef":90,"baseSpeed":72,
+                 "attacks":[{"type":"NORMAL","power":60.0,"cooldownMs":2000,"category":"PHYSICAL","learnLevel":1}]}
+            ]
+        }));
+        let hunt=HuntEntry{
+            slug:"rattata".into(),name:"Rattata".into(),area:"kanto".into(),region:"kanto".into(),
+            level:100,total_spawns:10,looktype:None,
+            species:vec![HuntSpecies{id:19,weight:10.0}],
+        };
+        let mon=PokemonInfo{
+            species_id:Some(25),level:100,quality:Some(1.0),potency:Some(1),
+            ivs:[Some(16);6],types:vec!["ELECTRIC".into()],
+            ..Default::default()
+        };
+        let mut base_view=HuntView::default();
+        base_view.active_pokemon=Some(mon.clone());
+        base_view.hunts=std::sync::Arc::new(vec![hunt.clone()]);
+        // 2026-11-22T12:00:00Z -> seasonal day key "2026-11-22"
+        base_view.server_now=Some(1_795_348_800_000);
+        let base=estimate_with_aoe(&base_view,&hunt,&reference,false).unwrap();
+
+        // Prey Damage +50% (5*) speeds up kills/h when fights take multiple hits.
+        let mut dmg_view=base_view.clone();
+        dmg_view.automation=Some(serde_json::json!({
+            "prey":{"dia":"2026-11-22","cartelas":[{"lista":[19],"pk":19,"bonus":"dano","est":5,"n":[0,0,0]},null]}
+        }));
+        let with_dmg=estimate_with_aoe(&dmg_view,&hunt,&reference,false).unwrap();
+        assert!(with_dmg.kills_h>base.kills_h);
+
+        // Prey Defense -50% (5*) halves worst incoming hit fraction.
+        let mut def_view=base_view.clone();
+        def_view.automation=Some(serde_json::json!({
+            "prey":{"dia":"2026-11-22","cartelas":[{"lista":[19],"pk":19,"bonus":"defesa","est":5,"n":[0,0,0]},null]}
+        }));
+        let with_def=estimate_with_aoe(&def_view,&hunt,&reference,false).unwrap();
+        assert!((with_def.worst_hit_fraction-base.worst_hit_fraction*0.5).abs()<1e-9);
+
+        // Prey Spawn +5 (5*) amortizes walking dead time across 15 spawns instead of 10
+        // when kills are fast enough that walking dead time is non-zero.
+        let mut fast_base_view=base_view.clone();
+        fast_base_view.active_pokemon.as_mut().unwrap().level=300;
+        let fast_base=estimate_with_aoe(&fast_base_view,&hunt,&reference,false).unwrap();
+        let mut spawn_view=fast_base_view.clone();
+        spawn_view.automation=Some(serde_json::json!({
+            "prey":{"dia":"2026-11-22","cartelas":[{"lista":[19],"pk":19,"bonus":"spawn","est":5,"n":[0,0,0]},null]}
+        }));
+        let with_spawn=estimate_with_aoe(&spawn_view,&hunt,&reference,false).unwrap();
+        assert!(with_spawn.dead_time_seconds_per_kill<fast_base.dead_time_seconds_per_kill);
+        assert!(with_spawn.kills_h>fast_base.kills_h);
     }
 
 }

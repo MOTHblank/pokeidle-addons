@@ -4,15 +4,18 @@
 use serde_json::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Duration;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 const MARKER: &str = "\n__MOTH_KICK_HTTP_CODE__:";
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
-const MAX_CONCURRENT_REQUESTS: usize = 2;
+const MAX_CONCURRENT_REQUESTS: usize = 4;
 
-/// A very small shared pool; 7 channels must not launch 7 curl processes.
+/// A small shared pool; 48 channels must not launch 48 curl processes, while
+/// still allowing up to four accounts to overlap without starving heartbeats.
 struct Permit(&'static (Mutex<usize>, Condvar));
 impl Drop for Permit {
     fn drop(&mut self) {
@@ -22,14 +25,24 @@ impl Drop for Permit {
         }
     }
 }
-fn acquire() -> Result<Permit, String> {
+fn acquire(stop: Option<&AtomicBool>) -> Result<Permit, String> {
+    if stop.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err("Kick HTTP request cancelled".into());
+    }
     static SLOTS: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
     let slots = SLOTS.get_or_init(|| (Mutex::new(0), Condvar::new()));
     let mut active = slots.0.lock().map_err(|_|
         "Kick HTTP queue unavailable".to_owned())?;
     while *active >= MAX_CONCURRENT_REQUESTS {
-        active = slots.1.wait(active).map_err(|_|
-            "Kick HTTP queue unavailable".to_owned())?;
+        if stop.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return Err("Kick HTTP request cancelled".into());
+        }
+        let (next, _) = slots.1.wait_timeout(active, Duration::from_millis(200))
+            .map_err(|_| "Kick HTTP queue unavailable".to_owned())?;
+        active = next;
+    }
+    if stop.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err("Kick HTTP request cancelled".into());
     }
     *active += 1;
     Ok(Permit(slots))
@@ -37,8 +50,19 @@ fn acquire() -> Result<Permit, String> {
 
 /// HTTP status and JSON response; non-200 replies have a null JSON value.
 /// Kick can change these undocumented endpoints without notice.
+#[cfg(test)]
 pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
     -> Result<(u16, Value), String>
+{
+    get_cancelable(url, bearer, extra_headers, None)
+}
+
+pub fn get_cancelable(
+    url: &str,
+    bearer: Option<&str>,
+    extra_headers: &[(&str, String)],
+    stop: Option<&AtomicBool>,
+) -> Result<(u16, Value), String>
 {
     if !(url.starts_with("https://kick.com/api/v2/channels/") ||
          url == "https://websockets.kick.com/viewer/v1/token") {
@@ -46,7 +70,7 @@ pub fn get(url: &str, bearer: Option<&str>, extra_headers: &[(&str, String)])
     }
     // The URL is drawn from a whitelisted slug or a fixed constant; no
     // redirects that could forward credentials to a different website.
-    let _permit = acquire()?;
+    let _permit = acquire(stop)?;
     let binary = if cfg!(windows) { "curl.exe" } else { "curl" };
     let mut command = Command::new(binary);
     #[cfg(windows)]
@@ -143,5 +167,16 @@ mod tests {
     fn refuses_unexpected_endpoints() {
         assert!(get("https://example.com", None, &[]).is_err());
         assert!(get("https://kick.com@evil.example", None, &[]).is_err());
+    }
+    #[test]
+    fn canceled_request_exits_before_spawning_curl() {
+        let stop = AtomicBool::new(true);
+        let result = get_cancelable(
+            "https://kick.com/api/v2/channels/example",
+            None,
+            &[],
+            Some(&stop),
+        );
+        assert_eq!(result.unwrap_err(), "Kick HTTP request cancelled");
     }
 }

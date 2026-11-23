@@ -1096,9 +1096,14 @@ struct AutomationDraft {
 }
 impl AutomationDraft {
     fn from_server(value:&serde_json::Value) -> Self {
+        let colecao = crate::native_automation::effective_auto_colecao(value);
+        let lock_grade = colecao.get("nota")
+            .and_then(|n| n.get("min"))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(crate::native_automation::AUTO_LOCK_NOTA_MIN);
         Self { initialized:true,
             hp_limit:value.get("hpLimiar").and_then(serde_json::Value::as_f64).unwrap_or(0.0),
-            lock_grade:value.get("autoLockNotaMin").and_then(serde_json::Value::as_f64).unwrap_or(0.0) }
+            lock_grade }
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]

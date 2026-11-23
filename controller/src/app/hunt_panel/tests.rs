@@ -485,6 +485,16 @@ use super::*;
         cache.refresh(0,&view,None,true,false);
         assert!(cache.refreshed.is_none());
         assert_ne!(cache.revision,gym_revision);
+
+        cache.refreshed=Some(Instant::now());
+        let prey_revision=cache.revision;
+        view.server_now=Some(1_795_348_800_000);
+        view.automation=Some(serde_json::json!({
+            "prey":{"dia":"2026-11-22","cartelas":[{"lista":[25],"pk":25,"bonus":"dano","est":3,"n":[0,0,0]},null]}
+        }));
+        cache.refresh(0,&view,None,true,false);
+        assert!(cache.refreshed.is_none());
+        assert_ne!(cache.revision,prey_revision);
     }
 
     #[test]

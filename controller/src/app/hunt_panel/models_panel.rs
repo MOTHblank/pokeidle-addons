@@ -323,17 +323,20 @@ pub(super) fn draw_atlas_models(
         tr("target HP assumed 0% for wiki scenario")) )
         .size(10.0).color(MUTED));
     let all_weight=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
+    let prey=models::active_prey_effects(view.automation.as_ref(),view.server_now);
     let mut rows=Vec::new();
     for spawn in &hunt.species{
         if spawn.weight<=0.0||all_weight<=0.0 {continue}
-        let share=spawn.weight/all_weight;
+        let share=models::effective_spawn_share(hunt,spawn.id,spawn.weight,all_weight,&prey);
+        let prey_cap=if outland {1.0} else {models::prey_capture_multiplier(&prey,spawn.id)};
+        let species_modifiers=effective_modifiers.with_prey_capture(prey_cap);
         let name=reference.and_then(|r|r.species.get(&spawn.id))
             .map(|m|m.name.as_str()).unwrap_or("Unknown");
         let (stage,rarity)=reference.map(|r|
             native_atlas::capture_inputs(r,spawn.id)).unwrap_or((None,None));
         let plan=kills.and_then(|speed|models::capture_scenario_with_stage(
             stage,rarity,efficiency,speed,share,
-            scenario.accepted_fraction_override,outland,&effective_modifiers));
+            scenario.accepted_fraction_override,outland,&species_modifiers));
         rows.push((spawn.id,name.to_owned(),share,stage,plan));
     }
     rows.sort_by(|a,b|b.2.total_cmp(&a.2));

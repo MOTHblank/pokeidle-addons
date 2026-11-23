@@ -1,4 +1,4 @@
-# Missing cross-generation/truncated evolution edges from upstream v1.314.2.
+# Missing cross-generation/truncated evolution edges from upstream v1.465.1 (shared/evolucoes-cruzadas.mjs).
 # Apply ONLY when the base species has no evolvesToId; from\tto
 57	979
 82	462
@@ -8,15 +8,41 @@
 193	469
 198	430
 200	429
+203	981
+206	982
 207	472
 215	461
 217	901
 221	473
 233	474
+234	899
 288	289
 296	297
 372	373
 375	376
+483	8483
+484	8484
+487	8487
+492	8492
+641	8641
+642	8642
+645	8645
+646	8646
+647	8647
+648	8648
+718	9718
+720	8720
+746	8746
+774	8774
+800	8800
+808	809
+888	8888
+889	8889
+898	8898
+905	8905
+964	8964
+1017	9017
+8718	718
 13288	289
 13296	297
 13372	373

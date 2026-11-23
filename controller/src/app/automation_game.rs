@@ -44,34 +44,56 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
                 "Changes only take effect after PokéIdle confirms them."
             )).size(10.0).color(DIM));
             ui.add_space(8.0);
-            let groups: [(&str, &[(&str, &str)]); 2] = [
-                ("Recovery & selling", &[
+            ui.label(RichText::new(tr("Recovery & selling")).size(11.0).strong().color(MUTED));
+            ui.horizontal_wrapped(|ui| {
+                for (key, label) in [
                     ("autoPotion", "Auto Potion"),
                     ("autoRevive", "Auto Revive"),
-                    ("autoVendaLoot", "Auto Sell"),
                     ("autoVoltarHunt", "Return to Hunt"),
-                ]),
-                ("Pokémon protection", &[
-                    ("autoLockShiny", "Lock Shiny"),
-                    ("autoLockNota9", "Lock Grade 9"),
-                    ("autoLockP5", "Lock Potency 5"),
-                ]),
-            ];
-            for (heading, fields) in groups {
-                ui.label(RichText::new(tr(heading)).size(11.0).strong().color(MUTED));
-                ui.horizontal_wrapped(|ui| {
-                    for (key, label) in fields {
-                        if let Some(current)=automation.get(*key).and_then(serde_json::Value::as_bool) {
-                            let mut enabled=current;
-                            if ui.add_enabled(can_edit,
-                                egui::Checkbox::new(&mut enabled,tr(label))).changed() {
-                                commands.push(((*key).into(),serde_json::json!(enabled)));
-                            }
+                ] {
+                    if let Some(current)=automation.get(key).and_then(serde_json::Value::as_bool) {
+                        let mut enabled=current;
+                        if ui.add_enabled(can_edit,
+                            egui::Checkbox::new(&mut enabled,tr(label))).changed() {
+                            commands.push((key.into(),serde_json::json!(enabled)));
                         }
                     }
-                });
-                ui.add_space(5.0);
-            }
+                }
+                let mut auto_sell = automation.get("autoVendaDepot")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                if ui.add_enabled(can_edit,
+                    egui::Checkbox::new(&mut auto_sell, tr("Auto Sell"))).changed() {
+                    commands.push(("autoVendaDepot".into(), serde_json::json!(auto_sell)));
+                }
+            });
+            ui.add_space(5.0);
+            let colecao = crate::native_automation::effective_auto_colecao(automation);
+            ui.label(RichText::new(tr("Pokémon protection")).size(11.0).strong().color(MUTED));
+            ui.horizontal_wrapped(|ui| {
+                for (line, label) in [
+                    ("lendario", "Lock Legendary"),
+                    ("shiny", "Lock Shiny"),
+                    ("pot", "Lock Potency"),
+                    ("nota", "Lock Grade"),
+                    ("potencial", "Lock Potential"),
+                ] {
+                    let current = colecao.get(line)
+                        .and_then(|l| l.get("on"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    let mut enabled = current;
+                    if ui.add_enabled(can_edit,
+                        egui::Checkbox::new(&mut enabled, tr(label))).changed() {
+                        let mut updated = colecao.clone();
+                        if let Some(entry) = updated.get_mut(line)
+                            .and_then(serde_json::Value::as_object_mut) {
+                            entry.insert("on".into(), serde_json::Value::Bool(enabled));
+                            commands.push(("autoColecao".into(), updated));
+                        }
+                    }
+                }
+            });
             ui.add_space(10.0);
             let draft=&mut app.runtimes[index].automation.automation_draft;
             ui.horizontal_wrapped(|ui| {
@@ -83,13 +105,15 @@ pub(super) fn draw_game_automation_contents(app: &mut ControllerApp, ui: &mut eg
                         commands.push(("hpLimiar".into(),serde_json::json!(draft.hp_limit)));
                     }
                 }
-                if automation.get("autoLockNotaMin").is_some() {
-                    ui.label(tr("Minimum lock grade"));
-                    ui.add(egui::DragValue::new(&mut draft.lock_grade)
-                        .range(0.0..=10.0).speed(0.1));
-                    if ui.add_enabled(can_edit,egui::Button::new(tr("Apply grade"))).clicked() {
-                        commands.push(("autoLockNotaMin".into(),
-                            serde_json::json!(draft.lock_grade)));
+                ui.label(tr("Minimum lock grade"));
+                ui.add(egui::DragValue::new(&mut draft.lock_grade)
+                    .range(0.0..=10.0).speed(0.1));
+                if ui.add_enabled(can_edit,egui::Button::new(tr("Apply grade"))).clicked() {
+                    let mut updated = colecao.clone();
+                    if let Some(nota) = updated.get_mut("nota")
+                        .and_then(serde_json::Value::as_object_mut) {
+                        nota.insert("min".into(), serde_json::json!(draft.lock_grade));
+                        commands.push(("autoColecao".into(), updated));
                     }
                 }
             });

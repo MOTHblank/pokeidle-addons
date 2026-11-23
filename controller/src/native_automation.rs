@@ -1,12 +1,168 @@
 //! Server-authoritative automation updates on the native game socket.
 //! Never replace the server's entire automation object with a locally guessed
 //! schema. Each mutation is serialized and confirmed by an estado patch.
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_QUEUE: usize = 16;
+
+/// Whitelisted fields sent in `auto.set` frames (mirrors upstream `shared/auto-set.mjs`).
+pub const AUTO_SET_FIELDS: &[&str] = &[
+    "autoBallAteCapturar",
+    "autoBallSemParar",
+    "autoBall",
+    "ballIds",
+    "autoRevive",
+    "reviveIds",
+    "autoPotion",
+    "potionIds",
+    "hpLimiar",
+    "autoVoltarHunt",
+    "pvpAutoFila",
+];
+
+pub const AUTO_LOCK_NOTA_MIN: f64 = 3.5;
+const AUTO_COLECAO_LINES: &[&str] = &["lendario", "shiny", "pot", "qual", "iv", "nota", "potencial"];
+const AUTO_COLECAO_SWITCH_ONLY: &[&str] = &["lendario", "shiny", "potencial"];
+const AUTO_COLECAO_POTENCIES: &[u64] = &[2, 3, 4, 5];
+const AUTO_COLECAO_QUALITIES_TENTHS: &[i64] = &[11, 13, 15, 16];
+const AUTO_COLECAO_IV_STATS: &[&str] = &["hp", "atk", "def", "spAtk", "spDef", "speed"];
+const IV_STAT_MIN: u64 = 1;
+const IV_STAT_MAX: u64 = 32;
+
+fn round_nota(value: f64) -> Option<f64> {
+    if !value.is_finite() || !(0.0..=10.0).contains(&value) {
+        return None;
+    }
+    Some((value * 1000.0).round() / 1000.0)
+}
+
+pub fn default_auto_colecao() -> Value {
+    json!({
+        "lendario": { "on": true },
+        "shiny": { "on": true },
+        "pot": { "on": true, "min": 4 },
+        "qual": { "on": false, "min": 1.5 },
+        "iv": {
+            "on": false,
+            "min": { "hp": 1, "atk": 1, "def": 1, "spAtk": 1, "spDef": 1, "speed": 1 }
+        },
+        "nota": { "on": false, "min": AUTO_LOCK_NOTA_MIN },
+        "potencial": { "on": false }
+    })
+}
+
+pub fn normalize_auto_colecao(value: &Value, lenient: bool) -> Option<Value> {
+    let Some(obj) = value.as_object() else {
+        return lenient.then(default_auto_colecao);
+    };
+    let mut normalized = default_auto_colecao();
+    let dst = normalized.as_object_mut().expect("object");
+    for &line in AUTO_COLECAO_LINES {
+        let Some(raw_line) = obj.get(line) else { continue };
+        if raw_line.is_null() { continue; }
+        let Some(line_obj) = raw_line.as_object() else {
+            if lenient { continue; }
+            return None;
+        };
+        let target = dst.get_mut(line).and_then(Value::as_object_mut).expect("line");
+        if let Some(on_val) = line_obj.get("on") {
+            if let Some(flag) = on_val.as_bool() {
+                target.insert("on".into(), Value::Bool(flag));
+            } else if !lenient {
+                return None;
+            }
+        }
+        if AUTO_COLECAO_SWITCH_ONLY.contains(&line) {
+            continue;
+        }
+        let Some(min_val) = line_obj.get("min") else { continue };
+        let ok = match line {
+            "pot" => {
+                if let Some(pot) = min_val.as_u64().filter(|p| AUTO_COLECAO_POTENCIES.contains(p)) {
+                    target.insert("min".into(), Value::from(pot));
+                    true
+                } else {
+                    false
+                }
+            }
+            "qual" => {
+                if let Some(q) = min_val.as_f64().filter(|v| v.is_finite()) {
+                    let tenths = (q * 10.0).round() as i64;
+                    if AUTO_COLECAO_QUALITIES_TENTHS.contains(&tenths) {
+                        target.insert("min".into(), json!(tenths as f64 / 10.0));
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            "nota" => {
+                if let Some(n) = min_val.as_f64().and_then(round_nota) {
+                    target.insert("min".into(), json!(n));
+                    true
+                } else {
+                    false
+                }
+            }
+            "iv" => {
+                if let Some(iv_obj) = min_val.as_object() {
+                    let iv_dst = target.get_mut("min").and_then(Value::as_object_mut).expect("iv");
+                    let mut all_ok = true;
+                    for (stat, floor) in iv_obj {
+                        let valid_stat = AUTO_COLECAO_IV_STATS.contains(&stat.as_str());
+                        let valid_floor = floor.as_u64()
+                            .filter(|v| (IV_STAT_MIN..=IV_STAT_MAX).contains(v));
+                        if valid_stat {
+                            if let Some(v) = valid_floor {
+                                iv_dst.insert(stat.clone(), Value::from(v));
+                            } else if !lenient {
+                                all_ok = false;
+                                break;
+                            }
+                        } else if !lenient {
+                            all_ok = false;
+                            break;
+                        }
+                    }
+                    all_ok
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if !ok && !lenient {
+            return None;
+        }
+    }
+    Some(normalized)
+}
+
+pub fn effective_auto_colecao(automation: &Value) -> Value {
+    if let Some(raw) = automation.get("autoColecao").filter(|v| v.is_object()) {
+        return normalize_auto_colecao(raw, true).unwrap_or_else(default_auto_colecao);
+    }
+    let mut rule = default_auto_colecao();
+    if let Some(nota) = rule.get_mut("nota").and_then(Value::as_object_mut) {
+        let on = automation.get("autoLockNota9").and_then(Value::as_bool).unwrap_or(false);
+        let min = automation.get("autoLockNotaMin")
+            .and_then(Value::as_f64)
+            .and_then(round_nota)
+            .unwrap_or(AUTO_LOCK_NOTA_MIN);
+        nota.insert("on".into(), Value::Bool(on));
+        nota.insert("min".into(), json!(min));
+    }
+    rule
+}
+
+pub fn valid_auto_colecao(value: &Value) -> bool {
+    normalize_auto_colecao(value, false).is_some()
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct AutomationStatus {
@@ -29,17 +185,16 @@ impl AutomationWriter {
     }
     pub fn valid(field: &str, value: &Value) -> bool {
         match field {
-            "autoPotion" | "autoRevive" | "autoVendaLoot" |
-            "autoLockShiny" | "autoLockNota9" | "autoLockP5" |
-            "autoVoltarHunt" | "pvpAutoFila" => value.is_boolean(),
+            "autoBallAteCapturar" | "autoBallSemParar" | "autoBall" |
+            "autoPotion" | "autoRevive" | "autoVoltarHunt" | "pvpAutoFila" |
+            "autoVendaDepot" => value.is_boolean(),
             "hpLimiar" => value.as_f64().is_some_and(|v|
                 v.is_finite() && (0.0..=100.0).contains(&v)),
-            "autoLockNotaMin" => value.as_f64().is_some_and(|v|
-                v.is_finite() && (0.0..=10.0).contains(&v)),
             "potionIds" | "ballIds" | "reviveIds" =>
                 value.as_array().is_some_and(|array|
                     array.len() <= 20 && array.iter().all(|id|
                         id.as_u64().is_some_and(|n|n>0 && n<=1_000_000))),
+            "autoColecao" => valid_auto_colecao(value),
             _ => false,
         }
     }
@@ -106,7 +261,7 @@ impl AutomationWriter {
         });
         self.status.queued=self.queue.len();
     }
-    pub fn next(&mut self, current: Option<&Value>, now: Instant) -> Option<Map<String,Value>> {
+    pub fn next(&mut self, current: Option<&Value>, now: Instant) -> Option<Value> {
         if self.in_flight.as_ref().is_some_and(|sent|
             now.saturating_duration_since(sent.sent) > CONFIRM_TIMEOUT) {
             let failed = self.in_flight.take().expect("checked");
@@ -116,21 +271,63 @@ impl AutomationWriter {
             self.status.pending_field = None;
         }
         if self.in_flight.is_some() { return None; }
-        let mut payload = current.and_then(Value::as_object)?.clone();
+        let server = current.and_then(Value::as_object)?;
         let mutation = self.queue.pop_front()?;
-        // A full server snapshot must exist before mutating a single field;
-        // preserve undocumented fields unmodified.
-        payload.insert(mutation.field.clone(), mutation.value.clone());
+        let frame = match mutation.field.as_str() {
+            "autoVendaDepot" => json!({
+                "t": "shop.autoVendaDepot",
+                "ativo": mutation.value.as_bool().unwrap_or(false),
+            }),
+            "autoColecao" => {
+                let regra = normalize_auto_colecao(&mutation.value, false)?;
+                json!({
+                    "t": "shop.autoColecao",
+                    "regra": regra,
+                })
+            }
+            _ => {
+                // Mirror upstream pacoteAutoSet: include only whitelisted
+                // CAMPOS_AUTO_SET keys from the server snapshot plus the patch,
+                // never nested state like prey, autoVendaDepot, or autoColecao.
+                let mut payload = Map::new();
+                payload.insert("t".into(), Value::String("auto.set".into()));
+                for &field in AUTO_SET_FIELDS {
+                    if let Some(value) = server.get(field) {
+                        payload.insert(field.into(), value.clone());
+                    }
+                }
+                payload.insert(mutation.field.clone(), mutation.value.clone());
+                Value::Object(payload)
+            }
+        };
         self.status.pending_field = Some(mutation.field.clone());
         self.status.queued = self.queue.len();
         self.status.error = None;
         self.in_flight = Some(InFlight { mutation, sent: now });
-        Some(payload)
+        Some(frame)
     }
     pub fn observe(&mut self, automation: &Value) {
         let Some(current) = automation.as_object() else {return};
+        let confirmed = self.in_flight.as_ref().is_some_and(|sent| {
+            if sent.mutation.field == "autoColecao" {
+                let Some(actual) = current.get("autoColecao") else { return false };
+                normalize_auto_colecao(actual, true)
+                    == normalize_auto_colecao(&sent.mutation.value, true)
+            } else {
+                current.get(&sent.mutation.field) == Some(&sent.mutation.value)
+            }
+        });
+        if confirmed {
+            self.in_flight = None;
+            self.status.pending_field = None;
+            self.status.confirmed = self.status.confirmed.saturating_add(1);
+            self.status.error = None;
+        }
+    }
+    pub fn observe_auto_venda_depot(&mut self, ativo: bool) {
         if self.in_flight.as_ref().is_some_and(|sent|
-            current.get(&sent.mutation.field) == Some(&sent.mutation.value)) {
+            sent.mutation.field == "autoVendaDepot"
+            && sent.mutation.value == Value::Bool(ativo)) {
             self.in_flight = None;
             self.status.pending_field = None;
             self.status.confirmed = self.status.confirmed.saturating_add(1);
@@ -156,19 +353,65 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn preserves_unknown_server_fields_and_confirms_only_echo() {
+    fn whitelists_auto_set_fields_and_confirms_only_echo() {
         let mut writer=AutomationWriter::new();
         let now=Instant::now();
         writer.queue("autoPotion".into(),json!(true)).unwrap();
         let frame=writer.next(Some(&json!({
-            "autoPotion":false,"mysteryFlag":{"retain":true}
+            "autoPotion":false,
+            "hpLimiar":50,
+            "prey":{"ativo":true},
+            "preyCartela2":{},
+            "preyRegioes":["kanto"],
+            "autoVendaDepot":true,
+            "autoColecao":{"shiny":{"on":true}},
+            "mysteryFlag":{"retain":true}
         })),now).unwrap();
-        assert_eq!(frame["mysteryFlag"],json!({"retain":true}));
+        assert_eq!(frame["t"],json!("auto.set"));
         assert_eq!(frame["autoPotion"],json!(true));
+        assert_eq!(frame["hpLimiar"],json!(50));
+        assert!(frame.get("prey").is_none());
+        assert!(frame.get("preyCartela2").is_none());
+        assert!(frame.get("preyRegioes").is_none());
+        assert!(frame.get("autoVendaDepot").is_none());
+        assert!(frame.get("autoColecao").is_none());
+        assert!(frame.get("mysteryFlag").is_none());
         writer.observe(&json!({"autoPotion":false}));
         assert_eq!(writer.status.pending_field.as_deref(),Some("autoPotion"));
         writer.observe(&json!({"autoPotion":true}));
         assert_eq!(writer.status.confirmed,1);
+        assert!(writer.status.pending_field.is_none());
+    }
+    #[test]
+    fn rejects_legacy_auto_set_fields_and_routes_depot_and_colecao_frames() {
+        let mut writer=AutomationWriter::new();
+        let now=Instant::now();
+        for legacy in ["autoVendaLoot","autoLockShiny","autoLockNota9","autoLockP5"] {
+            assert!(writer.queue(legacy.into(),json!(true)).is_err(), "{legacy} must be rejected");
+        }
+        assert!(writer.queue("autoLockNotaMin".into(),json!(8.0)).is_err());
+
+        let server=json!({"autoPotion":true,"autoVendaDepot":false});
+        writer.queue("autoVendaDepot".into(),json!(true)).unwrap();
+        let frame=writer.next(Some(&server),now).unwrap();
+        assert_eq!(frame,json!({"t":"shop.autoVendaDepot","ativo":true}));
+        writer.observe_auto_venda_depot(false);
+        assert_eq!(writer.status.pending_field.as_deref(),Some("autoVendaDepot"));
+        writer.observe_auto_venda_depot(true);
+        assert_eq!(writer.status.confirmed,1);
+        assert!(writer.status.pending_field.is_none());
+
+        let mut rule=effective_auto_colecao(&server);
+        rule["potencial"]["on"]=json!(true);
+        rule["nota"]["on"]=json!(true);
+        rule["nota"]["min"]=json!(6.5);
+        writer.queue("autoColecao".into(),rule.clone()).unwrap();
+        let frame=writer.next(Some(&server),now).unwrap();
+        assert_eq!(frame["t"],json!("shop.autoColecao"));
+        assert_eq!(frame["regra"]["potencial"]["on"],json!(true));
+        assert_eq!(frame["regra"]["nota"]["min"],json!(6.5));
+        writer.observe(&json!({"autoColecao": rule}));
+        assert_eq!(writer.status.confirmed,2);
         assert!(writer.status.pending_field.is_none());
     }
     #[test]
@@ -196,11 +439,12 @@ mod tests {
         writer.sync_restock_potion(Some(203),Some(&server));
         assert_eq!(writer.status.queued,1);
         let sent=writer.next(Some(&server),now).unwrap();
+        assert_eq!(sent["t"],json!("auto.set"));
         assert_eq!(sent["potionIds"],json!([203]));
         assert_eq!(sent["autoPotion"],json!(false));
         assert_eq!(sent["hpLimiar"],json!(0.7));
         assert_eq!(sent["reviveIds"],json!([205]));
-        assert_eq!(sent["unknownSetting"],json!(99));
+        assert!(sent.get("unknownSetting").is_none());
         writer.sync_restock_potion(Some(203),Some(&server));
         assert_eq!(writer.status.queued,0);
         writer.observe(&json!({"potionIds":[200,201]}));
@@ -272,12 +516,13 @@ mod tests {
         writer.sync_restock_revive(Some(206),Some(&server));
         assert_eq!(writer.status.queued,1);
         let sent=writer.next(Some(&server),now).unwrap();
+        assert_eq!(sent["t"],json!("auto.set"));
         assert_eq!(sent["reviveIds"],json!([206]));
         assert_eq!(sent["potionIds"],json!([204]));
         assert_eq!(sent["autoPotion"],json!(false));
         assert_eq!(sent["autoRevive"],json!(false));
         assert_eq!(sent["hpLimiar"],json!(0.8));
-        assert_eq!(sent["unknownSetting"],json!("safe"));
+        assert!(sent.get("unknownSetting").is_none());
         writer.observe(&json!({"reviveIds":[205]}));
         assert_eq!(writer.status.pending_field.as_deref(),Some("reviveIds"));
         writer.observe(&json!({"reviveIds":[206]}));

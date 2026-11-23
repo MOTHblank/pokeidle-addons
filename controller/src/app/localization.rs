@@ -408,10 +408,18 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Capture preferences and live statistics" => "Preferências e estatísticas de captura",
         "Server settings and restock status" => "Opções do jogo e status da reposição",
         "Recovery & selling" => "Recuperação e venda",
+        "Auto Sell" => "Venda automática",
         "Pokémon protection" => "Proteção de Pokémon",
+        "Lock Legendary" => "Travar lendário",
+        "Lock Shiny" => "Travar shiny",
+        "Lock Potency" => "Travar potência",
+        "Lock Grade" => "Travar nota",
+        "Lock Potential" => "Travar potencial",
         "Automatic buying rules and Snatch" => "Regras de compra e Snatch",
         "Game & restock" => "Jogo e reposição",
         "Market" => "Mercado",
+        "Note: Stone items become bound to the account on market purchase and cannot be resold." =>
+            "Nota: Pedras ficam vinculadas à conta ao comprar no mercado e não podem ser revendidas.",
         "Launch enabled" => "Iniciar habilitadas",
         "Stop all" => "Parar todas",
         "To tray" => "Para bandeja",
@@ -567,6 +575,13 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Active accounts and automations will be stopped." => "As contas e automações ativas serão encerradas.",
         "Exit and stop accounts" => "Sair e parar contas",
         "Background performance" => "Desempenho em segundo plano",
+        "Kick stream transport (experimental)" => "Transporte de stream Kick (experimental)",
+        "Optional low-bandwidth alternative to full HLS segment downloads. Off by default." =>
+            "Alternativa opcional de baixo consumo de rede ao download completo de segmentos HLS. Desativada por padrão.",
+        "Use low-bandwidth Kick stream mode (experimental)" =>
+            "Usar modo leve de stream da Kick (experimental)",
+        "Probes HLS segments with lightweight HEAD/Range requests instead of downloading full video payloads. Active Kick monitors switch automatically." =>
+            "Verifica segmentos HLS com requisições leves HEAD/Range em vez de baixar os dados completos de vídeo. Monitores Kick ativos alternam automaticamente.",
         "Refresh behavior" => "Comportamento das atualizações",
         "Reduce updates when the window is not focused" =>
             "Reduzir atualizações quando a janela estiver sem foco",

@@ -84,10 +84,11 @@ pub struct KickMonitor {
     token: String,
     auth: Arc<AuthGate>,
     bandwidth: Arc<AccountBandwidth>,
+    lite_mode: Arc<AtomicBool>,
     offline_points: Option<OfflinePointsWorker>,
 }
 impl KickMonitor {
-    pub fn start(token: String, input: &str) -> Result<Self, String> {
+    pub fn start(token: String, input: &str, lite_mode: bool) -> Result<Self, String> {
         // An empty official roster is valid: keep the session ready for the
         // next PokéIdle live-state update, without creating a false channel.
         let slugs = if input.trim().is_empty() {
@@ -109,6 +110,7 @@ impl KickMonitor {
             token: bearer.to_owned(),
             auth: Arc::new(AuthGate::default()),
             bandwidth: Arc::new(AccountBandwidth::default()),
+            lite_mode: Arc::new(AtomicBool::new(lite_mode)),
             offline_points: None,
         };
         monitor.sync_channels(&slugs)?;
@@ -154,6 +156,7 @@ impl KickMonitor {
             let child_token = self.token.clone();
             let child_auth = Arc::clone(&self.auth);
             let child_bandwidth = Arc::clone(&self.bandwidth);
+            let child_lite = Arc::clone(&self.lite_mode);
             let child_slug = slug.clone();
             let result = native_kick_pool::submit_channel(Arc::clone(&worker_stop), move || {
                 // A short stagger avoids bursts, without delaying already
@@ -163,7 +166,7 @@ impl KickMonitor {
                     thread::sleep(Duration::from_secs(1));
                 }
                 channel_loop(child_token, child_slug, child_state,
-                    child_snapshot, child_stop, child_auth, child_bandwidth)
+                    child_snapshot, child_stop, child_auth, child_bandwidth, child_lite)
             });
             if let Err(error) = result {
                 worker_stop.store(true, Ordering::Release);
@@ -200,18 +203,21 @@ impl KickMonitor {
             let handle = thread::Builder::new().name("moth-kick-offline-points".into()).spawn(move || {
                 let Ok(client) = native_kick_viewer::new_client(&token) else { return };
                 let mut previous = Vec::<String>::new();
-                let mut last_poll = Instant::now() - Duration::from_secs(130);
+                let mut last_poll: Option<Instant> = None;
                 while !stop_worker.load(Ordering::Relaxed) && !auth.denied() {
                     let current = roster_worker.lock().map(|roster| roster.clone()).unwrap_or_default();
-                    if current != previous || last_poll.elapsed() >= Duration::from_secs(120) {
+                    if current != previous || last_poll.is_none_or(|at| at.elapsed() >= Duration::from_secs(120)) {
                         previous = current.clone();
-                        last_poll = Instant::now();
+                        last_poll = Some(Instant::now());
                         if let Ok(mut results) = balances_worker.lock() {
                             results.retain(|slug, _| current.contains(slug));
                         }
                         for slug in &current {
                             if stop_worker.load(Ordering::Relaxed) || auth.denied() { break; }
-                            let outcome = native_kick_viewer::point_balance(&client, slug, &token);
+                            let outcome = auth.checked(|| {
+                                native_kick_viewer::point_balance(&client, slug, &token, &stop_worker)
+                            });
+                            if stop_worker.load(Ordering::Acquire) { break; }
                             if let Ok(mut results) = balances_worker.lock() {
                                 let info = results.entry(slug.clone()).or_default();
                                 match outcome {
@@ -224,6 +230,7 @@ impl KickMonitor {
                                     Err(error) => info.error = Some(error),
                                 }
                             }
+                            if auth.denied() { break; }
                             // Avoid bursts when many official creators are offline.
                             thread::sleep(Duration::from_millis(350));
                         }
@@ -343,14 +350,17 @@ pub struct KickSupervisor {
     monitor:Arc<Mutex<KickMonitor>>,
     sender:mpsc::Sender<KickReconcileEvent>,
     stop:Arc<AtomicBool>,
+    lite_mode:Arc<AtomicBool>,
     identity:Instant,
     coordinator: Option<JoinHandle<()>>,
 }
 impl KickSupervisor {
     pub fn start(token:String,input:&str,manual:Vec<String>,
-                 fallback_live:Vec<String>,prefs:KickStreamPreferences) -> Result<Self,String> {
-        let monitor=KickMonitor::start(token,input)?;
+                 fallback_live:Vec<String>,prefs:KickStreamPreferences,
+                 lite_mode:bool) -> Result<Self,String> {
+        let monitor=KickMonitor::start(token,input,lite_mode)?;
         let identity=monitor.identity();
+        let lite_flag=Arc::clone(&monitor.lite_mode);
         let monitor=Arc::new(Mutex::new(monitor));
         let weak=Arc::downgrade(&monitor);
         let initial_selected=if input.is_empty() {Vec::new()} else {
@@ -432,7 +442,10 @@ impl KickSupervisor {
                 }
             })
             .map_err(|error|format!("Could not start Kick roster coordinator: {error}"))?;
-        Ok(Self { monitor,sender,stop,identity,coordinator:Some(coordinator) })
+        Ok(Self { monitor,sender,stop,lite_mode:lite_flag,identity,coordinator:Some(coordinator) })
+    }
+    pub fn set_lite_mode(&self, enabled: bool) {
+        self.lite_mode.store(enabled, Ordering::Release);
     }
     pub fn roster_publisher(&self)->KickRosterPublisher {
         KickRosterPublisher{sender:self.sender.clone()}
@@ -499,7 +512,8 @@ fn pause(stop: &AtomicBool, duration: Duration) {
 }
 fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry>>,
                 snapshot: Arc<Mutex<KickSnapshot>>, stop: Arc<AtomicBool>,
-                auth: Arc<AuthGate>, bandwidth: Arc<AccountBandwidth>) {
+                auth: Arc<AuthGate>, bandwidth: Arc<AccountBandwidth>,
+                lite_mode: Arc<AtomicBool>) {
     let client = match native_kick_viewer::new_client(&token) {
         Ok(client) => client,
         Err(error) => {
@@ -521,7 +535,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 "Kick auth rejected by viewer API (401/403); retries stopped".into()));
             return;
         }
-        match native_kick_viewer::channel_meta(&public_client, &slug) {
+        match native_kick_viewer::channel_meta(&public_client, &slug, &stop) {
             Ok(meta) => {
                 if stop.load(Ordering::Acquire) { return; }
                 failures = 0;
@@ -538,19 +552,28 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                     }
                     // Check a real balance even if a channel is offline, so
                     // previously earned points are not misrepresented as zero.
-                    let balance_result = native_kick_viewer::point_balance(&client, &slug, &token);
+                    let balance_result = auth.checked(|| {
+                        native_kick_viewer::point_balance(&client, &slug, &token, &stop)
+                    });
+                    if stop.load(Ordering::Acquire) { return; }
                     if let Ok(mut state) = telemetry.lock() {
                         match balance_result {
                             Ok(balance) => native_kick_viewer::observe_points(&mut state, balance),
                             Err(error) => state.error = Some(error),
                         }
                     }
+                    if auth.denied() {
+                        update_channel(&snapshot, &slug, &stop, |c| {
+                            c.error = Some("Kick private API denied authentication; requests paused".into());
+                        });
+                        return;
+                    }
                     pause(&stop, OFFLINE_POLL);
                     continue;
                 }
                 let result = native_kick_viewer::run_viewer(
                     &client, &slug, &meta, &telemetry, Arc::clone(&stop), &token, &auth,
-                    Arc::clone(&bandwidth));
+                    Arc::clone(&bandwidth), &lite_mode);
                 if let Ok(mut state) = telemetry.lock() {
                     state.ws_connected = false;
                     state.handshake_received = false;
@@ -579,6 +602,7 @@ fn channel_loop(token: String, slug: String, telemetry: Arc<Mutex<WatchTelemetry
                 pause(&stop, Duration::from_secs(delay));
             },
             Err(error) => {
+                if stop.load(Ordering::Acquire) { return; }
                 crate::logging::warn(&format!(
                     "Kick channel metadata lookup failed for {slug}: {error}"));
                 // Public metadata requests cannot prove that an account's
@@ -697,7 +721,7 @@ mod tests {
     #[test]
     fn can_start_waiting_for_official_kick_lives() {
         assert!(normalize_channels("").is_err()); // empty manual input
-        let monitor = KickMonitor::start("local-test-token".into(), "").unwrap();
+        let monitor = KickMonitor::start("local-test-token".into(), "", false).unwrap();
         assert!(monitor.snapshot().channels.is_empty());
         monitor.stop();
     }

@@ -46,6 +46,8 @@ pub(in crate::app) struct EstimateCache {
     pub(super) aoe_enabled:bool,
     pub(super) seasonal_type:Option<String>,
     pub(super) gym_signature:Vec<(String,u8)>,
+    pub(super) bestiary_signature:Vec<(String,u32)>,
+    pub(super) prey_signature:Vec<crate::native_atlas_models::PreyEffect>,
     /// Resolved per-hunt pacing profiles are part of the forecast key. The
     /// lightweight revision only tells us when this vector must be rebuilt.
     pub(super) pacing_revision:u64,
@@ -94,6 +96,11 @@ impl EstimateCache {
         let seasonal_type=view.seasonal_type.clone();
         let gym_signature=view.gym_podium.iter()
             .map(|(kind,place)|(kind.clone(),*place)).collect::<Vec<_>>();
+        let bestiary_signature=reference
+            .map(|r|native_atlas::bestiary_bp_by_type(view,r).into_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let prey_signature=crate::native_atlas_models::active_prey_effects(
+            view.automation.as_ref(),view.server_now);
         let rebuild_pacing=self.account!=Some(account) ||
             self.catalog_ptr!=catalog_ptr ||
             self.pacing_revision!=view.pacing_revision;
@@ -113,6 +120,8 @@ impl EstimateCache {
             self.aoe_enabled!=aoe_enabled ||
             self.seasonal_type!=seasonal_type ||
             self.gym_signature!=gym_signature ||
+            self.bestiary_signature!=bestiary_signature ||
+            self.prey_signature!=prey_signature ||
             pacing_changed;
         if full_changed {
             self.account=Some(account);
@@ -126,6 +135,8 @@ impl EstimateCache {
             self.aoe_enabled=aoe_enabled;
             self.seasonal_type=seasonal_type;
             self.gym_signature=gym_signature;
+            self.bestiary_signature=bestiary_signature;
+            self.prey_signature=prey_signature;
             self.live=live;
             self.refreshed=None;
             self.revision=self.revision.wrapping_add(1);

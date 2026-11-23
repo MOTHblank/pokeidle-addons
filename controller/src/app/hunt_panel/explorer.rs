@@ -278,6 +278,7 @@ pub(super) fn atlas_species_rows(
             }
         }
     }
+    let prey=models::active_prey_effects(view.automation.as_ref(),view.server_now);
     for (hunt,unlocked) in atlas_destinations(view,reference) {
         if filters.min_level>0 && hunt.level<filters.min_level
             || filters.max_level>0 && hunt.level>filters.max_level
@@ -285,6 +286,7 @@ pub(super) fn atlas_species_rows(
         {continue}
         let sum=hunt.species.iter().map(|s|s.weight.max(0.0)).sum::<f64>();
         if sum<=0.0 {continue}
+        let outland=hunt.area.eq_ignore_ascii_case("outland");
         let hunt_forecast=cache.get(&hunt.slug);
         // Only allocate a compact destination label if at least one species
         // actually passes the current filters.
@@ -316,7 +318,9 @@ pub(super) fn atlas_species_rows(
             let owned=known_roster.contains(&spawn.id);
             if filters.collection==AtlasCollection::InDepot && !owned ||
                filters.collection==AtlasCollection::NotInDepot && owned {continue}
-            let share=spawn.weight.max(0.0)/sum;
+            let share=models::effective_spawn_share(hunt,spawn.id,spawn.weight.max(0.0),sum,&prey);
+            let prey_cap=if outland {1.0} else {models::prey_capture_multiplier(&prey,spawn.id)};
+            let species_modifiers=scenario.modifiers.with_prey_capture(prey_cap);
             let forecast=hunt_forecast.clone();
             let mkt_value=reference.and_then(|r|native_atlas::mkt_sale_estimate(
                 r,spawn.id,hunt.level,
@@ -333,7 +337,7 @@ pub(super) fn atlas_species_rows(
                         .unwrap_or_else(||scenario.ball.wiki_efficiency());
                     let (stage,rarity)=native_atlas::capture_inputs(r,spawn.id);
                     models::capture_chance_for_stage(stage,rarity,efficiency,0.0)
-                }).map(|chance|(chance*scenario.modifiers.catch_factor()).min(0.10)),
+                }).map(|chance|(chance*species_modifiers.catch_factor()).min(0.10)),
                 AtlasSort::ShinyCaught=>forecast.as_ref()
                     .and_then(|f|reference.and_then(|r|{
                         let efficiency=view.ball_quotes.get(&scenario.ball.id())
@@ -343,8 +347,8 @@ pub(super) fn atlas_species_rows(
                         models::capture_scenario_with_stage(
                             stage,rarity,efficiency,f.kills_h,share,
                             scenario.accepted_fraction_override,
-                            hunt.area.eq_ignore_ascii_case("outland"),
-                            &scenario.modifiers)
+                            outland,
+                            &species_modifiers)
                     })).and_then(|estimate|estimate.shiny_caught_h),
                 AtlasSort::OutlandRare=>forecast.as_ref().and_then(|f|
                     models::rare_scenarios_with_gate_and_chances(

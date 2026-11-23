@@ -44,7 +44,7 @@ pub struct AccountBandwidth {
     traffic: Mutex<Traffic>,
 }
 impl AccountBandwidth {
-    fn record(&self, bytes: u64) {
+    pub(crate) fn record(&self, bytes: u64) {
         if bytes == 0 { return; }
         let Ok(mut traffic) = self.traffic.lock() else { return };
         let now = Instant::now();
@@ -109,9 +109,16 @@ impl<R: Read> Read for MeteredReader<'_, R> {
 impl<R: Read> Drop for MeteredReader<'_, R> {
     fn drop(&mut self) { self.account.record(self.bytes); }
 }
+struct FinishGuard(Arc<AtomicBool>);
+impl Drop for FinishGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
 pub struct MediaRunner {
     pub state: Arc<Mutex<MediaStatus>>,
     stop: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
 }
 impl MediaRunner {
     pub fn start(source: String, account_stop: Arc<AtomicBool>,
@@ -119,17 +126,22 @@ impl MediaRunner {
         let url = media_url(&source)?;
         let state = Arc::new(Mutex::new(MediaStatus::default()));
         let local_stop = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
         let worker_state = Arc::clone(&state);
         let worker_stop = Arc::clone(&local_stop);
+        let worker_finished = Arc::clone(&finished);
         native_kick_pool::submit_hls(Arc::clone(&local_stop),
-            move || run(url, account_stop, worker_stop, worker_state, bandwidth))?;
-        Ok(Self { state, stop: local_stop })
+            move || run(url, account_stop, worker_stop, worker_finished, worker_state, bandwidth))?;
+        Ok(Self { state, stop: local_stop, finished })
     }
     pub fn snapshot(&self) -> MediaStatus {
         self.state.lock().map(|s| s.clone()).unwrap_or_default()
     }
     pub fn active(&self) -> bool {
         self.snapshot().last_segment.is_some_and(|t| t.elapsed() < Duration::from_secs(25))
+    }
+    pub fn finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
     }
 }
 impl Drop for MediaRunner {
@@ -227,7 +239,9 @@ fn pause(stop: &AtomicBool, account_stop: &AtomicBool, delay: Duration) {
     }
 }
 fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
-       state: Arc<Mutex<MediaStatus>>, bandwidth: Arc<AccountBandwidth>) {
+       finished: Arc<AtomicBool>, state: Arc<Mutex<MediaStatus>>,
+       bandwidth: Arc<AccountBandwidth>) {
+    let _finish = FinishGuard(finished);
     let client = match Client::builder()
         .timeout(Duration::from_secs(18))
         .connect_timeout(Duration::from_secs(7))

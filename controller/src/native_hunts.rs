@@ -287,6 +287,8 @@ pub struct HuntView {
     pub bonuses: HuntBonuses,
     /// Best Gym podium place (1/2/3) for each elemental type.
     pub gym_podium: Arc<BTreeMap<String,u8>>,
+    /// Per-Pokédex-key defeat counts (`pokedex[key].k`) for Bestiary damage bonuses.
+    pub pokedex_kills: Arc<BTreeMap<u64,u64>>,
     pub measurements: HuntMeasurements,
     pub session: HuntSessionStats,
     pub sample_quality: String,
@@ -623,6 +625,7 @@ impl HuntIntel {
         // reconnect; never reuse cached settings from a previous socket.
         self.view.automation=None;
         self.view.seasonal_type=None;
+        self.view.pokedex_kills=Arc::new(BTreeMap::new());
         self.view.bicycle_rarity=None;
         self.view.bicycle_factor=None;
         self.bicycle_state=None;
@@ -984,8 +987,40 @@ impl HuntIntel {
 
         // State packets are deltas: only an explicit bicicleta field changes
         // the equipped bike. BookIdle follows the same merged-state contract.
-        if state.get("cheio").and_then(Value::as_bool)==Some(true) {
+        let is_full_state = state.get("cheio").and_then(Value::as_bool) == Some(true);
+        if is_full_state {
             self.bicycle_state=None;
+        }
+        // Pokédex defeat counts (`pokedex[key].k`) feed Bestiary type bonuses.
+        // Mirror shared/estado-delta.mjs: `cheio` or a full `pokedex` object
+        // replaces the map, while `dexMud`/`dexFora` patch it incrementally.
+        if let Some(raw_dex) = state.get("pokedex").and_then(Value::as_object) {
+            let mut kills = BTreeMap::new();
+            for (k_str, entry) in raw_dex {
+                if let (Ok(key), Some(k)) = (k_str.parse::<u64>(), entry.get("k").and_then(Value::as_u64)) {
+                    if k > 0 { kills.insert(key, k); }
+                }
+            }
+            self.view.pokedex_kills = Arc::new(kills);
+        } else if is_full_state {
+            self.view.pokedex_kills = Arc::new(BTreeMap::new());
+        }
+        if state.get("dexMud").is_some() || state.get("dexFora").is_some() {
+            let kills = Arc::make_mut(&mut self.view.pokedex_kills);
+            if let Some(mud) = state.get("dexMud").and_then(Value::as_object) {
+                for (k_str, entry) in mud {
+                    if let Ok(key) = k_str.parse::<u64>() {
+                        let k = entry.get("k").and_then(Value::as_u64).unwrap_or(0);
+                        if k > 0 { kills.insert(key, k); } else { kills.remove(&key); }
+                    }
+                }
+            }
+            if let Some(fora) = state.get("dexFora").and_then(Value::as_array) {
+                for item in fora {
+                    let key = item.as_u64().or_else(|| item.as_str().and_then(|s| s.parse::<u64>().ok()));
+                    if let Some(key) = key { kills.remove(&key); }
+                }
+            }
         }
         if let Some(raw)=state.get("bicicleta") {
             let before=self.view.bicycle_factor.unwrap_or(1.0);
@@ -1385,6 +1420,7 @@ impl HuntIntel {
                 self.bicycle_state=None;
                 self.bicycle_factors=bicycle_factors_from_welcome(frame.get("bicicletas"));
                 self.view.gym_podium=Arc::new(BTreeMap::new());
+                self.view.pokedex_kills=Arc::new(BTreeMap::new());
                 self.twitch_xp_until=0;
                 self.twitch_capture_until=0;
                 self.twitch_shiny_until=0;
@@ -1592,6 +1628,18 @@ impl HuntIntel {
                 }
             }
             _ => {}
+        }
+        if let Some(events) = frame.get("ev").and_then(Value::as_array) {
+            for e in events {
+                if e.get("k").and_then(Value::as_str) == Some("autoVendaDepot") {
+                    if let Some(auto) = self.view.automation.as_mut().and_then(Value::as_object_mut) {
+                        auto.insert(
+                            "autoVendaDepot".into(),
+                            Value::Bool(e.get("ativo").and_then(Value::as_bool) == Some(true)),
+                        );
+                    }
+                }
+            }
         }
         // Update battle-derived rates on every relevant server frame. Without
         // this, the old dashboard showed zero/blank XP until an estado arrived.
@@ -2714,6 +2762,20 @@ mod tests {
         assert_eq!(intel.view.session.captures,2);
         assert_eq!(intel.view.session.balls_used.get(&3),Some(&2));
         assert_eq!(intel.view.session.ball_captures,1);
+    }
+    #[test]
+    fn pokedex_kills_track_full_snapshots_deltas_and_disconnect(){
+        let now=Instant::now();
+        let mut intel=HuntIntel::new();
+        intel.ingest(r#"{"t":"welcome","estado":{"cheio":true,"pokedex":{"4":{"k":25000,"c":3},"25":{"k":500,"c":1}}}}"#,now);
+        assert_eq!(intel.view.pokedex_kills.get(&4),Some(&25_000));
+        assert_eq!(intel.view.pokedex_kills.get(&25),Some(&500));
+        intel.ingest(r#"{"t":"estado","estado":{"dexMud":{"4":{"k":150000,"c":3},"6":{"k":500000,"c":1}},"dexFora":["25"]}}"#,now);
+        assert_eq!(intel.view.pokedex_kills.get(&4),Some(&150_000));
+        assert_eq!(intel.view.pokedex_kills.get(&6),Some(&500_000));
+        assert_eq!(intel.view.pokedex_kills.get(&25),None);
+        intel.on_disconnect();
+        assert!(intel.view.pokedex_kills.is_empty());
     }
 
 }

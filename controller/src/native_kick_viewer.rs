@@ -2,6 +2,7 @@
 //! Kick's public Developer API). This is an undocumented upstream interface;
 //! any endpoint can change without notice. Credentials remain memory-only.
 use crate::native_kick_hls::{AccountBandwidth, MediaRunner, MediaStatus};
+use crate::native_kick_hls_lite::LiteMediaRunner;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -121,11 +122,11 @@ fn get_value(client: &Client, url: &str) -> Result<Value, String> {
         code => Err(format!("Kick account API failed (HTTP {code})")),
     }
 }
-pub fn channel_meta(client: &Client, slug: &str) -> Result<ChannelMeta, String> {
+pub fn channel_meta(client: &Client, slug: &str, stop: &AtomicBool) -> Result<ChannelMeta, String> {
     let url = format!("https://kick.com/api/v2/channels/{slug}");
     // Kick's unofficial v2 endpoints can reject reqwest TLS even when a
     // browser succeeds. Use short-lived system curl for the metadata read.
-    let data = match crate::native_kick_http::get(&url, None, &[]) {
+    let data = match crate::native_kick_http::get_cancelable(&url, None, &[], Some(stop)) {
         Ok((200, data)) => data,
         Ok((401 | 403, _)) => return Err(
             "Kick channel metadata blocked (HTTP 401/403; HTTP client or site challenge)".into()),
@@ -174,8 +175,8 @@ fn parse_points(value: &Value) -> Option<u64> {
 /// system HTTP transport as public lookups. Only if curl is absent do we
 /// fall back to the existing reqwest client. Never expose a Bearer in argv.
 fn private_get(client: &Client, url: &str, bearer: &str,
-               extra_headers: &[(&str, String)]) -> Result<(u16, Value), String> {
-    match crate::native_kick_http::get(url, Some(bearer), extra_headers) {
+               extra_headers: &[(&str, String)], stop: &AtomicBool) -> Result<(u16, Value), String> {
+    match crate::native_kick_http::get_cancelable(url, Some(bearer), extra_headers, Some(stop)) {
         Ok(value) => Ok(value),
         Err(error) if error == "curl unavailable" => {
             let mut request = client.get(url);
@@ -192,9 +193,9 @@ fn private_get(client: &Client, url: &str, bearer: &str,
         Err(error) => Err(error),
     }
 }
-pub fn point_balance(client: &Client, slug: &str, bearer: &str) -> Result<Option<u64>, String> {
+pub fn point_balance(client: &Client, slug: &str, bearer: &str, stop: &AtomicBool) -> Result<Option<u64>, String> {
     let url = format!("https://kick.com/api/v2/channels/{slug}/points");
-    let (status, response) = private_get(client, &url, bearer, &[])?;
+    let (status, response) = private_get(client, &url, bearer, &[], stop)?;
     match status {
         200 => Ok(parse_points(&response)),
         // A channel profile contains the creator's totals, NOT the viewer's
@@ -218,7 +219,7 @@ pub fn observe_points(status: &mut WatchTelemetry, balance: Option<u64>) {
         status.last_points = Some(Instant::now());
     }
 }
-fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str) -> Result<String, String> {
+fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str, stop: &AtomicBool) -> Result<String, String> {
     let headers = [
         ("X-Chatroom", meta.channel_id.to_string()),
         ("X-User-Id", meta.user_id.to_string()),
@@ -228,7 +229,7 @@ fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str) -> Result<Str
             "e1393935a959b4020a4491574f6490129f678acdaa92760471263db43487f823"
                 .to_owned()),
     ];
-    let (code, response) = private_get(client, TOKEN_ENDPOINT, bearer, &headers)?;
+    let (code, response) = private_get(client, TOKEN_ENDPOINT, bearer, &headers, stop)?;
     match code {
         200 => {},
         401 => return Err("Kick viewer-token rejected account authorization (401)".into()),
@@ -243,7 +244,7 @@ fn viewer_token(client: &Client, meta: &ChannelMeta, bearer: &str) -> Result<Str
     Ok(token.to_owned())
 }
 type KickSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
-fn ws_connect(token: &str) -> Result<KickSocket, String> {
+fn ws_connect(token: &str, stop: &AtomicBool) -> Result<KickSocket, String> {
     crate::native_tls::ensure()?;
     let mut url = reqwest::Url::parse("wss://websockets.kick.com/viewer/v1/connect")
         .map_err(|_| "Invalid Kick WebSocket URL".to_owned())?;
@@ -252,6 +253,9 @@ fn ws_connect(token: &str) -> Result<KickSocket, String> {
     for addr in (KICK_WS_HOST, 443).to_socket_addrs()
         .map_err(|_| "Could not resolve Kick WebSocket".to_owned())?
     {
+        if stop.load(Ordering::Acquire) {
+            return Err("Could not connect to Kick WebSocket".into());
+        }
         if let Ok(tcp) = TcpStream::connect_timeout(&addr, Duration::from_secs(7)) {
             socket = Some(tcp);
             break;
@@ -285,34 +289,80 @@ fn watch_event(meta: &ChannelMeta) -> Value {
         "livestream_id":meta.stream_id
     }}})
 }
+enum ActiveMedia {
+    Standard(MediaRunner),
+    Lite(LiteMediaRunner),
+}
+impl ActiveMedia {
+    fn start(
+        source: String,
+        account_stop: Arc<AtomicBool>,
+        bandwidth: Arc<AccountBandwidth>,
+        lite: bool,
+    ) -> Result<Self, String> {
+        if lite {
+            Ok(Self::Lite(LiteMediaRunner::start(source, account_stop, bandwidth)?))
+        } else {
+            Ok(Self::Standard(MediaRunner::start(source, account_stop, bandwidth)?))
+        }
+    }
+    fn snapshot(&self) -> MediaStatus {
+        match self {
+            Self::Standard(runner) => runner.snapshot(),
+            Self::Lite(runner) => runner.snapshot(),
+        }
+    }
+    fn active(&self) -> bool {
+        match self {
+            Self::Standard(runner) => runner.active(),
+            Self::Lite(runner) => runner.active(),
+        }
+    }
+    fn finished(&self) -> bool {
+        match self {
+            Self::Standard(runner) => runner.finished(),
+            Self::Lite(runner) => runner.finished(),
+        }
+    }
+}
+
 /// Session begins after the channel is verified live; it sends tracking only
 /// while current HLS segments are arriving. "Connected" alone never counts
 /// as successful point earning.
 pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                   status: &Arc<Mutex<WatchTelemetry>>,
                   stop: Arc<AtomicBool>, bearer: &str,
-                  auth: &AuthGate, bandwidth: Arc<AccountBandwidth>) -> Result<(), String> {
+                  auth: &AuthGate, bandwidth: Arc<AccountBandwidth>,
+                  lite_mode: &AtomicBool) -> Result<(), String> {
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
     if stop.load(Ordering::Acquire) { return Ok(()); }
-    let token = auth.checked(|| viewer_token(client, meta, bearer))?;
+    let token = auth.checked(|| viewer_token(client, meta, bearer, &stop))?;
     if stop.load(Ordering::Acquire) { return Ok(()); }
-    let mut socket = ws_connect(&token)?;
+    let mut socket = ws_connect(&token, &stop)?;
     if stop.load(Ordering::Acquire) { return Ok(()); }
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
     if stop.load(Ordering::Acquire) { return Ok(()); }
-    let media = MediaRunner::start(meta.playback_url.clone(), Arc::clone(&stop), bandwidth)?;
+    let session_lite = lite_mode.load(Ordering::Acquire);
+    let media = ActiveMedia::start(
+        meta.playback_url.clone(),
+        Arc::clone(&stop),
+        bandwidth,
+        session_lite,
+    )?;
     let started = Instant::now();
     let mut last_handshake = started;
     let mut last_event = started;
-    let mut last_points = started - POINTS_GAP;
+    let mut last_points: Option<Instant> = None;
     if let Ok(mut state) = status.lock() {
         state.ws_connected = true;
         state.error = None;
     }
     while !stop.load(Ordering::Relaxed)
+        && !auth.denied()
+        && lite_mode.load(Ordering::Acquire) == session_lite
         && started.elapsed() < Duration::from_secs(SESSION_SECONDS)
     {
         if last_handshake.elapsed() >= HANDSHAKE_GAP {
@@ -331,8 +381,8 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
             }
             last_event = Instant::now();
         }
-        if last_points.elapsed() >= POINTS_GAP {
-            match auth.checked(|| point_balance(client, slug, bearer)) {
+        if last_points.is_none_or(|at| at.elapsed() >= POINTS_GAP) {
+            match auth.checked(|| point_balance(client, slug, bearer, &stop)) {
                 Ok(balance) => {
                     if let Ok(mut state) = status.lock() {
                         observe_points(&mut state, balance);
@@ -342,9 +392,10 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                     if let Ok(mut state) = status.lock() {
                         state.error = Some(error);
                     }
+                    if auth.denied() { break; }
                 }
             }
-            last_points = Instant::now();
+            last_points = Some(Instant::now());
         }
         match socket.read() {
             Ok(Message::Text(message)) => {
@@ -373,6 +424,12 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {},
             Err(_) => return Err("Kick viewer WebSocket disconnected".into()),
             _ => {},
+        }
+        // Fail fast if the HLS runner already exited after repeated errors,
+        // instead of waiting out the full 65-second stall window.
+        if media.finished() {
+            return Err(media.snapshot().error
+                .unwrap_or_else(|| "Kick HLS transport stalled".into()));
         }
         // Stop unsuccessful transport instead of reporting false active status.
         if started.elapsed() > Duration::from_secs(65)

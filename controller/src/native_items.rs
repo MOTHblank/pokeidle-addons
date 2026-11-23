@@ -6,6 +6,8 @@ const LIMIT:u64=2*1024*1024;
 #[derive(Clone,Debug)]
 pub struct ItemMeta {
     pub name: String,
+    /// Upstream `items.json` category (e.g. `"stone"`, `"heal"`).
+    pub category: Option<String>,
     /// Relative game artwork path or public URL; never trusted blindly.
     pub icon: Option<String>,
     /// Only an explicitly positive price from PokéIdle's public catalog.
@@ -32,6 +34,14 @@ impl ItemCatalog {
             .or_else(||server_item_name(id).map(str::to_owned))
             .unwrap_or_else(||format!("Item #{id}"))
     }
+    /// Upstream `shared/item-preso.mjs` (`categoriaPrendeItem`):
+    /// `stone` category items become account-bound when purchased on the market.
+    pub fn is_market_bound(&self, id: u64) -> bool {
+        self.items
+            .get(&id)
+            .and_then(|m| m.category.as_deref())
+            .is_some_and(|cat| cat == "stone")
+    }
 }
 pub fn display_name(catalog:Option<&ItemCatalog>,id:u64)->String {
     catalog.and_then(|catalog|catalog.items.get(&id).map(|m|m.name.clone()))
@@ -51,9 +61,12 @@ pub fn parse(source:&str)->Result<ItemCatalog,String> {
         let price_gold = item.get("preco").or_else(||item.get("npcPrice"))
             .or_else(||item.get("priceGold"))
             .and_then(Value::as_u64).filter(|price|*price>0);
+        let category=item.get("category").or_else(||item.get("categoria"))
+            .and_then(Value::as_str).map(str::trim)
+            .filter(|c|!c.is_empty()).map(str::to_owned);
         let icon=item.get("icon").and_then(Value::as_str)
             .filter(|icon| !icon.trim().is_empty()).map(str::to_owned);
-        items.insert(id,ItemMeta{name:name.to_owned(),icon,price_gold});
+        items.insert(id,ItemMeta{name:name.to_owned(),category,icon,price_gold});
     }
     if items.is_empty(){return Err("Public item catalog is empty".into());}
     Ok(ItemCatalog{items})
@@ -94,5 +107,12 @@ mod tests {
             "category":"heal","preco":40},{"id":201,"name":"Potion without price"}]}"#).unwrap();
         assert_eq!(priced.items[&200].price_gold,Some(40));
         assert_eq!(priced.items[&201].price_gold,None);
+        let stones=parse(r#"{"items":[
+            {"id":10,"name":"Fire Stone","category":"stone"},
+            {"id":11,"name":"Potion","category":"heal"}
+        ]}"#).unwrap();
+        assert!(stones.is_market_bound(10));
+        assert!(!stones.is_market_bound(11));
+        assert!(!stones.is_market_bound(999));
     }
 }

@@ -1,4 +1,4 @@
-# PokéIdle species -> canonical looktype -> name; upstream v1.314.2.
+# PokéIdle species -> canonical looktype -> name; upstream v1.465.1.
 # Compact identity index only; artwork is loaded on demand.
 # pokeId\tlooktype\tname
 1	60001	Bulbasaur
@@ -551,6 +551,7 @@
 552	60552	Krokorok
 553	60553	Krookodile
 554	60554	Darumaka
+555	60555	Darmanitan
 556	60556	Maractus
 557	60557	Dwebble
 558	60558	Crustle
@@ -714,6 +715,7 @@
 717	60717	Yveltal
 718	60718	Zygarde
 719	60719	Diancie
+720	60720	Hoopa
 721	60721	Volcanion
 722	60722	Rowlet
 723	60723	Dartrix
@@ -758,6 +760,7 @@
 762	60762	Steenee
 763	60763	Tsareena
 764	60764	Comfey
+765	60765	Oranguru
 766	60766	Passimian
 767	60767	Wimpod
 768	60768	Golisopod
@@ -767,6 +770,7 @@
 772	60772	Type: Null
 773	60773	Silvally
 774	60774	Minior
+775	60775	Komala
 776	60776	Turtonator
 777	60777	Togedemaru
 778	60778	Mimikyu
@@ -845,6 +849,8 @@
 851	60851	Centiskorch
 852	60852	Clobbopus
 853	60853	Grapploct
+854	60854	Sinistea
+855	60855	Polteageist
 856	60856	Hatenna
 857	60857	Hattrem
 858	60858	Hatterene
@@ -863,6 +869,7 @@
 871	60871	Pincurchin
 872	60872	Snom
 873	60873	Frosmoth
+874	60874	Stonjourner
 875	60875	Eiscue
 876	60876	Indeedee
 877	60877	Morpeko
@@ -893,6 +900,7 @@
 902	60902	Basculegion
 903	60903	Sneasler
 904	60904	Overqwil
+905	60905	Enamorus
 906	60906	Sprigatito
 907	60907	Floragato
 908	60908	Meowscarada
@@ -924,6 +932,7 @@
 934	60934	Garganacl
 935	60935	Charcadet
 936	60936	Armarouge
+937	60937	Ceruledge
 938	60938	Tadbulb
 939	60939	Bellibolt
 940	60940	Wattrel
@@ -950,6 +959,7 @@
 961	60961	Wugtrio
 962	60962	Bombirdier
 963	60963	Finizen
+964	60964	Palafin
 965	60965	Varoom
 966	60966	Revavroom
 967	60967	Cyclizar
@@ -1058,6 +1068,11 @@
 2045	60164	Brave Noctowl
 2046	60018	Furious Pidgeot
 2047	60105	Ancient Marowak
+2052	60547	Furious Whimsicott
+2054	60454	Toxic Toxicroak
+2056	60429	Banshee Mismagius
+2057	60699	Freezing Aurorus
+2058	60560	War Scrafty
 3003	80003	Mega Venusaur
 3006	80006	Mega Charizard Y
 3009	80009	Mega Blastoise
@@ -1101,6 +1116,7 @@
 3358	80358	Mega Chimecho
 3359	80359	Mega Absol
 3362	80362	Mega Glalie
+3373	80373	Mega Salamence
 3376	80376	Mega Metagross
 3380	80380	Mega Latias
 3381	80381	Mega Latios
@@ -1116,7 +1132,9 @@
 3478	80478	Mega Froslass
 3485	80485	Mega Heatran
 3491	80491	Mega Darkrai
+3500	80500	Mega Emboar
 3530	80530	Mega Excadrill
+3531	80531	Mega Audino
 3545	80545	Mega Scolipede
 3560	80560	Mega Scrafty
 3604	80604	Mega Eelektross
@@ -1140,6 +1158,8 @@
 3801	80801	Mega Magearna
 3807	80807	Mega Zeraora
 3870	80870	Mega Falinks
+3952	80952	Mega Scovillain
+3970	80970	Mega Glimmora
 3978	80978	Mega Tatsugiri
 3998	80998	Mega Baxcalibur
 4019	64019	Alolan Rattata
@@ -1152,8 +1172,10 @@
 4050	64050	Alolan Diglett
 4051	64051	Alolan Dugtrio
 4052	64052	Alolan Meowth
+4053	64053	Alolan Persian
 4074	64074	Alolan Geodude
 4075	64075	Alolan Graveler
+4076	64076	Alolan Golem
 4088	64088	Alolan Grimer
 4089	64089	Alolan Muk
 4103	64103	Alolan Exeggutor
@@ -1195,15 +1217,23 @@
 6724	66724	Hisuian Decidueye
 7128	67128	Paldean Tauros
 7194	67194	Paldean Wooper
+8017	68017	Ogerpon Hearthflame
 8128	68128	Paldean Tauros Blaze
 8351	68351	Castform Rainy
 8386	68386	Deoxys Attack
+8413	68413	Wormadam Sandy
 8479	68479	Heat Rotom
+8483	68483	Dialga Origin
+8484	68484	Palkia Origin
+8487	68487	Giratina Origin
+8492	68492	Shaymin Sky
+8555	68555	Darmanitan Zen
 8641	68641	Tornadus Therian
 8642	68642	Thundurus Therian
 8645	68645	Landorus Therian
 8646	68646	White Kyurem
 8647	68647	Keldeo Resolute
+8648	68648	Meloetta Pirouette
 8681	68681	Aegislash Blade
 8718	68718	Zygarde 10%
 8720	68720	Hoopa Unbound
@@ -1211,26 +1241,38 @@
 8745	68745	Lycanroc Midnight
 8746	68746	Wishiwashi School
 8774	68774	Minior Core
+8800	68800	Necrozma Dawn Wings
 8888	68888	Zacian Crowned
 8889	68889	Zamazenta Crowned
+8898	68898	Calyrex Ice Rider
 8901	68901	Bloodmoon Ursaluna
 8902	68902	Basculegion Female
 8905	68905	Enamorus Therian
 8964	68964	Palafin Hero
 9006	83006	Mega Charizard X
+9017	69017	Ogerpon Wellspring
+9026	83026	Mega Raichu X
 9128	69128	Paldean Tauros Aqua
 9150	83150	Mega Mewtwo X
 9351	69351	Castform Snowy
+9359	83359	Mega Absol Z
 9386	69386	Deoxys Defense
+9413	69413	Wormadam Trash
+9445	83445	Mega Garchomp Z
 9448	83448	Mega Lucario Z
 9479	69479	Wash Rotom
+9555	69555	Galarian Darmanitan Zen
+9646	69646	Black Kyurem
 9718	69718	Zygarde Complete
 9741	69741	Oricorio Pa'u
 9745	69745	Lycanroc Dusk
+9800	69800	Necrozma Dusk Mane
+9898	69898	Calyrex Shadow Rider
 11351	71351	Castform Sunny
 11386	71386	Deoxys Speed
 11479	71479	Frost Rotom
 11741	71741	Oricorio Sensu
+12017	72017	Ogerpon Cornerstone
 12479	72479	Fan Rotom
 13252	60252	Treecko
 13253	60253	Grovyle

@@ -1,4 +1,4 @@
-# Upstream v1.398.1 Mega metadata (shared/megas.mjs); compact, no visual assets.
+# Upstream v1.465.1 Mega metadata (shared/megas.mjs); compact, no visual assets.
 # pokeId\tbaseDex\tname\ttype1\ttype2\thp\tatk\tdef\tspAtk\tspDef\tspeed
 3003	3	Mega Venusaur	GRASS	POISON	80	100	123	122	120	80
 3006	6	Mega Charizard Y	FIRE	FLYING	78	104	78	159	115	100
@@ -86,11 +86,12 @@
 3807	807	Mega Zeraora	ELECTRIC		88	157	75	147	80	153
 3870	870	Mega Falinks	FIGHTING		65	135	135	70	65	100
 3952	952	Mega Scovillain	GRASS	FIRE	65	138	85	138	85	75
+3970	970	Mega Glimmora	ROCK	POISON	83	90	105	150	96	101
 3978	978	Mega Tatsugiri	DRAGON	WATER	68	65	90	135	125	92
 3998	998	Mega Baxcalibur	DRAGON	ICE	115	175	117	105	101	87
 9006	6	Mega Charizard X	FIRE	DRAGON	78	130	111	130	85	100
 9026	26	Mega Raichu X	ELECTRIC		60	135	95	90	95	110
 9150	150	Mega Mewtwo X	PSYCHIC	FIGHTING	106	190	100	154	100	130
+9359	359	Mega Absol Z	DARK	GHOST	65	154	60	75	60	151
 9445	445	Mega Garchomp Z	DRAGON		108	130	85	141	85	151
 9448	448	Mega Lucario Z	FIGHTING	STEEL	70	100	70	164	70	151
-3970	970	Mega Glimmora	ROCK	POISON	83	90	105	150	96	101

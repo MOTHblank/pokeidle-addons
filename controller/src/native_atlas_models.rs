@@ -16,6 +16,8 @@ pub struct Modifiers {
     pub catch_event_pct:f64, pub shiny_event_pct:f64,
     /// Authoritative timed Twitch/Kick factors from the current game state.
     pub live_capture_multiplier:f64, pub live_shiny_multiplier:f64,
+    /// Per-species Prey Capture Boost multiplier (`1.0`..`1.10`, outside Safari/Outland).
+    pub prey_capture_multiplier:f64,
     pub lure:bool,
     pub loot:f64, pub guild:f64, pub drop_event:f64, pub kick_drop:f64,
 }
@@ -24,19 +26,31 @@ impl Default for Modifiers {
         Self {capture_boost:false,shiny_boost:false,kick_capture:false,
             kick_shiny:false,catch_event_pct:0.0,shiny_event_pct:0.0,
             live_capture_multiplier:1.0,live_shiny_multiplier:1.0,
+            prey_capture_multiplier:1.0,
             lure:false,loot:1.0,guild:1.0,drop_event:1.0,kick_drop:1.0}
     }
 }
 impl Modifiers {
+    pub fn with_prey_capture(&self, multiplier: f64) -> Self {
+        let mut next = self.clone();
+        next.prey_capture_multiplier = if multiplier.is_finite() && multiplier >= 1.0 {
+            multiplier
+        } else {
+            1.0
+        };
+        next
+    }
     pub fn valid(&self)->bool {
         [self.catch_event_pct,self.shiny_event_pct].iter()
             .all(|v|v.is_finite()&&(0.0..=1000.0).contains(v))
         && [self.live_capture_multiplier,self.live_shiny_multiplier,
+            self.prey_capture_multiplier,
             self.loot,self.guild,self.drop_event,self.kick_drop].iter()
             .all(|v|v.is_finite()&&(1.0..=1000.0).contains(v))
     }
     pub fn catch_factor(&self)->f64 {
         self.live_capture_multiplier
+        *self.prey_capture_multiplier
         *(if self.capture_boost {2.0}else{1.0})
         *(1.0+self.catch_event_pct/100.0)
         *(if self.kick_capture {1.15}else{1.0})
@@ -313,6 +327,227 @@ pub fn retrospective_rate(rewards:u64,seconds:u64)->Option<f64>{
     Some(rewards as f64*3600.0/seconds as f64)
 }
 
+// Upstream shared/prey.mjs + shared/dia-sazonal.mjs: up to 2 daily Prey cards
+// (`automation.prey`) grant per-species PvE modifiers on ordinary map hunts.
+pub const PREY_MAX_EXTRAS: u32 = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreyBonus {
+    Damage,
+    Defense,
+    Capture,
+    Spawn,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreyEffect {
+    pub card: u8,
+    pub species_id: u64,
+    pub bonus: PreyBonus,
+    pub stars: u8,
+    pub value: u32,
+}
+
+/// Exact `chaveDoDiaSazonal(t)` from upstream `shared/dia-sazonal.mjs`:
+/// `DESLOCAMENTO_MS = FUSO_BRASILIA_MS (3h) - ANTECIPACAO_SAZONAL_MS (6h) = -3h`,
+/// so `t - DESLOCAMENTO_MS = t + 3h` flips the UTC date at 18:00 Brasília (21:00 UTC).
+pub fn seasonal_day_key(ms: u64) -> String {
+    const SHIFT_MS: u64 = 3 * 3_600_000;
+    const DAY_MS: u64 = 86_400_000;
+    let days = (ms.saturating_add(SHIFT_MS) / DAY_MS) as i64;
+    // Howard Hinnant's civil-from-days algorithm (UTC proleptic Gregorian).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    format!("{year:04}-{m:02}-{d:02}")
+}
+
+fn prey_value(bonus: PreyBonus, stars: u8) -> u32 {
+    if !(1..=5).contains(&stars) { return 0; }
+    let s = u32::from(stars);
+    match bonus {
+        PreyBonus::Damage | PreyBonus::Defense => s * 10,
+        PreyBonus::Capture => s * 2,
+        PreyBonus::Spawn => s,
+    }
+}
+
+fn json_positive_id(v: &serde_json::Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return (n > 0).then_some(n);
+    }
+    if let Some(s) = v.as_str() {
+        if let Ok(n) = s.trim().parse::<u64>() {
+            return (n > 0).then_some(n);
+        }
+    }
+    None
+}
+
+/// Exact `efeitosDoPrey(automation, chaveDoDiaSazonal(t))` from `shared/prey.mjs`.
+pub fn active_prey_effects(
+    automation: Option<&serde_json::Value>,
+    server_now_ms: Option<u64>,
+) -> Vec<PreyEffect> {
+    let Some(auto) = automation.and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let Some(prey) = auto.get("prey").and_then(serde_json::Value::as_object) else {
+        return Vec::new();
+    };
+    let now_ms = server_now_ms.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    });
+    let expected_day = seasonal_day_key(now_ms);
+    if prey.get("dia").and_then(serde_json::Value::as_str) != Some(expected_day.as_str()) {
+        return Vec::new();
+    }
+    let card2_unlocked = auto
+        .get("preyCartela2")
+        .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok())))
+        .is_some_and(|n| n.is_finite() && n > 0.0);
+    let unlocked = if card2_unlocked { 2usize } else { 1usize };
+    let Some(cards) = prey.get("cartelas").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (idx, raw) in cards.iter().take(unlocked).enumerate() {
+        let Some(card) = raw.as_object() else { continue };
+        let Some(raw_list) = card.get("lista").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let mut lista = Vec::new();
+        let mut list_valid = !raw_list.is_empty() && raw_list.len() <= 9;
+        for entry in raw_list {
+            let Some(id) = json_positive_id(entry) else {
+                list_valid = false;
+                break;
+            };
+            if !lista.contains(&id) {
+                lista.push(id);
+            }
+        }
+        if !list_valid || lista.is_empty() || lista.len() > 9 {
+            continue;
+        }
+        let Some(pk) = card.get("pk").and_then(json_positive_id) else {
+            continue;
+        };
+        if !lista.contains(&pk) {
+            continue;
+        }
+        let Some(bonus) = card.get("bonus").and_then(serde_json::Value::as_str).and_then(|b| match b {
+            "dano" => Some(PreyBonus::Damage),
+            "defesa" => Some(PreyBonus::Defense),
+            "captura" => Some(PreyBonus::Capture),
+            "spawn" => Some(PreyBonus::Spawn),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(stars) = card
+            .get("est")
+            .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok())))
+            .filter(|s| (1..=5).contains(s))
+            .map(|s| s as u8)
+        else {
+            continue;
+        };
+        out.push(PreyEffect {
+            card: idx as u8,
+            species_id: pk,
+            bonus,
+            stars,
+            value: prey_value(bonus, stars),
+        });
+    }
+    out
+}
+
+pub fn prey_damage_multiplier(effects: &[PreyEffect], species_id: u64) -> f64 {
+    let mut m = 1.0;
+    for e in effects {
+        if e.bonus == PreyBonus::Damage && e.species_id == species_id {
+            m *= 1.0 + e.value as f64 / 100.0;
+        }
+    }
+    m
+}
+
+pub fn prey_defense_multiplier(effects: &[PreyEffect], species_id: u64) -> f64 {
+    let mut m = 1.0;
+    for e in effects {
+        if e.bonus == PreyBonus::Defense && e.species_id == species_id {
+            m *= 1.0 - e.value as f64 / 100.0;
+        }
+    }
+    m
+}
+
+pub fn prey_capture_multiplier(effects: &[PreyEffect], species_id: u64) -> f64 {
+    let mut m = 1.0;
+    for e in effects {
+        if e.bonus == PreyBonus::Capture && e.species_id == species_id {
+            m *= 1.0 + e.value as f64 / 100.0;
+        }
+    }
+    m
+}
+
+pub fn prey_extra_spawns(effects: &[PreyEffect], species_id: u64) -> u32 {
+    let mut total = 0u32;
+    for e in effects {
+        if e.bonus == PreyBonus::Spawn && e.species_id == species_id {
+            total = total.saturating_add(e.value);
+        }
+    }
+    total.min(PREY_MAX_EXTRAS)
+}
+
+/// Effective per-species spawn share in a hunt wave after applying Prey Extra
+/// Spawns (`+1..+5` on top of the normal wave in ordinary map hunts).
+pub fn effective_spawn_share(
+    hunt: &crate::native_hunts::HuntEntry,
+    species_id: u64,
+    base_weight: f64,
+    total_weight: f64,
+    prey: &[PreyEffect],
+) -> f64 {
+    if !(base_weight > 0.0) || !(total_weight > 0.0) {
+        return 0.0;
+    }
+    if hunt.area.eq_ignore_ascii_case("outland") || prey.is_empty() {
+        return base_weight / total_weight;
+    }
+    let base_spawns = if hunt.total_spawns > 0 {
+        hunt.total_spawns as f64
+    } else {
+        total_weight
+    };
+    let total_extra: f64 = hunt
+        .species
+        .iter()
+        .filter(|s| s.weight > 0.0)
+        .map(|s| prey_extra_spawns(prey, s.id) as f64)
+        .sum();
+    if total_extra <= 0.0 {
+        return base_weight / total_weight;
+    }
+    let base_count = base_spawns * (base_weight / total_weight);
+    let extra = prey_extra_spawns(prey, species_id) as f64;
+    (base_count + extra) / (base_spawns + total_extra)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,5 +654,46 @@ mod tests {
         assert_eq!(retrospective_rate(2000,0),None);
         assert_eq!(retrospective_rate(2000,3600),Some(2000.0));
         assert!((at_least_one(0.01,100.0).unwrap()-(1.0-0.99_f64.powf(100.0))).abs()<1e-12);
+    }
+    #[test] fn prey_day_key_flips_at_18h_brasilia_and_validates_cards(){
+        // 2026-03-15 20:59:59 UTC (17:59:59 BRT) -> 2026-03-15
+        let before_flip = 1_773_608_399_000u64;
+        assert_eq!(seasonal_day_key(before_flip), "2026-03-15");
+        // 2026-03-15 21:00:00 UTC (18:00:00 BRT) -> 2026-03-16
+        assert_eq!(seasonal_day_key(before_flip + 1_000), "2026-03-16");
+
+        let auto = serde_json::json!({
+            "preyCartela2": 0,
+            "prey": {
+                "dia": "2026-03-15",
+                "cartelas": [
+                    {"lista": [25, 19], "pk": 25, "bonus": "captura", "est": 5, "n": [0, 0, 0]},
+                    {"lista": [19, 16], "pk": 19, "bonus": "dano", "est": 4, "n": [0, 0, 0]}
+                ]
+            }
+        });
+        // Card 2 locked -> only card 0 active.
+        let fx = active_prey_effects(Some(&auto), Some(before_flip));
+        assert_eq!(fx.len(), 1);
+        assert!((prey_capture_multiplier(&fx, 25) - 1.10).abs() < 1e-12);
+        assert_eq!(prey_damage_multiplier(&fx, 19), 1.0);
+
+        // Next seasonal day -> expired, no active cards.
+        assert!(active_prey_effects(Some(&auto), Some(before_flip + 1_000)).is_empty());
+
+        // Unlock card 2 -> both active.
+        let mut auto2 = auto.clone();
+        auto2["preyCartela2"] = serde_json::json!(1);
+        let fx2 = active_prey_effects(Some(&auto2), Some(before_flip));
+        assert_eq!(fx2.len(), 2);
+        assert!((prey_damage_multiplier(&fx2, 19) - 1.40).abs() < 1e-12);
+
+        // Prey capture boosts catch chance before 10% cap without altering shiny chance.
+        let base_mods = Modifiers::default();
+        let prey_mods = base_mods.with_prey_capture(prey_capture_multiplier(&fx2, 25));
+        let base_cap = capture_scenario_with_stage(Some(20), None, 8.0, 100.0, 1.0, None, false, &base_mods).unwrap();
+        let prey_cap = capture_scenario_with_stage(Some(20), None, 8.0, 100.0, 1.0, None, false, &prey_mods).unwrap();
+        assert!((prey_cap.chance / base_cap.chance - 1.10).abs() < 1e-12);
+        assert!((prey_cap.shiny_seen_h.unwrap() - base_cap.shiny_seen_h.unwrap()).abs() < 1e-12);
     }
 }

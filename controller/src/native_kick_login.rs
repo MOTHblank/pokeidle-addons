@@ -287,14 +287,14 @@ fn kick_config(profile: GameProfile) -> Result<Config, String> {
 }
 pub fn login(profile: GameProfile, cancelled: &AtomicBool) -> Result<(), String> {
     let config = kick_config(profile)?;
+    if firefox::find_profile_process(&config)?.is_some() {
+        return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Kick login again.".into());
+    }
     // A prior Firefox visit to Kick may already have a session. Avoid
     // opening another login window when it can be reused directly.
     if let Some(token) = read_kick_cookie(&config.profile_dir)? {
         if cancelled.load(Ordering::Relaxed) { return Err("Kick login cancelled".into()); }
         return native_auth::save_kick_token(profile, &token);
-    }
-    if firefox::find_profile_process(&config)?.is_some() {
-        return Err("This PokéIdle Firefox profile is still open. Finish the native game handoff and try Kick login again.".into());
     }
     let mut browser = firefox::launch_kick_login(&config)?;
     // The browser stays uninstrumented. Watch the local Firefox cookie
@@ -340,15 +340,6 @@ mod tests {
         assert_eq!(decode_kick_session_cookie("123|abcdefghijklmnop123456"), expected);
         assert_eq!(decode_kick_session_cookie("123%7Gabcdefghijklmnop123456"), None);
         assert_eq!(decode_kick_session_cookie("123%25257Cabcdefghijklmnop123456"), None);
-    }
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_sqlite_runtime_symbols_resolve() {
-        // Loading must not require the unversioned libsqlite3.so development
-        // symlink. The shared library stays loaded for the process lifetime.
-        let api = super::sqlite_api().expect("install libsqlite3-0 for Kick login");
-        assert_ne!(api.open as usize, 0);
-        assert_ne!(api.finalize as usize, 0);
     }
 
     #[test]

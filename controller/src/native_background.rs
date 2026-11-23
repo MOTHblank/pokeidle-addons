@@ -232,10 +232,37 @@ fn browser_login_required_frame(frame:&Value)->Option<&str> {
     if frame.get("t").and_then(Value::as_str)!=Some("erro") {return None}
     match frame.get("chave").and_then(Value::as_str) {
         Some(key) if matches!(
-            key,"auth.sessaoInvalida" | "auth.precisaLogin" | "login.precisaNick"
+            key,
+            "auth.sessaoInvalida"
+                | "conta.saiuDeTodos"
+                | "auth.precisaLogin"
+                | "login.precisaNick"
         )=>Some(key),
         _=>None,
     }
+}
+
+/// Mirrors upstream `shared/vigia-do-sim.mjs` (`renovaOVigia`): gateway-only
+/// frames must not reset the game-simulation staleness watchdog.
+fn refreshes_sim_watchdog(frame: &Value) -> bool {
+    !matches!(
+        frame.get("t").and_then(Value::as_str),
+        Some(
+            "chat"
+                | "chat.historico"
+                | "chat.del"
+                | "chat.fixadas"
+                | "chat.fixada"
+                | "chat.interrompido"
+                | "chat.aviso"
+                | "shiny.captura"
+                | "lendario.captura"
+                | "drop.raro"
+                | "mg"
+                | "pong"
+                | "sessao.renovada"
+        )
+    )
 }
 
 fn apply_session_renewal(
@@ -898,7 +925,9 @@ fn observe_value(snapshot: &Arc<Mutex<NativeSnapshot>>, payload: &Value) -> bool
     let state = payload.get("estado");
     update(snapshot, |status| {
         status.frames = status.frames.saturating_add(1);
-        status.last_received = Some(Instant::now());
+        if refreshes_sim_watchdog(payload) {
+            status.last_received = Some(Instant::now());
+        }
         if payload.get("t").and_then(Value::as_str) == Some("batalha") {
             if let Some(events) = payload.get("ev").and_then(Value::as_array) {
                 for event in events {
@@ -1159,7 +1188,7 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                     }
                     if snapshot.lock().ok().and_then(|s| s.last_received)
                         .is_some_and(|last| last.elapsed() > CONNECTION_STALE_AFTER) {
-                        crate::logging::warn(&format!("{}: reconnecting game socket after 90s without server frames or pong",profile.label()));
+                        crate::logging::warn(&format!("{}: reconnecting game socket after 90s without game simulation frames",profile.label()));
                         break;
                     }
                     // Every mutating action has one owner: this game socket.
@@ -1430,10 +1459,10 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                         last_pvp_tick = Instant::now();
                     }
                     if send_failed { break; }
-                    if let Some(fields) = automation_writer.next(
+                    if let Some(frame) = automation_writer.next(
                         hunt_intel.view.automation.as_ref(),Instant::now()) {
                         if socket.send(Message::Text(
-                            GameCommand::AutoSet(fields).wire().to_string().into()
+                            frame.to_string().into()
                         )).is_err() {
                             automation_writer.send_failed();
                             send_failed=true;
@@ -1647,7 +1676,6 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                                 }
                                 if frame.get("t").and_then(Value::as_str)==Some("sessao.renovada") {
                                     apply_session_renewal(profile,&mut credentials,&frame);
-                                    update(&snapshot,|state|state.last_received=Some(received_at));
                                     continue;
                                 }
                                 gameplay.ingest_value(&frame, received_at);
@@ -1706,6 +1734,14 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                                     .and_then(|state|state.get("automation")) {
                                     automation_writer.observe(auto);
                                 }
+                                if let Some(events)=frame.get("ev").and_then(Value::as_array) {
+                                    for event in events {
+                                        if event.get("k").and_then(Value::as_str)==Some("autoVendaDepot") {
+                                            let ativo=event.get("ativo").and_then(Value::as_bool)==Some(true);
+                                            automation_writer.observe_auto_venda_depot(ativo);
+                                        }
+                                    }
+                                }
                                 if let Some((id,_))=pending_sale {
                                     // A full authoritative roster missing the ID
                                     // confirms the sale. Manager also recognizes
@@ -1743,7 +1779,8 @@ fn session_loop(profile: GameProfile, mut credentials: Credentials,
                             }
                         },
                         Ok(Message::Pong(_)) | Ok(Message::Ping(_)) => {
-                            update(&snapshot, |s| s.last_received = Some(Instant::now()));
+                            // WebSocket ping/pong only proves the gateway transport is alive;
+                            // do not reset the game-simulation staleness watchdog.
                         }
                         Ok(Message::Close(frame)) => {
                             crate::logging::warn(&format!("{}: game server closed WebSocket: {:?}",profile.label(),frame.as_ref().map(|f|f.code)));
@@ -1861,7 +1898,12 @@ mod tests {
     }
     #[test]
     fn websocket_auth_error_frames_require_browser_refresh() {
-        for key in ["auth.sessaoInvalida","auth.precisaLogin","login.precisaNick"] {
+        for key in [
+            "auth.sessaoInvalida",
+            "conta.saiuDeTodos",
+            "auth.precisaLogin",
+            "login.precisaNick",
+        ] {
             let frame=json!({"t":"erro","chave":key});
             assert_eq!(browser_login_required_frame(&frame),Some(key));
         }
@@ -1870,6 +1912,38 @@ mod tests {
             assert_eq!(browser_login_required_frame(&frame),None,
                 "{key} must not be misreported as an expired login");
         }
+    }
+
+    #[test]
+    fn gateway_only_frames_do_not_refresh_sim_watchdog() {
+        let snapshot = Arc::new(Mutex::new(NativeSnapshot::default()));
+        for gateway_type in [
+            "chat",
+            "chat.historico",
+            "chat.del",
+            "chat.fixadas",
+            "chat.fixada",
+            "chat.interrompido",
+            "chat.aviso",
+            "shiny.captura",
+            "lendario.captura",
+            "drop.raro",
+            "mg",
+            "pong",
+            "sessao.renovada",
+        ] {
+            let frame = json!({"t": gateway_type});
+            assert!(!refreshes_sim_watchdog(&frame), "{gateway_type} must not refresh watchdog");
+            observe_value(&snapshot, &frame);
+            assert!(snapshot.lock().unwrap().last_received.is_none(),
+                "{gateway_type} must not set last_received");
+        }
+        for sim_type in ["batalha", "estado", "welcome", "market", "pvp"] {
+            let frame = json!({"t": sim_type});
+            assert!(refreshes_sim_watchdog(&frame), "{sim_type} must refresh watchdog");
+        }
+        observe_value(&snapshot, &json!({"t": "batalha"}));
+        assert!(snapshot.lock().unwrap().last_received.is_some());
     }
 
     #[test]

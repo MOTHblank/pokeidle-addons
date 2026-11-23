@@ -47,6 +47,13 @@ impl ControllerApp {
         PT_BR.store(next.language_pt_br, Ordering::Relaxed);
         apply_visual_preferences(&self.lifecycle_ctx, next);
         logging::set_limits(next.log_max_megabytes, next.log_retention_days);
+        if next.kick_lite_mode != before.kick_lite_mode {
+            for runtime in &self.runtimes {
+                if let Some(monitor) = runtime.kick.kick_monitor.as_ref() {
+                    monitor.set_lite_mode(next.kick_lite_mode);
+                }
+            }
+        }
         if next.check_updates_on_start && !before.check_updates_on_start {
             let _ = update::check_now(&self.update_status);
         }

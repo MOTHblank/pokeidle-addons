@@ -83,6 +83,7 @@ pub(super) struct KickAccountState {
     pub(super) kick_token_loading: bool,
     pub(super) kick_token_checked: bool,
     pub(super) kick_token_revision: u64,
+    pub(super) kick_autostart_failed_revision: Option<u64>,
     pub(super) kick_login_done_seen: bool,
     pub(super) kick_remember_login: bool,
 }
@@ -168,6 +169,7 @@ impl AccountRuntime {
                 kick_token_loading: false,
                 kick_token_checked: false,
                 kick_token_revision: 0,
+                kick_autostart_failed_revision: None,
                 kick_login_done_seen: false,
                 kick_remember_login: true,
             },

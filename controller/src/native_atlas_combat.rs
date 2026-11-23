@@ -1,9 +1,13 @@
 //! Native Hunt Atlas combat model; map pacing is vendored from /hunt for PokéIdle 1.0.17.
 //! Pure, deterministic forecasts: no writes to game state, sessions or server hunt statistics.
-use super::{damage, effect, Reference, ReferenceSpecies};
+use super::{bestiary_damage_multiplier, damage, effect, Reference, ReferenceSpecies};
+use crate::native_atlas_models::{
+    prey_damage_multiplier, prey_defense_multiplier, prey_extra_spawns, PreyEffect,
+};
 use crate::native_hunts::{HuntEntry, PokemonInfo};
 use crate::native_atlas_pacing;
 use crate::hunt_pacing_model;
+use std::collections::BTreeMap;
 
 const PLAYER_GAP_MS: f64 = 900.0;
 const TACKLE_COOLDOWN_MS: f64 = 2000.0;
@@ -103,20 +107,20 @@ fn move_damage(
 fn incoming(
     r: &Reference, foe: &ReferenceSpecies, level: u32,
     player: &ReferenceSpecies, stats: &[f64; 6], seasonal:Option<&str>,
+    prey_defense_mult: f64,
 ) -> Threat {
+    let mult = seasonal_damage_multiplier(seasonal,&foe.types,&player.types) * prey_defense_mult;
     let mut blows = Vec::new();
     for mv in foe.moves.iter().filter(|m| m.min_level <= level) {
         let atk = wild_stat(foe.base[if mv.special {3} else {1}], level, 16.0);
         let def = stats[if mv.special {4} else {2}];
         blows.push(move_damage(r, level, mv.power, atk, def,
-            &mv.move_type, &foe.types, player,
-            seasonal_damage_multiplier(seasonal,&foe.types,&player.types)));
+            &mv.move_type, &foe.types, player, mult));
     }
     let tackle_type = effective_tackle_type(&foe.types, player, r);
     let inv = move_damage(r, level, TACKLE_POWER,
         wild_stat(foe.base[1], level, 16.0), stats[2],
-        tackle_type, &foe.types, player,
-        seasonal_damage_multiplier(seasonal,&foe.types,&player.types));
+        tackle_type, &foe.types, player, mult);
     let mean = if blows.is_empty() { inv } else {
         blows.iter().sum::<f64>() / blows.len() as f64 * 0.92 + inv * 0.08
     };
@@ -259,11 +263,21 @@ pub(super) fn simulate(
     hunt: &HuntEntry, mon: &PokemonInfo, player: &ReferenceSpecies,
     r: &Reference, stats: &[f64;6],
     aoe_enabled: bool, seasonal:Option<&str>, gym_multiplier:f64,
+    bestiary_bp: &BTreeMap<String, u32>, prey: &[PreyEffect],
     bicycle_factor:f64, learned_map:Option<&str>,
 ) -> Option<CombatPace> {
     if hunt.level==0 || player.base.len()<6{return None}
     let pacing=native_atlas_pacing::resolve(&hunt.slug,learned_map);
     let gap_s=iv_cooldown_ms(PLAYER_GAP_MS,mon)/1000.0;
+    let outland=hunt.area.eq_ignore_ascii_case("outland");
+    let total=hunt.species.iter().map(|x|x.weight.max(0.0)).sum::<f64>();
+    if total<=0.0{return None}
+    let base_spawns=if hunt.total_spawns>0 {hunt.total_spawns as f64} else {total};
+    let total_extra:f64=if outland {0.0} else {
+        hunt.species.iter().filter(|x|x.weight>0.0)
+            .map(|x|prey_extra_spawns(prey,x.id) as f64).sum()
+    };
+    let mut covered_base_weight=0.0;
     let mut weight=0.0;
     let mut hit_mean=0.0;
     let mut hit_max=0.0f64;
@@ -275,13 +289,23 @@ pub(super) fn simulate(
         };
         let w=encounter.weight.max(0.0);
         if w<=0.0 {continue}
+        let bestiary_mult=bestiary_damage_multiplier(bestiary_bp,&foe.types);
+        let prey_dmg_mult=if outland {1.0} else {prey_damage_multiplier(prey,encounter.id)};
+        let prey_def_mult=if outland {1.0} else {prey_defense_multiplier(prey,encounter.id)};
+        let outgoing_mult=seasonal_damage_multiplier(seasonal,&player.types,&foe.types)
+            *gym_multiplier*bestiary_mult*prey_dmg_mult;
+        let w_eff=if total_extra>0.0 {
+            base_spawns*(w/total)+prey_extra_spawns(prey,encounter.id) as f64
+        } else {
+            w
+        };
         let mut attacks=Vec::new();
         for mv in player.moves.iter().filter(|mv|mv.min_level<=mon.level) {
             let atk=stats[if mv.special {3}else{1}];
             let def=wild_stat(foe.base[if mv.special {4}else{2}],hunt.level,16.0);
             attacks.push(Attack {
                 damage:move_damage(r,mon.level,mv.power,atk,def,&mv.move_type,&player.types,foe,
-                    seasonal_damage_multiplier(seasonal,&player.types,&foe.types)*gym_multiplier),
+                    outgoing_mult),
                 cooldown_s:skill_cooldown_ms(mv.cooldown,player.base[5],mon)/1000.0,
             });
         }
@@ -291,8 +315,7 @@ pub(super) fn simulate(
             attacks.push(Attack{
                 damage:move_damage(r,mon.level,2800.0,stats[3],
                     wild_stat(foe.base[4],hunt.level,16.0),
-                    element,&player.types,foe,
-                    seasonal_damage_multiplier(seasonal,&player.types,&foe.types)*gym_multiplier),
+                    element,&player.types,foe,outgoing_mult),
                 cooldown_s:skill_cooldown_ms(60_000.0,player.base[5],mon)/1000.0,
             });
         }
@@ -300,8 +323,7 @@ pub(super) fn simulate(
         let basic=Attack {
             damage:move_damage(r,mon.level,TACKLE_POWER,stats[1],
                 wild_stat(foe.base[2],hunt.level,16.0),
-                tackle_type,&player.types,foe,
-                seasonal_damage_multiplier(seasonal,&player.types,&foe.types)*gym_multiplier),
+                tackle_type,&player.types,foe,outgoing_mult),
             cooldown_s:iv_cooldown_ms(TACKLE_COOLDOWN_MS,mon)/1000.0,
         };
         let mut hp=[0.0;32];
@@ -310,21 +332,30 @@ pub(super) fn simulate(
             *value=(wild_stat(foe.base[0],hunt.level,iv)*12.0).round()
                 .max(24.0)*5.0;
         }
-        let threat=incoming(r,foe,hunt.level,player,stats,seasonal);
-        weight+=w;
-        incoming_dps+=w*threat.dps;
-        hit_mean+=w*threat.mean_hit;
+        let threat=incoming(r,foe,hunt.level,player,stats,seasonal,prey_def_mult);
+        covered_base_weight+=w;
+        weight+=w_eff;
+        incoming_dps+=w_eff*threat.dps;
+        hit_mean+=w_eff*threat.mean_hit;
         hit_max=hit_max.max(threat.worst_hit);
-        samples.push(CombatSample {weight:w,attacks,tackle:basic,hp});
+        samples.push(CombatSample {weight:w_eff,attacks,tackle:basic,hp});
     }
-    let total=hunt.species.iter().map(|x|x.weight.max(0.0)).sum::<f64>();
-    if weight<=0.0||total<=0.0{return None}
-    let coverage=weight/total;
+    if weight<=0.0||covered_base_weight<=0.0{return None}
+    let coverage=covered_base_weight/total;
     if coverage<0.6{return None}
     hit_mean/=weight;
     incoming_dps/=weight;
 
-    let solo_pace=paced_kill(&samples,gap_s,pacing.base_seconds_per_kill,bicycle_factor)?;
+    // Extra Prey spawns are added to existing herds (shared/prey.mjs repartirExtras),
+    // amortizing per-kill walking time across the larger wave without reducing fixed delay.
+    let wave_density=if total_extra>0.0&&base_spawns>0.0 {
+        (base_spawns+total_extra)/base_spawns
+    } else {
+        1.0
+    };
+    let walk_pace_factor=hunt_pacing_model::normalized_bicycle_factor(bicycle_factor)*wave_density;
+
+    let solo_pace=paced_kill(&samples,gap_s,pacing.base_seconds_per_kill,walk_pace_factor)?;
     let solo_kills_h=kills_per_hour(solo_pace);
     let mut selected_pace=solo_pace;
     let mut selected_baseline=pacing.base_seconds_per_kill;
@@ -340,7 +371,7 @@ pub(super) fn simulate(
         // the pacing resolver so sampling noise cannot make sAoe slower than s).
         // Combat still interacts with dead time through the same curve; the
         // existing engagement model remains the simultaneous-target ceiling.
-        let aoe_pace=paced_kill(&samples,gap_s,pacing.aoe_seconds_per_kill,bicycle_factor)?;
+        let aoe_pace=paced_kill(&samples,gap_s,pacing.aoe_seconds_per_kill,walk_pace_factor)?;
         let candidate=aoe_kills_per_hour(aoe_pace);
         if candidate>kills_h {
             kills_h=candidate;
