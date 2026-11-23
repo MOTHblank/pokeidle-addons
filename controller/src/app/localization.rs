@@ -575,13 +575,6 @@ pub(super) fn tr<'a>(en: &'a str) -> &'a str {
         "Active accounts and automations will be stopped." => "As contas e automações ativas serão encerradas.",
         "Exit and stop accounts" => "Sair e parar contas",
         "Background performance" => "Desempenho em segundo plano",
-        "Kick stream transport (experimental)" => "Transporte de stream Kick (experimental)",
-        "Optional low-bandwidth alternative to full HLS segment downloads. Off by default." =>
-            "Alternativa opcional de baixo consumo de rede ao download completo de segmentos HLS. Desativada por padrão.",
-        "Use low-bandwidth Kick stream mode (experimental)" =>
-            "Usar modo leve de stream da Kick (experimental)",
-        "Probes HLS segments with lightweight HEAD/Range requests instead of downloading full video payloads. Active Kick monitors switch automatically." =>
-            "Verifica segmentos HLS com requisições leves HEAD/Range em vez de baixar os dados completos de vídeo. Monitores Kick ativos alternam automaticamente.",
         "Refresh behavior" => "Comportamento das atualizações",
         "Reduce updates when the window is not focused" =>
             "Reduzir atualizações quando a janela estiver sem foco",

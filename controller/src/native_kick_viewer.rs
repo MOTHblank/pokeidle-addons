@@ -2,7 +2,6 @@
 //! Kick's public Developer API). This is an undocumented upstream interface;
 //! any endpoint can change without notice. Credentials remain memory-only.
 use crate::native_kick_hls::{AccountBandwidth, MediaRunner, MediaStatus};
-use crate::native_kick_hls_lite::LiteMediaRunner;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -289,51 +288,13 @@ fn watch_event(meta: &ChannelMeta) -> Value {
         "livestream_id":meta.stream_id
     }}})
 }
-enum ActiveMedia {
-    Standard(MediaRunner),
-    Lite(LiteMediaRunner),
-}
-impl ActiveMedia {
-    fn start(
-        source: String,
-        account_stop: Arc<AtomicBool>,
-        bandwidth: Arc<AccountBandwidth>,
-        lite: bool,
-    ) -> Result<Self, String> {
-        if lite {
-            Ok(Self::Lite(LiteMediaRunner::start(source, account_stop, bandwidth)?))
-        } else {
-            Ok(Self::Standard(MediaRunner::start(source, account_stop, bandwidth)?))
-        }
-    }
-    fn snapshot(&self) -> MediaStatus {
-        match self {
-            Self::Standard(runner) => runner.snapshot(),
-            Self::Lite(runner) => runner.snapshot(),
-        }
-    }
-    fn active(&self) -> bool {
-        match self {
-            Self::Standard(runner) => runner.active(),
-            Self::Lite(runner) => runner.active(),
-        }
-    }
-    fn finished(&self) -> bool {
-        match self {
-            Self::Standard(runner) => runner.finished(),
-            Self::Lite(runner) => runner.finished(),
-        }
-    }
-}
-
 /// Session begins after the channel is verified live; it sends tracking only
 /// while current HLS segments are arriving. "Connected" alone never counts
 /// as successful point earning.
 pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
                   status: &Arc<Mutex<WatchTelemetry>>,
                   stop: Arc<AtomicBool>, bearer: &str,
-                  auth: &AuthGate, bandwidth: Arc<AccountBandwidth>,
-                  lite_mode: &AtomicBool) -> Result<(), String> {
+                  auth: &AuthGate, bandwidth: Arc<AccountBandwidth>) -> Result<(), String> {
     if !meta.is_live || meta.stream_id == 0 {
         return Err("Kick channel is not live".into());
     }
@@ -345,12 +306,10 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
     ws_send(&mut socket, handshake(meta))?;
     ws_send(&mut socket, heartbeat())?;
     if stop.load(Ordering::Acquire) { return Ok(()); }
-    let session_lite = lite_mode.load(Ordering::Acquire);
-    let media = ActiveMedia::start(
+    let media = MediaRunner::start(
         meta.playback_url.clone(),
         Arc::clone(&stop),
         bandwidth,
-        session_lite,
     )?;
     let started = Instant::now();
     let mut last_handshake = started;
@@ -362,7 +321,6 @@ pub fn run_viewer(client: &Client, slug: &str, meta: &ChannelMeta,
     }
     while !stop.load(Ordering::Relaxed)
         && !auth.denied()
-        && lite_mode.load(Ordering::Acquire) == session_lite
         && started.elapsed() < Duration::from_secs(SESSION_SECONDS)
     {
         if last_handshake.elapsed() >= HANDSHAKE_GAP {

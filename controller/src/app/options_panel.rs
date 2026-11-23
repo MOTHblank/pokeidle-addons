@@ -147,17 +147,6 @@ fn performance(app: &mut ControllerApp, ui: &mut egui::Ui) {
         app.save_ui_options(next);
         ui.ctx().request_repaint();
     }
-    ui.add_space(10.0);
-    let mut next_prefs = app.preferences;
-    card(ui, "Kick stream transport (experimental)",
-        "Optional low-bandwidth alternative to full HLS segment downloads. Off by default.", |ui| {
-            ui.checkbox(&mut next_prefs.kick_lite_mode,
-                tr("Use low-bandwidth Kick stream mode (experimental)"));
-            description(ui, "Probes HLS segments with lightweight HEAD/Range requests instead of downloading full video payloads. Active Kick monitors switch automatically.");
-        });
-    if next_prefs != app.preferences {
-        app.save_app_preferences(next_prefs);
-    }
     ui.add_space(12.0);
     ui.label(format!("{}: {}", tr("Current refresh mode"),
         tr(if app.controller_in_background(ui.ctx()) {

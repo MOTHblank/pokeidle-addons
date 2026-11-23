@@ -1,6 +1,7 @@
-//! Low-memory HLS media transport. Downloads the smallest advertised
-//! rendition, then discards segment bytes without decoding or caching them.
-//! A successful download is evidence of *network media transfer*, not proof
+//! Low-bandwidth HLS media transport. Polls the lowest-bitrate M3U8 playlist
+//! and probes new segments using HTTP HEAD (0 bytes of video payload), falling
+//! back to a 1-byte Range GET or playlist-sequence tracking if the CDN rejects
+//! HEAD. A successful probe is evidence of *network media activity*, not proof
 //! that Kick credited a view or that somebody watched the content.
 use crate::native_kick_pool;
 use reqwest::blocking::Client;
@@ -13,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_PLAYLIST_BYTES: usize = 512 * 1024;
-const MAX_SEGMENT_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_RANGE_PROBE_BYTES: u64 = 64;
 const MAX_SEEN: usize = 128;
 const RETRY_SECS: u64 = 5;
 
@@ -26,9 +27,9 @@ pub struct MediaStatus {
     pub error: Option<String>,
 }
 
-/// HLS payload bytes, including manifests and interrupted transfers. This is
-/// not an estimate based on the advertised bitrate and excludes protocol
-/// overhead. A counter belongs to one Kick account session only.
+/// HLS payload bytes, including manifests and probe responses. This is not an
+/// estimate based on the advertised bitrate and excludes protocol overhead.
+/// A counter belongs to one Kick account session only.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BandwidthUsage {
     pub bytes: u64,
@@ -93,22 +94,37 @@ impl AccountBandwidth {
         }
     }
 }
-/// Charge bytes even when a segment read fails after transferring part of it.
-struct MeteredReader<'a, R: Read> {
-    reader: R,
-    bytes: u64,
-    account: &'a AccountBandwidth,
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeMode {
+    Head,
+    RangeByte,
+    PlaylistOnly,
 }
-impl<R: Read> Read for MeteredReader<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let amount = self.reader.read(buf)?;
-        self.bytes = self.bytes.saturating_add(amount as u64);
-        Ok(amount)
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeOutcome {
+    Accepted { bytes: u64, next_mode: ProbeMode },
+    RetryWith(ProbeMode),
+    Rejected,
+}
+
+fn classify_head_status(status: u16) -> ProbeOutcome {
+    match status {
+        200 => ProbeOutcome::Accepted { bytes: 0, next_mode: ProbeMode::Head },
+        403 | 405 => ProbeOutcome::RetryWith(ProbeMode::RangeByte),
+        _ => ProbeOutcome::Rejected,
     }
 }
-impl<R: Read> Drop for MeteredReader<'_, R> {
-    fn drop(&mut self) { self.account.record(self.bytes); }
+
+fn classify_range_status(status: u16) -> ProbeOutcome {
+    match status {
+        206 => ProbeOutcome::Accepted { bytes: 0, next_mode: ProbeMode::RangeByte },
+        200 | 403 | 416 => ProbeOutcome::Accepted { bytes: 0, next_mode: ProbeMode::PlaylistOnly },
+        _ => ProbeOutcome::Rejected,
+    }
 }
+
 struct FinishGuard(Arc<AtomicBool>);
 impl Drop for FinishGuard {
     fn drop(&mut self) {
@@ -231,6 +247,68 @@ fn segments(playlist: &str, base: &Url) -> Result<(Vec<(u64, Url)>, Duration), S
     }
     Ok((result, Duration::from_secs(seconds / 2)))
 }
+fn probe_segment(
+    client: &Client,
+    url: &Url,
+    mode: &mut ProbeMode,
+    bandwidth: &AccountBandwidth,
+) -> Result<u64, String> {
+    loop {
+        match *mode {
+            ProbeMode::Head => {
+                let response = client.head(url.clone()).send()
+                    .map_err(|_| "Kick HLS segment request failed".to_owned())?;
+                match classify_head_status(response.status().as_u16()) {
+                    ProbeOutcome::Accepted { bytes, next_mode } => {
+                        *mode = next_mode;
+                        return Ok(bytes);
+                    }
+                    ProbeOutcome::RetryWith(next_mode) => {
+                        *mode = next_mode;
+                    }
+                    ProbeOutcome::Rejected => {
+                        return Err("Kick HLS segment rejected the request".into());
+                    }
+                }
+            }
+            ProbeMode::RangeByte => {
+                let mut response = client.get(url.clone())
+                    .header(reqwest::header::RANGE, "bytes=0-0")
+                    .send()
+                    .map_err(|_| "Kick HLS segment request failed".to_owned())?;
+                let code = response.status().as_u16();
+                match classify_range_status(code) {
+                    ProbeOutcome::Accepted { next_mode, .. } => {
+                        let bytes = if code == 206 {
+                            let amount = std::io::copy(
+                                &mut (&mut response).take(MAX_RANGE_PROBE_BYTES),
+                                &mut sink(),
+                            ).map_err(|_| "Kick HLS segment transfer failed".to_owned())?;
+                            bandwidth.record(amount);
+                            amount
+                        } else {
+                            // CDN ignored Range (200) or rejected partial read:
+                            // drop without pulling video bytes and fall back to
+                            // playlist-sequence liveness.
+                            0
+                        };
+                        *mode = next_mode;
+                        return Ok(bytes);
+                    }
+                    ProbeOutcome::RetryWith(next_mode) => {
+                        *mode = next_mode;
+                    }
+                    ProbeOutcome::Rejected => {
+                        return Err("Kick HLS segment rejected the request".into());
+                    }
+                }
+            }
+            ProbeMode::PlaylistOnly => {
+                return Ok(0);
+            }
+        }
+    }
+}
 fn pause(stop: &AtomicBool, account_stop: &AtomicBool, delay: Duration) {
     let rounds = (delay.as_millis() / 200).max(1) as usize;
     for _ in 0..rounds {
@@ -243,8 +321,8 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
        bandwidth: Arc<AccountBandwidth>) {
     let _finish = FinishGuard(finished);
     let client = match Client::builder()
-        .timeout(Duration::from_secs(18))
-        .connect_timeout(Duration::from_secs(7))
+        .timeout(Duration::from_secs(12))
+        .connect_timeout(Duration::from_secs(6))
         .redirect(Policy::none())
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
@@ -258,6 +336,7 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
     };
     let mut variant: Option<Url> = None;
     let mut known = VecDeque::<(u64, String)>::new();
+    let mut probe_mode = ProbeMode::Head;
     let mut failures = 0_u32;
     while !stop.load(Ordering::Relaxed) && !account_stop.load(Ordering::Relaxed) {
         let outcome = (|| -> Result<Duration, String> {
@@ -280,7 +359,7 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
             let (entries, delay) = segments(&playlist, &chosen)?;
             if entries.is_empty() { return Err("Kick media playlist has no segments".into()); }
             let first_pass = known.is_empty();
-            // Join near the live edge rather than downloading a large backlog.
+            // Join near the live edge rather than probing a large backlog.
             let selected = if first_pass {
                 &entries[entries.len().saturating_sub(2)..]
             } else {
@@ -290,21 +369,7 @@ fn run(master: Url, account_stop: Arc<AtomicBool>, stop: Arc<AtomicBool>,
                 if stop.load(Ordering::Relaxed) || account_stop.load(Ordering::Relaxed) { break; }
                 let key = (*sequence, url.as_str().to_owned());
                 if known.contains(&key) { continue; }
-                let mut response = client.get(url.clone()).send()
-                    .map_err(|_| "Kick HLS segment request failed".to_owned())?
-                    .error_for_status()
-                    .map_err(|_| "Kick HLS segment rejected the request".to_owned())?;
-                // The sink discards media; the account meter counts all
-                // transferred payload, including partial reads on failure.
-                let bytes = {
-                    let mut counted = MeteredReader {
-                        reader: (&mut response).take(MAX_SEGMENT_BYTES),
-                        bytes: 0,
-                        account: &bandwidth,
-                    };
-                    std::io::copy(&mut counted, &mut sink())
-                        .map_err(|_| "Kick HLS segment transfer failed".to_owned())?
-                };
+                let bytes = probe_segment(&client, url, &mut probe_mode, &bandwidth)?;
                 known.push_back(key);
                 while known.len() > MAX_SEEN { known.pop_front(); }
                 if let Ok(mut status) = state.lock() {
@@ -363,21 +428,6 @@ mod tests {
         assert_eq!(old.bytes, 2048);
         assert_eq!(old.last_minute, 0);
     }
-
-    #[test]
-    fn metered_reader_counts_partial_transfers_when_dropped() {
-        let bandwidth = AccountBandwidth::default();
-        {
-            let mut reader = MeteredReader {
-                reader: &b"some media bytes"[..],
-                bytes: 0,
-                account: &bandwidth,
-            };
-            let mut buffer = [0_u8; 4];
-            reader.read_exact(&mut buffer).unwrap();
-        }
-        assert_eq!(bandwidth.usage().bytes, 4);
-    }
     #[test]
     fn lowest_bitrate_is_selected() {
         let base = media_url("https://edge.us-west-2.playback.live-video.net/live/index.m3u8").unwrap();
@@ -400,5 +450,25 @@ mod tests {
         assert_eq!(parts[0].0,21);
         assert_eq!(parts[1].0,22);
         assert_eq!(delay,Duration::from_secs(3));
+    }
+    #[test]
+    fn probe_mode_transitions_handle_head_and_range_fallbacks() {
+        assert_eq!(
+            classify_head_status(200),
+            ProbeOutcome::Accepted { bytes: 0, next_mode: ProbeMode::Head }
+        );
+        assert_eq!(classify_head_status(405), ProbeOutcome::RetryWith(ProbeMode::RangeByte));
+        assert_eq!(classify_head_status(403), ProbeOutcome::RetryWith(ProbeMode::RangeByte));
+        assert_eq!(classify_head_status(404), ProbeOutcome::Rejected);
+
+        assert_eq!(
+            classify_range_status(206),
+            ProbeOutcome::Accepted { bytes: 0, next_mode: ProbeMode::RangeByte }
+        );
+        assert_eq!(
+            classify_range_status(200),
+            ProbeOutcome::Accepted { bytes: 0, next_mode: ProbeMode::PlaylistOnly }
+        );
+        assert_eq!(classify_range_status(500), ProbeOutcome::Rejected);
     }
 }

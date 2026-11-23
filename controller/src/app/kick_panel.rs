@@ -296,8 +296,7 @@ impl ControllerApp {
         };
         let monitor = match KickSupervisor::start(token.clone(), &target.join(","),
             stored_channel_list(self,index),self.runtimes[index].kick.kick_discovered_live.clone(),
-            self.runtimes[index].kick.kick_stream_preferences.clone(),
-            self.preferences.kick_lite_mode) {
+            self.runtimes[index].kick.kick_stream_preferences.clone()) {
             Ok(worker) => {
                 self.runtimes[index].kick.kick_autostart_failed_revision = None;
                 worker
@@ -692,10 +691,6 @@ pub(super) fn draw_kick_panel(app: &mut ControllerApp, ui: &mut egui::Ui) {
                 (kick_label(br, "○ Sign in required", "○ Login necessário"), MUTED)
             };
             ui.label(RichText::new(status).size(10.0).color(color));
-            if app.preferences.kick_lite_mode {
-                ui.label(RichText::new(kick_label(br, "· Lite mode", "· Modo leve"))
-                    .size(10.0).color(ACCENT));
-            }
         });
         ui.add_space(7.0);
         ui.columns(3, |cols| {
